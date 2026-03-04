@@ -180,12 +180,17 @@ function calculateKeywordOpportunity(
   crMin: number,
   crMax: number,
   acvMin: number,
-  acvMax: number
+  acvMax: number,
+  crMid?: number,
+  acvMid?: number
 ) {
   const currentCtr = getCtrForPosition(keyword.rank_pos, ctrBuckets, floorCtr);
   const currentTraffic = keyword.search_volume * currentCtr;
   const targetTraffic = keyword.search_volume * targetCtr;
   const deltaTraffic = Math.max(0, targetTraffic - currentTraffic);
+
+  const effectiveCrMid = crMid ?? (crMin + crMax) / 2;
+  const effectiveAcvMid = acvMid ?? (acvMin + acvMax) / 2;
 
   return {
     current_ctr: currentCtr,
@@ -196,6 +201,7 @@ function calculateKeywordOpportunity(
     delta_leads_low: deltaTraffic * crMin,
     delta_leads_high: deltaTraffic * crMax,
     delta_revenue_low: deltaTraffic * crMin * acvMin,
+    delta_revenue_mid: deltaTraffic * effectiveCrMid * effectiveAcvMid,
     delta_revenue_high: deltaTraffic * crMax * acvMax,
   };
 }
@@ -280,207 +286,165 @@ function parseResearchSummary(filePath: string): ParsedResearchSummary {
     keyTakeaways: [],
   };
 
-  // --- Keyword Overview ---
-  const overviewTable = md.match(
-    /##\s*1\.\s*Keyword\s+Overview[\s\S]*?\n(\|.+\|[\s\S]*?)(?=\n###|\n##\s|$)/i
-  );
-  if (overviewTable) {
-    const rows = overviewTable[1];
-    const extract = (label: string): number => {
-      const m = rows.match(new RegExp(`\\|\\s*${label}\\s*\\|\\s*([\\d,./$]+)`, 'i'));
-      if (!m) return 0;
-      return parseFloat(m[1].replace(/[$,/mo]/g, '')) || 0;
+  // Helper: extract a section's table block by flexible heading match
+  const sectionTable = (pattern: RegExp): string | null => {
+    const m = md.match(pattern);
+    if (!m) return null;
+    const tableMatch = m[0].match(/\n(\|.+\|[\s\S]*?)(?=\n\*|\n##\s|$)/);
+    return tableMatch ? tableMatch[1] : null;
+  };
+
+  // Helper: parse a number, stripping $, ~, commas, /mo suffix, and K/M/B suffixes
+  const num = (s: string): number => {
+    const clean = s.replace(/[$,~]/g, '').replace(/\/mo$/i, '').trim();
+    if (clean.endsWith('B')) return parseFloat(clean) * 1_000_000_000;
+    if (clean.endsWith('M')) return parseFloat(clean) * 1_000_000;
+    if (clean.endsWith('K')) return parseFloat(clean) * 1_000;
+    return parseFloat(clean) || 0;
+  };
+
+  // --- 2. Keyword Overview (| Metric | Value | format) ---
+  const overviewBlock = sectionTable(/##\s*\d*\.?\s*Keyword\s+Overview[\s\S]*?(?=\n##\s|$)/i);
+  if (overviewBlock) {
+    const extract = (label: RegExp): number => {
+      const m = overviewBlock.match(new RegExp(`\\|\\s*${label.source}\\s*\\|\\s*([^|]+)\\|`, 'i'));
+      return m ? num(m[1]) : 0;
     };
-    result.keywordOverview.total_keywords = extract('Total ranked keywords');
-    result.keywordOverview.total_volume = extract('Total search volume');
-    result.keywordOverview.avg_position = extract('Average position');
-    result.keywordOverview.etv = extract('Estimated traffic value');
-    result.keywordOverview.paid_traffic_equivalent = extract('Estimated paid traffic');
+    result.keywordOverview.total_keywords = extract(/Total (?:ranked )?keywords(?: tracked)?/);
+    result.keywordOverview.total_volume = extract(/Total (?:monthly )?search volume/);
+    result.keywordOverview.avg_position = extract(/Average position/);
+    result.keywordOverview.etv = extract(/Estimated traffic value/);
+    result.keywordOverview.paid_traffic_equivalent = extract(/Estimated paid traffic/);
+    result.keywordOverview.top_10_count = extract(/Keywords in top 10/);
+    result.keywordOverview.near_miss_count = extract(/(?:Near.miss|Striking.distance) keywords/);
   }
 
   const costMatch = md.match(/\*\*API Cost:\*\*\s*\$([\d.]+)/i);
   if (costMatch) result.keywordOverview.api_cost = parseFloat(costMatch[1]);
 
-  // --- Position Distribution ---
-  const posDist = md.match(
-    /###\s*Position\s+Distribution[\s\S]*?\n(\|.+\|[\s\S]*?)(?=\n\*\*|\n###|\n##\s|$)/i
-  );
-  if (posDist) {
-    const rows = posDist[1].matchAll(
-      /\|\s*([\d\-+]+)\s*\|\s*(\d+)\s*\|\s*([\d.]+)%\s*\|/g
-    );
-    for (const row of rows) {
+  // --- 3. Position Distribution ---
+  const posBlock = sectionTable(/##\s*\d*\.?\s*Position\s+Distribution[\s\S]*?(?=\n##\s|$)/i);
+  if (posBlock) {
+    for (const row of posBlock.matchAll(/\|\s*([\d\-+]+)\s*\|\s*(\d+)\s*\|\s*([\d.]+)%?\s*\|/g)) {
       result.positionDistribution.push({
-        range: row[1].trim(),
-        count: parseInt(row[2], 10),
-        pct: parseFloat(row[3]),
+        range: row[1].trim(), count: parseInt(row[2], 10), pct: parseFloat(row[3]),
       });
     }
   }
 
-  // --- Branded vs Non-Branded ---
-  const brandedTable = md.match(
-    /###\s*Branded\s+vs\s+Non-Branded[\s\S]*?\n(\|.+\|[\s\S]*?)(?=\n\*\*|\n###|\n##\s|$)/i
-  );
-  if (brandedTable) {
-    const bMatch = brandedTable[1].match(
-      /\|\s*Branded[^|]*\|\s*(\d+)\s*\|\s*([\d,]+)\/mo\s*\|\s*([\d.]+)\s*\|/i
-    );
+  // --- 4. Branded vs Non-Branded ---
+  const brandBlock = sectionTable(/##\s*\d*\.?\s*Branded\s+vs\.?\s+Non.?Branded[\s\S]*?(?=\n##\s|$)/i);
+  if (brandBlock) {
+    const bMatch = brandBlock.match(/\|\s*Branded[^|]*\|\s*~?(\d+)\s*\|\s*~?([\d,]+)\s*(?:\/mo)?\s*\|\s*~?([\d.]+)\s*\|/i);
     if (bMatch) {
       result.brandedSplit.branded = {
-        count: parseInt(bMatch[1], 10),
-        volume: parseInt(bMatch[2].replace(/,/g, ''), 10),
-        avg_position: parseFloat(bMatch[3]),
+        count: parseInt(bMatch[1], 10), volume: num(bMatch[2]), avg_position: parseFloat(bMatch[3]),
       };
     }
-    const nbMatch = brandedTable[1].match(
-      /\|\s*Non-branded\s*\|\s*(\d+)\s*\|\s*([\d,]+)\/mo\s*\|\s*([\d.]+)\s*\|/i
-    );
+    const nbMatch = brandBlock.match(/\|\s*Non.?branded\s*\|\s*~?(\d+)\s*\|\s*~?([\d,]+)\s*(?:\/mo)?\s*\|\s*~?([\d.]+)\s*\|/i);
     if (nbMatch) {
       result.brandedSplit.non_branded = {
-        count: parseInt(nbMatch[1], 10),
-        volume: parseInt(nbMatch[2].replace(/,/g, ''), 10),
-        avg_position: parseFloat(nbMatch[3]),
+        count: parseInt(nbMatch[1], 10), volume: num(nbMatch[2]), avg_position: parseFloat(nbMatch[3]),
       };
     }
   }
 
-  // --- Intent Breakdown ---
-  const intentTable = md.match(
-    /##\s*3\.\s*Intent\s+Breakdown[\s\S]*?\n(\|.+\|[\s\S]*?)(?=\n\*\*|\n###|\n##\s|$)/i
-  );
-  if (intentTable) {
-    const rows = intentTable[1].matchAll(
-      /\|\s*(Navigational|Commercial|Transactional|Informational)\s*\|\s*(\d+)\s*\|\s*([\d,]+)\s*\|\s*([\d.]+)%\s*\|/gi
-    );
-    for (const row of rows) {
+  // --- 5. Intent Breakdown ---
+  const intentBlock = sectionTable(/##\s*\d*\.?\s*(?:Search\s+)?Intent\s+Breakdown[\s\S]*?(?=\n##\s|$)/i);
+  if (intentBlock) {
+    for (const row of intentBlock.matchAll(/\|\s*(Navigational|Commercial|Transactional|Informational)[^|]*\|\s*(\d+)\s*\|\s*~?([\d,]+)\s*\|\s*([\d.]+)%?\s*\|/gi)) {
       result.intentBreakdown.push({
-        intent: row[1],
-        count: parseInt(row[2], 10),
-        volume: parseInt(row[3].replace(/,/g, ''), 10),
-        pct_volume: parseFloat(row[4]),
+        intent: row[1].trim(), count: parseInt(row[2], 10),
+        volume: num(row[3]), pct_volume: parseFloat(row[4]),
       });
+    }
+    // If no pct column matched, compute from total volume
+    if (result.intentBreakdown.length === 0) {
+      for (const row of intentBlock.matchAll(/\|\s*(Navigational|Commercial|Transactional|Informational)[^|]*\|\s*(\d+)\s*\|\s*~?([\d,]+)\s*\|/gi)) {
+        const vol = num(row[3]);
+        result.intentBreakdown.push({
+          intent: row[1].trim(), count: parseInt(row[2], 10), volume: vol,
+          pct_volume: result.keywordOverview.total_volume > 0 ? Math.round(vol / result.keywordOverview.total_volume * 1000) / 10 : 0,
+        });
+      }
     }
   }
 
-  // --- Top Ranking URLs ---
-  const urlTable = md.match(
-    /##\s*4\.\s*Top\s+Ranking\s+URLs[\s\S]*?\n(\|.+\|[\s\S]*?)(?=\n\*\*|\n###|\n##\s|$)/i
-  );
-  if (urlTable) {
-    const rows = urlTable[1].matchAll(
-      /\|\s*(.+?)\s*\|\s*(\d+)\s*\|\s*([\d,]+)\s*\|/g
-    );
-    for (const row of rows) {
-      const url = row[1].trim().replace(/^\|+\s*/, '');
-      if (url.startsWith('URL') || url.includes('---')) continue;
-      result.topRankingUrls.push({
-        url,
-        keywords: parseInt(row[2], 10),
-        volume: parseInt(row[3].replace(/,/g, ''), 10),
-      });
+  // --- 6. Top Ranking URLs ---
+  const urlBlock = sectionTable(/##\s*\d*\.?\s*Top\s+Ranking\s+URLs[\s\S]*?(?=\n##\s|$)/i);
+  if (urlBlock) {
+    for (const row of urlBlock.matchAll(/\|\s*(.+?)\s*\|\s*~?(\d+)\s*\|\s*~?([\d,]+)\s*\|/g)) {
+      const url = row[1].trim();
+      if (url.startsWith('URL') || url.includes('---') || url.startsWith('|')) continue;
+      result.topRankingUrls.push({ url, keywords: parseInt(row[2], 10), volume: num(row[3]) });
     }
   }
 
-  // --- Competitor Analysis ---
-  const compTable = md.match(
-    /###\s*Direct\s+Local[\s\S]*?\n(\|.+\|[\s\S]*?)(?=\n###|\n##\s|$)/i
-  );
-  if (compTable) {
-    const rows = compTable[1].matchAll(
-      /\|\s*(\d+)\s*\|\s*(\S+)\s*\|\s*([\d.]+)%\s*\|\s*(\d+)\s*\|\s*([\d,]+)\s*\|\s*([\d.]+)\s*\|\s*\$([\d,]+)\s*\|/g
-    );
-    for (const row of rows) {
+  // --- 7. Competitor Analysis ---
+  // Standard format: | # | Domain | Overlap % | Shared Keywords | Total Keywords | Avg Position | ETV |
+  const compSection = md.match(/##\s*\d*\.?\s*Competitor[\s\S]*?###\s*(?:Top\s+\d+|Direct\s+Local)[^\n]*\n+(\|.+\|[\s\S]*?)(?=\n\n\*|\n\n###|\n\n##|\n###|\n##\s|$)/i);
+  if (compSection) {
+    const block = compSection[1];
+    for (const row of block.matchAll(/\|\s*(\d+)\s*\|\s*(\S+)\s*\|\s*([\d.]+)%?\s*\|\s*([\d,]+)\s*\|\s*([\d,]+[MBK]?)\s*\|\s*([\d.]+)\s*\|\s*\$?([\d,]+[MBK]?)\s*\|/g)) {
       result.competitorAnalysis.push({
-        rank: parseInt(row[1], 10),
-        domain: row[2].trim(),
-        overlap_pct: parseFloat(row[3]),
-        shared_keywords: parseInt(row[4], 10),
-        total_keywords: parseInt(row[5].replace(/,/g, ''), 10),
-        avg_position: parseFloat(row[6]),
-        etv: parseInt(row[7].replace(/,/g, ''), 10),
+        rank: parseInt(row[1], 10), domain: row[2].trim(),
+        overlap_pct: parseFloat(row[3]), shared_keywords: num(row[4]),
+        total_keywords: Math.round(num(row[5])), avg_position: parseFloat(row[6]),
+        etv: Math.round(num(row[7])),
       });
     }
   }
 
-  // Competitor summary table
-  const summaryTable = md.match(
-    /###\s*Veterans\s+Plumbing\s+Position[\s\S]*?\n(\|.+\|[\s\S]*?)(?=\n###|\n##\s|\nThe site|$)/i
-  );
-  if (summaryTable) {
-    const vetMatch = summaryTable[1].match(
-      /\|\s*Veterans\s+Plumbing\s*\|\s*(\d+)\s*\|\s*([\d.]+)\s*\|\s*\$([\d,]+)\s*\|/i
-    );
-    if (vetMatch) {
-      result.competitorSummary.veterans_keywords = parseInt(vetMatch[1], 10);
-      result.competitorSummary.veterans_avg_position = parseFloat(vetMatch[2]);
-      result.competitorSummary.veterans_etv = parseInt(vetMatch[3].replace(/,/g, ''), 10);
+  // Client vs Competitor summary — generic (not hardcoded to any domain)
+  const vsTable = md.match(/###\s*Client\s+vs[\s\S]*?\n(\|.+\|[\s\S]*?)(?=\n###|\n##\s|$)/i);
+  if (vsTable) {
+    // First data row is the client, extract competitor averages from remaining rows
+    const dataRows = vsTable[1].matchAll(/\|\s*[^|]+\|\s*([\d,]+)\s*\|\s*([\d.]+)\s*\|\s*\$?([\d,]+)\s*\|/g);
+    const compStats: { kw: number; pos: number; etv: number }[] = [];
+    let isFirst = true;
+    for (const row of dataRows) {
+      if (row[0].includes('---') || row[0].includes('Metric')) continue;
+      if (isFirst) { isFirst = false; continue; } // skip client row
+      compStats.push({ kw: num(row[1]), pos: parseFloat(row[2]), etv: num(row[3]) });
     }
-    const compAvg = summaryTable[1].match(
-      /\|\s*Competitor\s+Avg[^|]*\|\s*~?([\d,]+)\s*\|\s*~?([\d.]+)\s*\|\s*~?\$([\d,]+)\s*\|/i
-    );
-    if (compAvg) {
-      result.competitorSummary.competitor_avg_keywords = parseInt(compAvg[1].replace(/,/g, ''), 10);
-      result.competitorSummary.competitor_avg_position = parseFloat(compAvg[2]);
-      result.competitorSummary.competitor_avg_etv = parseInt(compAvg[3].replace(/,/g, ''), 10);
+    if (compStats.length > 0) {
+      result.competitorSummary.competitor_avg_keywords = Math.round(compStats.reduce((s, c) => s + c.kw, 0) / compStats.length);
+      result.competitorSummary.competitor_avg_position = Math.round(compStats.reduce((s, c) => s + c.pos, 0) / compStats.length * 10) / 10;
+      result.competitorSummary.competitor_avg_etv = Math.round(compStats.reduce((s, c) => s + c.etv, 0) / compStats.length);
     }
   }
 
-  // --- Striking Distance ---
-  const sdTable = md.match(
-    /##\s*6\.\s*Striking\s+Distance[\s\S]*?\n(\|.+\|[\s\S]*?)(?=\n\*\*|\n###|\n##\s|$)/i
-  );
-  if (sdTable) {
-    const rows = sdTable[1].matchAll(
-      /\|\s*(.+?)\s*\|\s*([\d,]+)\s*\|\s*(\d+)\s*\|\s*\$?([\d.]+|N\/A)\s*\|\s*(\w+)\s*\|/g
-    );
-    for (const row of rows) {
-      const kw = row[1].trim().replace(/^\|+\s*/, '');
-      if (kw.startsWith('Keyword') || kw.includes('---')) continue;
+  // --- 8. Striking Distance ---
+  const sdBlock = sectionTable(/##\s*\d*\.?\s*Striking\s+Distance[\s\S]*?(?=\n##\s|$)/i);
+  if (sdBlock) {
+    for (const row of sdBlock.matchAll(/\|\s*(\d+)\s*\|\s*(.+?)\s*\|\s*(\d+)\s*\|\s*([\d,]+)\s*\|\s*\$?([\d.]+|N\/A)\s*\|\s*(\w+)\s*\|/g)) {
       result.strikingDistance.push({
-        keyword: kw,
-        volume: parseInt(row[2].replace(/,/g, ''), 10),
-        position: parseInt(row[3], 10),
-        cpc: row[4] === 'N/A' ? null : parseFloat(row[4]),
-        intent: row[5].trim(),
+        keyword: row[2].trim(), position: parseInt(row[3], 10),
+        volume: num(row[4]), cpc: row[5] === 'N/A' ? null : parseFloat(row[5]),
+        intent: row[6].trim(),
       });
     }
   }
 
-  // --- Content Gap Observations ---
-  const gapSection = md.match(
-    /##\s*8\.\s*Content\s+Gap\s+Observations[\s\S]*?(?=\n##\s|$)/i
-  );
+  // --- 9. Content Gap Observations ---
+  const gapSection = md.match(/##\s*\d*\.?\s*Content\s+Gap\s+Observations[\s\S]*?(?=\n##\s|$)/i);
   if (gapSection) {
-    const observations = gapSection[0].matchAll(
-      /\d+\.\s*\*\*(.+?)\*\*\s*(.+?)(?=\n\d+\.|$)/gs
-    );
-    for (const obs of observations) {
+    for (const obs of gapSection[0].matchAll(/\d+\.\s*\*\*(.+?)\*\*\s*[—\-–]\s*(.+?)(?=\n\d+\.\s*\*\*|$)/gs)) {
       const title = obs[1].replace(/[:.]$/, '').trim();
       const body = obs[2].trim().split('\n')[0].trim();
       result.contentGapObservations.push(`${title}: ${body}`);
     }
   }
 
-  // --- Key Takeaways ---
-  const takeaways = md.matchAll(
-    /(?:###?\s*[\d.]*\s*)?(.+?)(?:\n[\s\S]*?)??\*\*Key\s+takeaway:\*\*\s*(.+?)(?=\n\n|\n##|\n\*\*|$)/gi
-  );
-  for (const t of takeaways) {
-    const sectionMatch = t[0].match(/###?\s*([\d.]*\s*.+?)(?:\n|$)/);
-    const section = sectionMatch ? sectionMatch[1].replace(/^[\d.]+\s*/, '').trim() : 'General';
-    result.keyTakeaways.push({
-      section: section.substring(0, 50),
-      takeaway: t[2].trim(),
-    });
-  }
-
-  // Count top-10 keywords
-  const top10Section = md.match(
-    /###\s*Keywords\s+Currently\s+in\s+the\s+Top\s+10\s*\(only\s+(\d+)\)/i
-  );
-  if (top10Section) {
-    result.keywordOverview.top_10_count = parseInt(top10Section[1], 10);
+  // --- 10. Key Takeaways ---
+  const takeawaySection = md.match(/##\s*\d*\.?\s*Key\s+Takeaways[\s\S]*?(?=\n##\s|$)/i);
+  if (takeawaySection) {
+    for (const t of takeawaySection[0].matchAll(/\*\*\[([^\]]+)\]\*\*\s*\n(.+?)(?=\n\*\*\[|$)/gs)) {
+      result.keyTakeaways.push({
+        section: t[1].trim().substring(0, 50),
+        takeaway: t[2].trim().split('\n')[0].trim(),
+      });
+    }
   }
 
   return result;
@@ -603,7 +567,9 @@ async function syncJim(
           assumptions.cr_used_min,
           assumptions.cr_used_max,
           assumptions.acv_used_min,
-          assumptions.acv_used_max
+          assumptions.acv_used_max,
+          assumptions.cr_used_mid ?? undefined,
+          assumptions.acv_used_mid ?? undefined
         )
       : {
           current_ctr: getCtrForPosition(kw.rank_pos, ctrBuckets, assumptions.floor_ctr_over30),
@@ -614,6 +580,7 @@ async function syncJim(
           delta_leads_low: 0,
           delta_leads_high: 0,
           delta_revenue_low: 0,
+          delta_revenue_mid: 0,
           delta_revenue_high: 0,
         };
 
@@ -645,50 +612,23 @@ async function syncJim(
     console.log(`  [jim] Inserted ${allKeywordRecords.length} keywords (${nearMiss.length} near-miss)`);
   }
 
-  // Canonicalize keywords (uses DB function)
-  const { error: canonErr } = await sb.rpc('fn_canonicalize_audit_keywords', { p_audit_id: auditId });
-  if (canonErr) {
-    console.log(`  [jim] Canonicalization RPC failed: ${canonErr.message} — using legacy topics`);
-  } else {
-    // Refine cluster field from canonical_topic (better grouping than extractTopic)
-    const { data: canonRows } = await sb
-      .from('audit_keywords')
-      .select('id, canonical_topic')
-      .eq('audit_id', auditId)
-      .not('canonical_topic', 'is', null);
-    let clusterUpdated = 0;
-    for (const row of (canonRows ?? []) as any[]) {
-      const ct = String(row.canonical_topic).trim();
-      if (ct) {
-        await sb.from('audit_keywords').update({ cluster: ct }).eq('id', row.id);
-        clusterUpdated++;
-      }
-    }
-    if (clusterUpdated > 0) {
-      console.log(`  [jim] Refined cluster from canonical_topic for ${clusterUpdated} keywords`);
-    }
-  }
-
   // Pull back keywords for clustering (only near-miss for revenue calculations)
   const { data: kwRows } = await sb
     .from('audit_keywords')
-    .select('keyword, rank_pos, search_volume, cpc, delta_traffic, delta_revenue_low, delta_revenue_high, delta_leads_low, delta_leads_high, canonical_key, canonical_topic, intent_type, intent, is_brand, is_near_miss, topic')
+    .select('keyword, rank_pos, search_volume, cpc, delta_traffic, delta_revenue_low, delta_revenue_mid, delta_revenue_high, delta_leads_low, delta_leads_high, canonical_key, canonical_topic, intent_type, intent, is_brand, is_near_miss, topic')
     .eq('audit_id', auditId)
     .eq('is_near_miss', true);
 
   // Cluster by canonical_key (or fall back to legacy topic)
-  const CONSERVATIVE_CR = 0.15;
-  const CONSERVATIVE_ACV = 500;
-
   type ClusterAgg = {
     topic: string;
     positions: number[];
     keywords: string[];
     revLow: number;
+    revMid: number;
     revHigh: number;
     leadsLow: number;
     leadsHigh: number;
-    conservativeRev: number;
     volMax: number;
     kwTotal: number;
     kwEligible: number;
@@ -712,10 +652,10 @@ async function syncJim(
       existing.keywords.push(r.keyword);
       if (eligible) {
         existing.revLow += Number(r.delta_revenue_low ?? 0);
+        existing.revMid += Number(r.delta_revenue_mid ?? 0);
         existing.revHigh += Number(r.delta_revenue_high ?? 0);
         existing.leadsLow += Number(r.delta_leads_low ?? 0);
         existing.leadsHigh += Number(r.delta_leads_high ?? 0);
-        existing.conservativeRev += deltaTraffic * CONSERVATIVE_CR * CONSERVATIVE_ACV;
         existing.kwEligible++;
       }
       existing.volMax = Math.max(existing.volMax, vol);
@@ -726,10 +666,10 @@ async function syncJim(
         positions: [pos],
         keywords: [r.keyword],
         revLow: eligible ? Number(r.delta_revenue_low ?? 0) : 0,
+        revMid: eligible ? Number(r.delta_revenue_mid ?? 0) : 0,
         revHigh: eligible ? Number(r.delta_revenue_high ?? 0) : 0,
         leadsLow: eligible ? Number(r.delta_leads_low ?? 0) : 0,
         leadsHigh: eligible ? Number(r.delta_leads_high ?? 0) : 0,
-        conservativeRev: eligible ? deltaTraffic * CONSERVATIVE_CR * CONSERVATIVE_ACV : 0,
         volMax: vol,
         kwTotal: 1,
         kwEligible: eligible ? 1 : 0,
@@ -750,6 +690,7 @@ async function syncJim(
         est_new_leads_low: round2(c.leadsLow),
         est_new_leads_high: round2(c.leadsHigh),
         est_revenue_low: round2(c.revLow),
+        est_revenue_mid: round2(c.revMid),
         est_revenue_high: round2(c.revHigh),
         sample_keywords: c.keywords.slice(0, 5),
       };
@@ -764,8 +705,8 @@ async function syncJim(
   // Rollup
   const totalVol = clusterRecords.reduce((s, c) => s + c.total_volume, 0);
   const totalRevLow = clusterRecords.reduce((s, c) => s + c.est_revenue_low, 0);
+  const totalRevMid = clusterRecords.reduce((s, c) => s + c.est_revenue_mid, 0);
   const totalRevHigh = clusterRecords.reduce((s, c) => s + c.est_revenue_high, 0);
-  const totalConservative = Array.from(clusterMap.values()).reduce((s, c) => s + c.conservativeRev, 0);
 
   const { error: rollupErr } = await sb.from('audit_rollups').insert({
     audit_id: auditId,
@@ -773,12 +714,12 @@ async function syncJim(
     near_miss_keyword_count: nearMiss.length,
     opportunity_topics_count: clusterRecords.length,
     monthly_revenue_low: round2(totalRevLow),
+    monthly_revenue_mid: round2(totalRevMid),
     monthly_revenue_high: round2(totalRevHigh),
-    monthly_revenue_conservative: round2(totalConservative),
   });
   if (rollupErr) throw new Error(`rollup insert failed: ${rollupErr.message}`);
 
-  console.log(`  [jim] Revenue range: $${round2(totalRevLow)} – $${round2(totalRevHigh)}/mo`);
+  console.log(`  [jim] Revenue range: $${round2(totalRevLow)} / $${round2(totalRevMid)} / $${round2(totalRevHigh)} per mo (low/mid/high)`);
 
   // Parse research_summary.md for site-level findings
   const summaryFile = path.join(dir, 'research_summary.md');
@@ -946,7 +887,7 @@ function parseAuditReport(filePath: string): ParsedAuditReport {
   if (agenticMatch) {
     const tableBlock = agenticMatch[1];
     const rows = tableBlock.matchAll(
-      /\|\s*(.+?)\s*\|\s*(PASS|FAIL)\s*\|\s*(.+?)\s*\|/gi
+      /\|\s*(.+?)\s*\|\s*\*{0,2}(PASS|FAIL)\*{0,2}\s*\|\s*(.+?)\s*\|/gi
     );
     for (const row of rows) {
       result.agenticReadiness.push({
@@ -962,16 +903,24 @@ function parseAuditReport(filePath: string): ParsedAuditReport {
     /##\s*Section\s*6:\s*Structured\s+Data[\s\S]*?(?=\n##\s)/i
   );
   if (schemaSection) {
-    const issueBlocks = schemaSection[0].matchAll(
+    // Format A: **Issue N: Title**\ndescription
+    const formatA = schemaSection[0].matchAll(
       /\*\*Issue\s*(\d+):\s*(.+?)\*\*\s*\n([\s\S]*?)(?=\*\*Issue|\n---|\n##|$)/gi
     );
-    for (const block of issueBlocks) {
+    for (const block of formatA) {
       const desc = block[3].trim().split('\n')[0].trim();
-      result.structuredDataIssues.push({
-        issue: block[2].trim(),
-        description: desc,
-        severity: 'critical',
-      });
+      result.structuredDataIssues.push({ issue: block[2].trim(), description: desc, severity: 'critical' });
+    }
+    // Format B: N. **Title** — description (numbered list under ### Issues)
+    if (result.structuredDataIssues.length === 0) {
+      const formatB = schemaSection[0].matchAll(
+        /\d+\.\s*\*\*(.+?)\*\*\s*[—–-]\s*(.+?)(?=\n\d+\.\s*\*\*|\n\n---|\n##|$)/gs
+      );
+      for (const block of formatB) {
+        result.structuredDataIssues.push({
+          issue: block[1].trim(), description: block[2].trim().split('\n')[0].trim(), severity: 'critical',
+        });
+      }
     }
   }
 
