@@ -55,13 +55,16 @@ interface CliArgs {
   domain: string;
   userEmail?: string;
   date?: string;
+  seedMatrix?: string;
+  competitorUrls?: string;
+  mode: 'sales' | 'full';
 }
 
 function parseArgs(): CliArgs {
   const args = process.argv.slice(2);
   const subcommand = args[0] as CliArgs['subcommand'];
   if (!['jim', 'competitors', 'michael', 'dwight', 'gap', 'canonicalize'].includes(subcommand)) {
-    console.error('Usage: npx tsx scripts/pipeline-generate.ts <jim|competitors|gap|michael|dwight|canonicalize> --domain <domain> --user-email <email> [--date YYYY-MM-DD]');
+    console.error('Usage: npx tsx scripts/pipeline-generate.ts <jim|competitors|gap|michael|dwight|canonicalize> --domain <domain> --user-email <email> [--date YYYY-MM-DD] [--mode sales|full]');
     process.exit(1);
   }
 
@@ -82,7 +85,17 @@ function parseArgs(): CliArgs {
     process.exit(1);
   }
 
-  return { subcommand, domain: flags.domain, userEmail: flags['user-email'], date: flags.date };
+  const mode = (flags.mode === 'sales' ? 'sales' : 'full') as CliArgs['mode'];
+
+  return {
+    subcommand,
+    domain: flags.domain,
+    userEmail: flags['user-email'],
+    date: flags.date,
+    seedMatrix: flags['seed-matrix'],
+    competitorUrls: flags['competitor-urls'],
+    mode,
+  };
 }
 
 // ============================================================
@@ -209,64 +222,274 @@ async function resolveAudit(sb: SupabaseClient, domain: string, userEmail: strin
 }
 
 // ============================================================
+// Seed Mode helpers — synthetic keyword universe for new/zero-visibility sites
+// ============================================================
+
+interface SeedMatrix {
+  business_type: string;
+  services: string[];
+  locales: string[];
+  state: string;
+}
+
+function generateKeywordCandidates(matrix: SeedMatrix): string[] {
+  const { business_type, services, locales, state } = matrix;
+  const candidates = new Set<string>();
+
+  for (const service of services) {
+    // Near-me variant (no locale)
+    candidates.add(`${service} near me`);
+
+    for (const locale of locales) {
+      candidates.add(`${service} ${locale}`);
+      candidates.add(`${service} ${locale} ${state}`);
+      candidates.add(`${service} cost ${locale}`);
+      candidates.add(`${service} services ${locale}`);
+    }
+  }
+
+  for (const locale of locales) {
+    candidates.add(`${business_type} ${locale}`);
+    candidates.add(`${business_type} ${locale} ${state}`);
+    candidates.add(`best ${business_type} ${locale}`);
+  }
+
+  return [...candidates].map((k) => k.toLowerCase());
+}
+
+interface BulkVolumeResult {
+  keyword: string;
+  volume: number;
+  cpc: number;
+  competition: number | null;
+  competition_level: string | null;
+}
+
+async function bulkKeywordVolume(
+  env: Record<string, string>,
+  keywords: string[],
+): Promise<BulkVolumeResult[]> {
+  const login = env.DATAFORSEO_LOGIN;
+  const password = env.DATAFORSEO_PASSWORD;
+  if (!login || !password) throw new Error('DATAFORSEO_LOGIN / DATAFORSEO_PASSWORD not set in .env');
+
+  const authString = Buffer.from(`${login}:${password}`).toString('base64');
+  const results: BulkVolumeResult[] = [];
+
+  // DataForSEO allows up to 1000 keywords per request — chunk if needed
+  const CHUNK_SIZE = 1000;
+  for (let i = 0; i < keywords.length; i += CHUNK_SIZE) {
+    const chunk = keywords.slice(i, i + CHUNK_SIZE);
+    console.log(`  Fetching volume for ${chunk.length} keywords (batch ${Math.floor(i / CHUNK_SIZE) + 1})...`);
+
+    const resp = await fetch('https://api.dataforseo.com/v3/keywords_data/google_ads/search_volume/live', {
+      method: 'POST',
+      headers: { Authorization: `Basic ${authString}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify([{ keywords: chunk, location_code: 2840, language_code: 'en' }]),
+    });
+    if (!resp.ok) throw new Error(`DataForSEO search_volume HTTP ${resp.status}`);
+    const data = await resp.json();
+
+    for (const task of data?.tasks ?? []) {
+      for (const item of task?.result ?? []) {
+        if (item.search_volume && item.search_volume > 0) {
+          results.push({
+            keyword: item.keyword,
+            volume: item.search_volume,
+            cpc: item.cpc ?? 0,
+            competition: item.competition ?? null,
+            competition_level: item.competition_level ?? null,
+          });
+        }
+      }
+    }
+  }
+
+  return results;
+}
+
+function buildSyntheticRankedKeywords(volumeResults: BulkVolumeResult[]): any {
+  return {
+    tasks: [{
+      result: [{
+        total_count: volumeResults.length,
+        items_count: volumeResults.length,
+        items: volumeResults.map((v) => ({
+          keyword_data: {
+            keyword: v.keyword,
+            keyword_info: {
+              search_volume: v.volume,
+              cpc: v.cpc,
+              competition: v.competition,
+              competition_level: v.competition_level,
+            },
+            search_intent_info: { main_intent: null },
+            keyword_properties: { keyword_difficulty: null },
+          },
+          ranked_serp_element: {
+            serp_item: { rank_group: 100, rank_absolute: 100, url: null },
+          },
+        })),
+      }],
+    }],
+  };
+}
+
+// ============================================================
 // Phase 1: Jim — DataForSEO calls → research artifacts → Claude narrative
 // ============================================================
 
-async function runJim(sb: SupabaseClient, auditId: string, domain: string) {
+async function runJim(sb: SupabaseClient, auditId: string, domain: string, seedMatrixPath?: string, competitorUrls?: string, mode: CliArgs['mode'] = 'full') {
   const env = loadEnv();
   const date = todayStr();
   const researchDir = path.join(AUDITS_BASE, domain, 'research', date);
   fs.mkdirSync(researchDir, { recursive: true });
 
-  const scriptPath = path.resolve(process.cwd(), 'scripts/foundational_scout.sh');
-
-  // Step 1: Call foundational_scout.sh ranked-keywords
-  console.log('  Calling DataForSEO ranked-keywords...');
   const rankedFile = path.join(researchDir, 'ranked_keywords.json');
-  try {
-    child_process.execSync(
-      `bash "${scriptPath}" "${domain}" ranked-keywords`,
-      {
-        encoding: 'utf-8',
-        timeout: 120_000,
-        stdio: ['pipe', 'pipe', 'pipe'],
-        env: { ...process.env, DATAFORSEO_LOGIN: env.DATAFORSEO_LOGIN, DATAFORSEO_PASSWORD: env.DATAFORSEO_PASSWORD },
-      },
-    );
-  } catch (err: any) {
-    if (!fs.existsSync(rankedFile)) {
-      throw new Error(`DataForSEO ranked-keywords failed: ${err.message}`);
-    }
-    console.log('  Warning: ranked-keywords exited non-zero but file exists — continuing');
-  }
-  if (!fs.existsSync(rankedFile)) throw new Error('ranked_keywords.json not produced');
-  const rankedSize = fs.statSync(rankedFile).size;
-  console.log(`  ranked_keywords.json: ${(rankedSize / 1024).toFixed(0)}KB`);
-
-  // Step 2: Call foundational_scout.sh competitors
-  console.log('  Calling DataForSEO competitors...');
   const competitorsFile = path.join(researchDir, 'competitors.json');
-  try {
-    child_process.execSync(
-      `bash "${scriptPath}" "${domain}" competitors`,
-      {
-        encoding: 'utf-8',
-        timeout: 120_000,
-        stdio: ['pipe', 'pipe', 'pipe'],
-        env: { ...process.env, DATAFORSEO_LOGIN: env.DATAFORSEO_LOGIN, DATAFORSEO_PASSWORD: env.DATAFORSEO_PASSWORD },
-      },
-    );
-  } catch (err: any) {
-    if (!fs.existsSync(competitorsFile)) {
-      throw new Error(`DataForSEO competitors failed: ${err.message}`);
-    }
-    console.log('  Warning: competitors exited non-zero but file exists — continuing');
-  }
-  if (!fs.existsSync(competitorsFile)) throw new Error('competitors.json not produced');
-  const compSize = fs.statSync(competitorsFile).size;
-  console.log(`  competitors.json: ${(compSize / 1024).toFixed(0)}KB`);
+  let isSeedMode = false;
 
-  // Step 3: Parse JSON files and build rich prompt for Claude
+  if (seedMatrixPath) {
+    // ── Mode B: Synthetic keyword universe from seed matrix ──
+    isSeedMode = true;
+    console.log(`  Mode B: Seed matrix from ${seedMatrixPath}`);
+
+    const matrixRaw = fs.readFileSync(seedMatrixPath, 'utf-8');
+    const matrix: SeedMatrix = JSON.parse(matrixRaw);
+    if (!matrix.business_type || !matrix.services?.length || !matrix.locales?.length || !matrix.state) {
+      throw new Error('Seed matrix must have business_type, services[], locales[], and state');
+    }
+
+    // Generate keyword candidates from service-locale cross-product
+    let candidates = generateKeywordCandidates(matrix);
+    console.log(`  Generated ${candidates.length} keyword candidates from seed matrix`);
+
+    // If competitor URLs provided, fetch their ranked keywords and merge
+    if (competitorUrls) {
+      const compDomains = competitorUrls.split(',').map((d) => d.trim()).filter(Boolean);
+      console.log(`  Fetching competitor keywords from ${compDomains.length} domains...`);
+      const scriptPath = path.resolve(process.cwd(), 'scripts/foundational_scout.sh');
+
+      const competitorKeywords: string[] = [];
+      const competitorItems: any[] = [];
+      for (const compDomain of compDomains) {
+        try {
+          const compFile = path.join(researchDir, `competitor_${compDomain.replace(/\./g, '_')}.json`);
+          child_process.execSync(
+            `bash "${scriptPath}" "${compDomain}" ranked-keywords`,
+            {
+              encoding: 'utf-8',
+              timeout: 120_000,
+              stdio: ['pipe', 'pipe', 'pipe'],
+              env: { ...process.env, DATAFORSEO_LOGIN: env.DATAFORSEO_LOGIN, DATAFORSEO_PASSWORD: env.DATAFORSEO_PASSWORD },
+            },
+          );
+          // foundational_scout.sh writes to audits/{domain}/research/{date}/ranked_keywords.json
+          const compRankedFile = path.join(AUDITS_BASE, compDomain, 'research', date, 'ranked_keywords.json');
+          if (fs.existsSync(compRankedFile)) {
+            const compData = JSON.parse(fs.readFileSync(compRankedFile, 'utf-8'));
+            for (const task of compData?.tasks ?? []) {
+              for (const result of task?.result ?? []) {
+                for (const item of result?.items ?? []) {
+                  const kw = item.keyword_data?.keyword;
+                  if (kw) {
+                    competitorKeywords.push(kw.toLowerCase());
+                    competitorItems.push(item);
+                  }
+                }
+              }
+            }
+            console.log(`  ${compDomain}: ${competitorKeywords.length} keywords found`);
+          }
+        } catch (err: any) {
+          console.log(`  Warning: competitor ${compDomain} fetch failed: ${err.message}`);
+        }
+      }
+
+      // Merge competitor keywords into candidates (deduplicate)
+      const beforeCount = candidates.length;
+      const candidateSet = new Set(candidates);
+      for (const kw of competitorKeywords) {
+        candidateSet.add(kw);
+      }
+      candidates = [...candidateSet];
+      console.log(`  Merged ${candidates.length - beforeCount} unique competitor keywords (total: ${candidates.length})`);
+
+      // Write competitors.json stub with competitor domain info
+      const competitorsStub = {
+        tasks: [{
+          result: [{
+            total_count: compDomains.length,
+            items: compDomains.map((d) => ({
+              domain: d,
+              avg_position: null,
+              sum_position: null,
+              intersections: null,
+              full_domain_metrics: { organic: { count: null, etv: null } },
+            })),
+          }],
+        }],
+      };
+      fs.writeFileSync(competitorsFile, JSON.stringify(competitorsStub, null, 2), 'utf-8');
+    } else {
+      // No competitor URLs — write empty competitors.json
+      fs.writeFileSync(competitorsFile, JSON.stringify({ tasks: [{ result: [{ total_count: 0, items: [] }] }] }, null, 2), 'utf-8');
+    }
+
+    // Get search volume data for all candidates
+    const volumeResults = await bulkKeywordVolume(env, candidates);
+    console.log(`  ${volumeResults.length} keywords with volume > 0 (of ${candidates.length} candidates)`);
+
+    // Build synthetic ranked_keywords.json in DataForSEO format
+    const syntheticData = buildSyntheticRankedKeywords(volumeResults);
+    fs.writeFileSync(rankedFile, JSON.stringify(syntheticData, null, 2), 'utf-8');
+    console.log(`  ranked_keywords.json: ${(fs.statSync(rankedFile).size / 1024).toFixed(0)}KB (synthetic, rank_group=100)`);
+  } else {
+    // ── Mode A: Existing site — DataForSEO ranked-keywords + competitors ──
+    const scriptPath = path.resolve(process.cwd(), 'scripts/foundational_scout.sh');
+
+    console.log('  Calling DataForSEO ranked-keywords...');
+    try {
+      child_process.execSync(
+        `bash "${scriptPath}" "${domain}" ranked-keywords`,
+        {
+          encoding: 'utf-8',
+          timeout: 120_000,
+          stdio: ['pipe', 'pipe', 'pipe'],
+          env: { ...process.env, DATAFORSEO_LOGIN: env.DATAFORSEO_LOGIN, DATAFORSEO_PASSWORD: env.DATAFORSEO_PASSWORD },
+        },
+      );
+    } catch (err: any) {
+      if (!fs.existsSync(rankedFile)) {
+        throw new Error(`DataForSEO ranked-keywords failed: ${err.message}`);
+      }
+      console.log('  Warning: ranked-keywords exited non-zero but file exists — continuing');
+    }
+    if (!fs.existsSync(rankedFile)) throw new Error('ranked_keywords.json not produced');
+    console.log(`  ranked_keywords.json: ${(fs.statSync(rankedFile).size / 1024).toFixed(0)}KB`);
+
+    console.log('  Calling DataForSEO competitors...');
+    try {
+      child_process.execSync(
+        `bash "${scriptPath}" "${domain}" competitors`,
+        {
+          encoding: 'utf-8',
+          timeout: 120_000,
+          stdio: ['pipe', 'pipe', 'pipe'],
+          env: { ...process.env, DATAFORSEO_LOGIN: env.DATAFORSEO_LOGIN, DATAFORSEO_PASSWORD: env.DATAFORSEO_PASSWORD },
+        },
+      );
+    } catch (err: any) {
+      if (!fs.existsSync(competitorsFile)) {
+        throw new Error(`DataForSEO competitors failed: ${err.message}`);
+      }
+      console.log('  Warning: competitors exited non-zero but file exists — continuing');
+    }
+    if (!fs.existsSync(competitorsFile)) throw new Error('competitors.json not produced');
+    console.log(`  competitors.json: ${(fs.statSync(competitorsFile).size / 1024).toFixed(0)}KB`);
+  }
+
+  // ── Common path: Parse JSON files and build rich prompt for Claude ──
   const rankedData = JSON.parse(fs.readFileSync(rankedFile, 'utf-8'));
   const competitorsData = JSON.parse(fs.readFileSync(competitorsFile, 'utf-8'));
 
@@ -323,7 +546,21 @@ async function runJim(sb: SupabaseClient, auditId: string, domain: string) {
 
   // Step 4: Call Anthropic API (sonnet) for comprehensive research_summary.md
   console.log('  Generating research_summary.md via Anthropic API (sonnet)...');
+  const seedModeNote = isSeedMode
+    ? `\nNOTE: This is a NEW SITE with no existing organic rankings. All keyword data represents the target keyword universe derived from a service-locale matrix, not current ranking performance. Position data shows synthetic rank 100 (unranked). Focus analysis on: keyword universe quality, volume distribution, competitive landscape from competitors data, and prioritized content opportunities.\n`
+    : '';
+  const salesModeNote = mode === 'sales'
+    ? `\nSALES MODE — Produce a condensed report for a sales prospect. Follow these overrides:
+- Section 1 (Executive Summary): 1 paragraph only
+- Section 2 (Keyword Overview): keep the table
+- Sections 3-6: SKIP entirely (do not output)
+- Section 7 (Competitor Deep Dive): Top 5 competitors only
+- Section 8 (Striking Distance): Top 10 keywords only
+- Sections 9-10: 3 items max each
+All other formatting rules still apply.\n`
+    : '';
   const narrativePrompt = `You are Jim, The Scout — a foundational search intelligence analyst. You have full DataForSEO data for ${domain}. Write a comprehensive research_summary.md that another agent (Michael, The Architect) will use to plan the site's information architecture.
+${seedModeNote}${salesModeNote}
 
 ## Raw Keyword Data (top 200 of ${totalKeywords} by volume)
 Keyword | Position | Volume | CPC | Difficulty | Competition | Ranking URL
@@ -495,7 +732,7 @@ You MUST use these exact section headings and table column orders. The downstrea
 // Phase 5: Michael — Read disk artifacts + Supabase clusters → architecture blueprint
 // ============================================================
 
-async function runMichael(sb: SupabaseClient, auditId: string, domain: string, researchDate?: string) {
+async function runMichael(sb: SupabaseClient, auditId: string, domain: string, researchDate?: string, mode: CliArgs['mode'] = 'full') {
   const today = todayStr();
   const researchDir = path.join(AUDITS_BASE, domain, 'research', researchDate ?? today);
   const archDir = path.join(AUDITS_BASE, domain, 'architecture', today);
@@ -630,7 +867,13 @@ ${clusterTable || 'No cluster data available yet.'}
 ${crawlSection ? `${crawlSection}\n` : ''}
 ${semanticSection ? `${semanticSection}\n` : ''}
 ${gapSection ? `## Content Gap Intelligence\nThe following analysis was produced by the Gap agent. Your architecture MUST address every identified gap.\n\n${gapSection}\n` : ''}
-## Output Format — CRITICAL
+${mode === 'sales' ? `## SALES MODE OVERRIDE
+This is a condensed sales prospect report. Follow these overrides:
+- Executive Summary: 3-5 paragraphs strategic pitch focused on revenue opportunity
+- Max 3 silos with 3-5 pages each
+- Skip Cannibalization Warnings and Internal Linking Strategy sections entirely
+- Use revenue opportunity language throughout — this is for a prospect, not an internal planning doc
+` : ''}## Output Format — CRITICAL
 You MUST produce output in this EXACT format. The parser depends on these heading patterns:
 
 ### Start with:
@@ -1238,6 +1481,14 @@ ${plannedSummary}
 
 5. "summary": 2-3 sentence executive summary of the competitive gap landscape.
 
+## QUALITY RULES for authority_gaps topics:
+- Each topic must be a COMPLETE, meaningful service phrase (e.g., "AC repair", "furnace installation"). Never use truncated fragments like "boise heating and" or "repair boise".
+- Deduplicate semantic equivalents: "air conditioner repair" and "air conditioning repair" are the same topic — pick one.
+- Exclude brand/navigational queries (other companies' names, job listings, TV schedules).
+- Exclude non-customer intent (job postings, supplier queries, industry news).
+- Topics should be service-category level ("AC repair", "furnace installation"), not raw keyword strings.
+- If two topics differ only by city name, merge into the service topic and note the city in revenue_opportunity.
+
 CRITICAL: Respond with raw JSON only. No markdown code fences. Just the bare JSON object starting with {.`;
 
   console.log('  Generating content gap analysis via Anthropic API...');
@@ -1789,9 +2040,14 @@ async function main() {
   const { audit } = await resolveAudit(sb, args.domain, args.userEmail);
   console.log(`  Audit: ${audit.id} (${audit.status})`);
 
+  if (args.mode === 'sales') {
+    await sb.from('audits').update({ mode: 'sales' }).eq('id', audit.id);
+    console.log(`  Mode: sales`);
+  }
+
   switch (args.subcommand) {
     case 'jim':
-      await runJim(sb, audit.id, args.domain);
+      await runJim(sb, audit.id, args.domain, args.seedMatrix, args.competitorUrls, args.mode);
       break;
     case 'competitors':
       await runCompetitors(sb, audit.id, args.domain);
@@ -1800,7 +2056,7 @@ async function main() {
       await runGap(sb, audit.id, args.domain);
       break;
     case 'michael':
-      await runMichael(sb, audit.id, args.domain, args.date);
+      await runMichael(sb, audit.id, args.domain, args.date, args.mode);
       break;
     case 'dwight':
       runDwight(args.domain);

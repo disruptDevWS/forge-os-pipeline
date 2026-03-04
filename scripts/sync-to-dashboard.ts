@@ -615,11 +615,11 @@ async function syncJim(
   // Pull back keywords for clustering (only near-miss for revenue calculations)
   const { data: kwRows } = await sb
     .from('audit_keywords')
-    .select('keyword, rank_pos, search_volume, cpc, delta_traffic, delta_revenue_low, delta_revenue_mid, delta_revenue_high, delta_leads_low, delta_leads_high, canonical_key, canonical_topic, intent_type, intent, is_brand, is_near_miss, topic')
+    .select('keyword, rank_pos, search_volume, cpc, delta_traffic, delta_revenue_low, delta_revenue_mid, delta_revenue_high, delta_leads_low, delta_leads_high, canonical_key, canonical_topic, cluster, intent_type, intent, is_brand, is_near_miss, topic')
     .eq('audit_id', auditId)
     .eq('is_near_miss', true);
 
-  // Cluster by canonical_key (or fall back to legacy topic)
+  // Cluster by canonicalized cluster field (falls back to canonical_key/topic)
   type ClusterAgg = {
     topic: string;
     positions: number[];
@@ -637,27 +637,32 @@ async function syncJim(
   const clusterMap = new Map<string, ClusterAgg>();
 
   for (const r of (kwRows ?? []) as any[]) {
-    const key = r.canonical_key ?? r.topic ?? 'general';
-    const topic = r.canonical_topic ?? r.topic ?? key;
+    const intent = String(r.intent_type ?? r.intent ?? '').toLowerCase();
+    const isBrand = r.is_brand === true;
+
+    // Skip brand keywords and non-customer intent entirely — these pollute
+    // cluster topics with irrelevant entries (job listings, competitor brands,
+    // brand-confusion navigational queries)
+    if (isBrand) continue;
+    if (intent === 'informational' || intent === 'navigational') continue;
+
+    // Use canonicalized cluster label as grouping key (set by canonicalize step).
+    // Falls back to canonical_key/topic for audits that haven't been re-canonicalized.
+    const key = r.cluster ?? r.canonical_key ?? r.topic ?? 'general';
+    const topic = r.cluster ?? r.canonical_topic ?? r.topic ?? key;
     const vol = Number(r.search_volume ?? 0);
     const pos = Number(r.rank_pos ?? 0);
-    const intent = String(r.intent_type ?? r.intent ?? r.topic ?? '').toLowerCase();
-    const isBrand = r.is_brand === true;
-    const eligible = !isBrand && (intent === 'commercial' || intent === 'transactional');
-    const deltaTraffic = Number(r.delta_traffic ?? 0);
 
     const existing = clusterMap.get(key);
     if (existing) {
       existing.positions.push(pos);
       existing.keywords.push(r.keyword);
-      if (eligible) {
-        existing.revLow += Number(r.delta_revenue_low ?? 0);
-        existing.revMid += Number(r.delta_revenue_mid ?? 0);
-        existing.revHigh += Number(r.delta_revenue_high ?? 0);
-        existing.leadsLow += Number(r.delta_leads_low ?? 0);
-        existing.leadsHigh += Number(r.delta_leads_high ?? 0);
-        existing.kwEligible++;
-      }
+      existing.revLow += Number(r.delta_revenue_low ?? 0);
+      existing.revMid += Number(r.delta_revenue_mid ?? 0);
+      existing.revHigh += Number(r.delta_revenue_high ?? 0);
+      existing.leadsLow += Number(r.delta_leads_low ?? 0);
+      existing.leadsHigh += Number(r.delta_leads_high ?? 0);
+      existing.kwEligible++;
       existing.volMax = Math.max(existing.volMax, vol);
       existing.kwTotal++;
     } else {
@@ -665,14 +670,14 @@ async function syncJim(
         topic,
         positions: [pos],
         keywords: [r.keyword],
-        revLow: eligible ? Number(r.delta_revenue_low ?? 0) : 0,
-        revMid: eligible ? Number(r.delta_revenue_mid ?? 0) : 0,
-        revHigh: eligible ? Number(r.delta_revenue_high ?? 0) : 0,
-        leadsLow: eligible ? Number(r.delta_leads_low ?? 0) : 0,
-        leadsHigh: eligible ? Number(r.delta_leads_high ?? 0) : 0,
+        revLow: Number(r.delta_revenue_low ?? 0),
+        revMid: Number(r.delta_revenue_mid ?? 0),
+        revHigh: Number(r.delta_revenue_high ?? 0),
+        leadsLow: Number(r.delta_leads_low ?? 0),
+        leadsHigh: Number(r.delta_leads_high ?? 0),
         volMax: vol,
         kwTotal: 1,
-        kwEligible: eligible ? 1 : 0,
+        kwEligible: 1,
       });
     }
   }
