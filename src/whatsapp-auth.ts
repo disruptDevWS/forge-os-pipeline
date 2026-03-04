@@ -60,7 +60,7 @@ async function connectSocket(phoneNumber?: string): Promise<void> {
     },
     printQRInTerminal: false,
     logger,
-    browser: Browsers.macOS('Chrome'),
+    browser: Browsers.ubuntu('Chrome'),
   });
 
   if (usePairingCode && phoneNumber && !state.creds.me) {
