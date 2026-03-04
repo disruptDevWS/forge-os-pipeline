@@ -57,6 +57,7 @@
 - CTAs should be clear and direct: "Call [phone]" or "Schedule Online." Not "Don't hesitate to reach out to our team of professionals."
 - On commercial and transactional pages, the hero section and final section should both contain CTAs.
 - Mid-page CTAs (if the brief calls for them) should follow a trust-building or service description section.
+- CTA elements use semantic markup only. Do not use typographic separators (pipes, bullets, slashes) between CTA options — that is a visual/design decision for the CMS template. Wrap each CTA option in its own `<p>` element.
 
 ---
 

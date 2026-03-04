@@ -98,6 +98,28 @@ function callClaudeAsync(prompt: string, model = 'sonnet'): Promise<string> {
   });
 }
 
+/**
+ * Extract the actual HTML content from Claude's output, stripping any
+ * preamble (thinking/function-call syntax) and postamble (summary text).
+ * Looks for the first `<!--` through the last `-->`.
+ * Falls back to stripping code fences if no HTML comments found.
+ */
+function extractHtmlContent(raw: string): string {
+  // Strategy 1: first <!-- through last -->
+  const firstComment = raw.indexOf('<!--');
+  const lastComment = raw.lastIndexOf('-->');
+  if (firstComment !== -1 && lastComment !== -1 && lastComment > firstComment) {
+    return raw.slice(firstComment, lastComment + 3).trim();
+  }
+
+  // Strategy 2: strip markdown code fences
+  const fenced = raw.match(/```(?:html)?\s*\n([\s\S]*?)\n\s*```/);
+  if (fenced) return fenced[1].trim();
+
+  // Strategy 3: return as-is
+  return raw.trim();
+}
+
 // ============================================================
 // CLI parsing
 // ============================================================
@@ -301,22 +323,26 @@ async function processOscarRequest(sb: SupabaseClient, req: OscarRequest) {
     const htmlOutput = await callClaudeAsync(prompt, 'sonnet');
     console.log(`  Claude output: ${htmlOutput.length} chars`);
 
-    // 5. Write debug output
+    // 5. Write debug output (raw, before parsing)
     const debugDir = path.join(AUDITS_BASE, req.domain, 'content', '_debug');
     fs.mkdirSync(debugDir, { recursive: true });
     fs.writeFileSync(path.join(debugDir, `${slug}-oscar-raw.html`), htmlOutput, 'utf-8');
 
-    // 6. Validate output
-    if (!htmlOutput.includes('<article>')) {
+    // 6. Extract clean HTML — strip Claude preamble/postamble
+    const cleanHtml = extractHtmlContent(htmlOutput);
+    console.log(`  Cleaned HTML: ${cleanHtml.length} chars (stripped ${htmlOutput.length - cleanHtml.length})`);
+
+    // 7. Validate output
+    if (!cleanHtml.includes('<article>')) {
       console.log('  Warning: Output does not contain <article> tag');
     }
 
-    // 7. Write HTML file
+    // 8. Write HTML file
     const date = todayStr();
     const outDir = path.join(AUDITS_BASE, req.domain, 'content', date, slug);
     fs.mkdirSync(outDir, { recursive: true });
     const htmlPath = path.join(outDir, 'page.html');
-    fs.writeFileSync(htmlPath, htmlOutput, 'utf-8');
+    fs.writeFileSync(htmlPath, cleanHtml, 'utf-8');
     console.log(`  Written ${path.relative(process.cwd(), htmlPath)}`);
 
     // 8. Update execution_pages status
