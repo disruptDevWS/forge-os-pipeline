@@ -1859,6 +1859,13 @@ const PIPELINE_STATUS: Record<string, string> = {
   michael: 'architecture',
   pam: 'complete',
 };
+// Pipeline status rank — higher = more complete. Only advance, never regress.
+const PIPELINE_STATUS_RANK: Record<string, number> = {
+  research: 1,
+  audit: 2,
+  architecture: 3,
+  complete: 4,
+};
 
 async function main() {
   const args = parseArgs();
@@ -1962,14 +1969,24 @@ async function main() {
     }
   }
 
-  // Update pipeline status
+  // Update pipeline status — only advance forward, never regress.
+  // This prevents sync dwight (Phase 6c) from overwriting sync michael's 'architecture'
+  // with 'audit' when agents run in non-sequential order.
   if (lastCompletedAgent) {
-    const pipelineStatus = PIPELINE_STATUS[lastCompletedAgent] ?? lastCompletedAgent;
-    await sb.from('audits').update({
-      agent_pipeline_status: pipelineStatus,
-      agent_pipeline_domain: args.domain,
-    }).eq('id', audit!.id);
-    console.log(`\nPipeline status: ${pipelineStatus}`);
+    const newStatus = PIPELINE_STATUS[lastCompletedAgent] ?? lastCompletedAgent;
+    const newRank = PIPELINE_STATUS_RANK[newStatus] ?? 0;
+    const currentStatus = (audit as any)?.agent_pipeline_status ?? '';
+    const currentRank = PIPELINE_STATUS_RANK[currentStatus] ?? 0;
+
+    if (newRank > currentRank) {
+      await sb.from('audits').update({
+        agent_pipeline_status: newStatus,
+        agent_pipeline_domain: args.domain,
+      }).eq('id', audit!.id);
+      console.log(`\nPipeline status: ${currentStatus || '(none)'} → ${newStatus}`);
+    } else {
+      console.log(`\nPipeline status: ${currentStatus} (unchanged — ${newStatus} does not advance)`);
+    }
   }
 
   // Set audit to completed if it has keywords
