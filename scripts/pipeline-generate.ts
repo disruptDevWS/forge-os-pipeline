@@ -2763,7 +2763,10 @@ REMINDER: Your response IS the JSON — start with { and end with }. No preamble
 
   // --- Step 5: Seed audit_keywords in Supabase ---
   if (opportunities.length > 0) {
-    // Clear prior keyword_research rows for this audit to prevent duplicates on re-run
+    // Clear prior keyword_research rows for this audit to prevent duplicates on re-run.
+    // PAIRED with: sync-to-dashboard.ts syncJim() which deletes source='ranked' and source=NULL.
+    // Together these three deletes cover all source values. If the source column logic changes,
+    // update both files.
     await sb.from('audit_keywords').delete().eq('audit_id', auditId).eq('source', 'keyword_research');
 
     const BATCH_SIZE = 50;

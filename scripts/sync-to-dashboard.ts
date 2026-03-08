@@ -547,6 +547,9 @@ async function syncJim(
   // Preserve KeywordResearch-seeded rows (source = 'keyword_research') — only delete Jim's ranked rows.
   // PostgREST .neq() excludes NULLs, so we must also explicitly delete rows with source IS NULL
   // (legacy rows from before the source column was added).
+  // PAIRED with: pipeline-generate.ts runKeywordResearch() which deletes source='keyword_research'.
+  // Together these three deletes cover all source values. If the source column logic changes,
+  // update both files.
   await sb.from('audit_keywords').delete().eq('audit_id', auditId).eq('source', 'ranked');
   await sb.from('audit_keywords').delete().eq('audit_id', auditId).is('source', null);
   await sb.from('audit_clusters').delete().eq('audit_id', auditId);
