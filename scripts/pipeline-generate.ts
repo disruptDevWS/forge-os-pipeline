@@ -2763,6 +2763,9 @@ REMINDER: Your response IS the JSON — start with { and end with }. No preamble
 
   // --- Step 5: Seed audit_keywords in Supabase ---
   if (opportunities.length > 0) {
+    // Clear prior keyword_research rows for this audit to prevent duplicates on re-run
+    await sb.from('audit_keywords').delete().eq('audit_id', auditId).eq('source', 'keyword_research');
+
     const BATCH_SIZE = 50;
     let inserted = 0;
     for (let i = 0; i < opportunities.length; i += BATCH_SIZE) {

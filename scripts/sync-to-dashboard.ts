@@ -544,8 +544,11 @@ async function syncJim(
   console.log(`  [jim] ${nearMiss.length} near-miss keywords (pos ${assumptions.near_miss_min_pos}-${assumptions.near_miss_max_pos}, vol >= ${assumptions.min_volume})`);
 
   // Idempotency: clear prior keyword/cluster/rollup data
-  // Preserve KeywordResearch-seeded rows (source = 'keyword_research') — only delete Jim's ranked rows
-  await sb.from('audit_keywords').delete().eq('audit_id', auditId).neq('source', 'keyword_research');
+  // Preserve KeywordResearch-seeded rows (source = 'keyword_research') — only delete Jim's ranked rows.
+  // PostgREST .neq() excludes NULLs, so we must also explicitly delete rows with source IS NULL
+  // (legacy rows from before the source column was added).
+  await sb.from('audit_keywords').delete().eq('audit_id', auditId).eq('source', 'ranked');
+  await sb.from('audit_keywords').delete().eq('audit_id', auditId).is('source', null);
   await sb.from('audit_clusters').delete().eq('audit_id', auditId);
   await sb.from('audit_rollups').delete().eq('audit_id', auditId);
 
