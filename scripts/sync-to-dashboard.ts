@@ -614,7 +614,7 @@ async function syncJim(
     console.log(`  [jim] Inserted ${allKeywordRecords.length} keywords (${nearMiss.length} near-miss)`);
   }
 
-  // Pull back keywords for clustering (only near-miss for revenue calculations)
+  // Pull back near-miss keywords for clustering (primary revenue calculation)
   const { data: kwRows } = await sb
     .from('audit_keywords')
     .select('keyword, rank_pos, search_volume, cpc, delta_traffic, delta_revenue_low, delta_revenue_mid, delta_revenue_high, delta_leads_low, delta_leads_high, canonical_key, canonical_topic, cluster, intent_type, intent, is_brand, is_near_miss, topic')
@@ -636,52 +636,98 @@ async function syncJim(
     kwEligible: number;
   };
 
-  const clusterMap = new Map<string, ClusterAgg>();
+  function buildClusterMap(rows: any[]): Map<string, ClusterAgg> {
+    const map = new Map<string, ClusterAgg>();
+    for (const r of rows) {
+      const intent = String(r.intent_type ?? r.intent ?? '').toLowerCase();
+      const isBrand = r.is_brand === true;
 
-  for (const r of (kwRows ?? []) as any[]) {
-    const intent = String(r.intent_type ?? r.intent ?? '').toLowerCase();
-    const isBrand = r.is_brand === true;
+      // Skip brand keywords and non-customer intent entirely
+      if (isBrand) continue;
+      if (intent === 'informational' || intent === 'navigational') continue;
 
-    // Skip brand keywords and non-customer intent entirely — these pollute
-    // cluster topics with irrelevant entries (job listings, competitor brands,
-    // brand-confusion navigational queries)
-    if (isBrand) continue;
-    if (intent === 'informational' || intent === 'navigational') continue;
+      const key = r.cluster ?? r.canonical_key ?? r.topic ?? 'general';
+      const topic = r.cluster ?? r.canonical_topic ?? r.topic ?? key;
+      const vol = Number(r.search_volume ?? 0);
+      const pos = Number(r.rank_pos ?? 0);
 
-    // Use canonicalized cluster label as grouping key (set by canonicalize step).
-    // Falls back to canonical_key/topic for audits that haven't been re-canonicalized.
-    const key = r.cluster ?? r.canonical_key ?? r.topic ?? 'general';
-    const topic = r.cluster ?? r.canonical_topic ?? r.topic ?? key;
-    const vol = Number(r.search_volume ?? 0);
-    const pos = Number(r.rank_pos ?? 0);
-
-    const existing = clusterMap.get(key);
-    if (existing) {
-      existing.positions.push(pos);
-      existing.keywords.push(r.keyword);
-      existing.revLow += Number(r.delta_revenue_low ?? 0);
-      existing.revMid += Number(r.delta_revenue_mid ?? 0);
-      existing.revHigh += Number(r.delta_revenue_high ?? 0);
-      existing.leadsLow += Number(r.delta_leads_low ?? 0);
-      existing.leadsHigh += Number(r.delta_leads_high ?? 0);
-      existing.kwEligible++;
-      existing.volMax = Math.max(existing.volMax, vol);
-      existing.kwTotal++;
-    } else {
-      clusterMap.set(key, {
-        topic,
-        positions: [pos],
-        keywords: [r.keyword],
-        revLow: Number(r.delta_revenue_low ?? 0),
-        revMid: Number(r.delta_revenue_mid ?? 0),
-        revHigh: Number(r.delta_revenue_high ?? 0),
-        leadsLow: Number(r.delta_leads_low ?? 0),
-        leadsHigh: Number(r.delta_leads_high ?? 0),
-        volMax: vol,
-        kwTotal: 1,
-        kwEligible: 1,
-      });
+      const existing = map.get(key);
+      if (existing) {
+        existing.positions.push(pos);
+        existing.keywords.push(r.keyword);
+        existing.revLow += Number(r.delta_revenue_low ?? 0);
+        existing.revMid += Number(r.delta_revenue_mid ?? 0);
+        existing.revHigh += Number(r.delta_revenue_high ?? 0);
+        existing.leadsLow += Number(r.delta_leads_low ?? 0);
+        existing.leadsHigh += Number(r.delta_leads_high ?? 0);
+        existing.kwEligible++;
+        existing.volMax = Math.max(existing.volMax, vol);
+        existing.kwTotal++;
+      } else {
+        map.set(key, {
+          topic,
+          positions: [pos],
+          keywords: [r.keyword],
+          revLow: Number(r.delta_revenue_low ?? 0),
+          revMid: Number(r.delta_revenue_mid ?? 0),
+          revHigh: Number(r.delta_revenue_high ?? 0),
+          leadsLow: Number(r.delta_leads_low ?? 0),
+          leadsHigh: Number(r.delta_leads_high ?? 0),
+          volMax: vol,
+          kwTotal: 1,
+          kwEligible: 1,
+        });
+      }
     }
+    return map;
+  }
+
+  let clusterMap = buildClusterMap((kwRows ?? []) as any[]);
+
+  // Fallback: if near-miss clustering produces 0 non-brand commercial topics,
+  // build opportunity clusters from ALL non-brand keywords with volume >= min_volume.
+  // This covers domains with no near-miss rankings (e.g., all branded pos 11-30).
+  if (clusterMap.size === 0) {
+    console.log('  [jim] No near-miss opportunity clusters — falling back to full keyword opportunity');
+    // Fetch non-brand keywords with reasonable local volume.
+    // Cap at 2000/mo to exclude national-volume queries (e.g., "kitchen remodeling" at 110K/mo)
+    // that inflate opportunity estimates for local-market audits.
+    const FALLBACK_MAX_VOLUME = 2000;
+    const { data: allKwRows } = await sb
+      .from('audit_keywords')
+      .select('keyword, rank_pos, search_volume, cpc, canonical_key, canonical_topic, cluster, intent_type, intent, is_brand, is_near_me, topic')
+      .eq('audit_id', auditId)
+      .gte('search_volume', assumptions.min_volume)
+      .lte('search_volume', FALLBACK_MAX_VOLUME);
+
+    // Compute opportunity for each keyword based on reaching page 1.
+    // Use a conservative target: CTR for position 6-10 bucket (page 1 bottom)
+    // rather than the aggressive target_ctr (position 2-3). Keywords at pos 50+
+    // reaching page 1 is already ambitious — position 2-3 would overstate opportunity.
+    const conservativeTargetCtr = ctrBuckets['6-10'] ?? ctrBuckets['4-5'] ?? assumptions.target_ctr * 0.25;
+    console.log(`  [jim] Fallback target CTR: ${(conservativeTargetCtr * 100).toFixed(1)}% (page 1 bottom)`);
+    const fallbackRows = (allKwRows ?? []).map((r: any) => {
+      const vol = Number(r.search_volume ?? 0);
+      const pos = Number(r.rank_pos ?? 100); // unranked = 100
+      const currentCtr = getCtrForPosition(pos, ctrBuckets, assumptions.floor_ctr_over30);
+      const currentTraffic = vol * currentCtr;
+      const targetTraffic = vol * conservativeTargetCtr;
+      const deltaTraffic = Math.max(0, targetTraffic - currentTraffic);
+      const effectiveCrMid = assumptions.cr_used_mid ?? (assumptions.cr_used_min + assumptions.cr_used_max) / 2;
+      const effectiveAcvMid = assumptions.acv_used_mid ?? (assumptions.acv_used_min + assumptions.acv_used_max) / 2;
+      return {
+        ...r,
+        delta_revenue_low: deltaTraffic * assumptions.cr_used_min * assumptions.acv_used_min,
+        delta_revenue_mid: deltaTraffic * effectiveCrMid * effectiveAcvMid,
+        delta_revenue_high: deltaTraffic * assumptions.cr_used_max * assumptions.acv_used_max,
+        delta_leads_low: deltaTraffic * assumptions.cr_used_min,
+        delta_leads_high: deltaTraffic * assumptions.cr_used_max,
+        delta_traffic: deltaTraffic,
+      };
+    });
+
+    clusterMap = buildClusterMap(fallbackRows);
+    console.log(`  [jim] Fallback: ${fallbackRows.length} keywords evaluated, ${clusterMap.size} opportunity clusters`);
   }
 
   const clusterRecords = Array.from(clusterMap.entries())
