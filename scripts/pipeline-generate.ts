@@ -3,11 +3,13 @@
  * pipeline-generate.ts — Generate agent artifacts for the post-audit pipeline.
  *
  * Subcommands:
- *   jim      — Call DataForSEO (ranked-keywords + competitors) → disk artifacts → Anthropic API narrative → audit_snapshots
- *   michael  — Read disk artifacts (Jim + Dwight + Gap) → Anthropic API → architecture_blueprint.md
- *   competitors — Fetch SERP data via DataForSEO, populate audit_topic_competitors + audit_topic_dominance
- *   dwight   — Comprehensive Screaming Frog CLI crawl + Anthropic API → AUDIT_REPORT.md
- *   gap      — Synthesize competitive content gaps from Supabase data via Anthropic API
+ *   dwight           — Comprehensive Screaming Frog CLI crawl + Anthropic API → AUDIT_REPORT.md
+ *   keyword-research — Service × city × intent matrix from Dwight's crawl → DataForSEO validation → audit_keywords (seeded)
+ *   jim              — Call DataForSEO (ranked-keywords + competitors) → disk artifacts → Anthropic API narrative → audit_snapshots
+ *   competitors      — Fetch SERP data via DataForSEO, populate audit_topic_competitors + audit_topic_dominance
+ *   gap              — Synthesize competitive content gaps from Supabase data via Anthropic API
+ *   michael          — Read disk artifacts (Jim + Dwight + Gap) → Anthropic API → architecture_blueprint.md
+ *   validator        — Cross-check gap analysis vs architecture blueprint → coverage_validation.md
  *
  * Usage:
  *   npx tsx scripts/pipeline-generate.ts jim --domain <domain> --user-email <email>
@@ -51,7 +53,7 @@ function loadEnv(): Record<string, string> {
 // ============================================================
 
 interface CliArgs {
-  subcommand: 'jim' | 'competitors' | 'michael' | 'dwight' | 'gap' | 'canonicalize';
+  subcommand: 'jim' | 'competitors' | 'michael' | 'dwight' | 'gap' | 'canonicalize' | 'validator' | 'keyword-research';
   domain: string;
   userEmail?: string;
   date?: string;
@@ -63,8 +65,8 @@ interface CliArgs {
 function parseArgs(): CliArgs {
   const args = process.argv.slice(2);
   const subcommand = args[0] as CliArgs['subcommand'];
-  if (!['jim', 'competitors', 'michael', 'dwight', 'gap', 'canonicalize'].includes(subcommand)) {
-    console.error('Usage: npx tsx scripts/pipeline-generate.ts <jim|competitors|gap|michael|dwight|canonicalize> --domain <domain> --user-email <email> [--date YYYY-MM-DD] [--mode sales|full]');
+  if (!['jim', 'competitors', 'michael', 'dwight', 'gap', 'canonicalize', 'validator', 'keyword-research'].includes(subcommand)) {
+    console.error('Usage: npx tsx scripts/pipeline-generate.ts <jim|competitors|gap|michael|dwight|canonicalize|validator|keyword-research> --domain <domain> --user-email <email> [--date YYYY-MM-DD] [--mode sales|full]');
     process.exit(1);
   }
 
@@ -109,6 +111,19 @@ function todayStr(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+/**
+ * Strip Claude preamble/postamble from output. Claude sometimes prepends
+ * XML-like tool-call artifacts (from leaked conversation transcripts).
+ * Conservative: only strips obvious XML artifacts, not conversational text.
+ */
+function stripClaudePreamble(output: string): string {
+  // Strip leading XML artifacts (e.g., <function_calls>...) that occasionally leak through
+  let cleaned = output.replace(/^<function_calls>[\s\S]*?<\/function_calls>\s*/gm, '');
+  // Strip trailing XML artifacts
+  cleaned = cleaned.replace(/<function_calls>[\s\S]*?<\/function_calls>\s*$/gm, '');
+  return cleaned.trim();
+}
+
 function callClaude(prompt: string, model = 'sonnet', timeoutMs = 600_000): string {
   const claudeBin = process.env.CLAUDE_BIN || '/home/forgegrowth/.local/bin/claude';
   const childEnv = { ...process.env };
@@ -131,7 +146,7 @@ function callClaude(prompt: string, model = 'sonnet', timeoutMs = 600_000): stri
     const detail = stderr.slice(0, 300) || stdout.slice(0, 300) || '(no output)';
     throw new Error(`claude exited ${result.status}: ${detail}`);
   }
-  const output = (result.stdout ?? '').trim();
+  const output = stripClaudePreamble((result.stdout ?? '').trim());
   if (!output || output.startsWith('Error:')) {
     throw new Error(`claude returned error: ${output.slice(0, 200) || '(empty output)'}`);
   }
@@ -172,11 +187,12 @@ function callClaudeAsync(prompt: string, model = 'sonnet'): Promise<string> {
         reject(new Error(`claude exited ${code}: ${detail}`));
         return;
       }
-      if (!stdout || stdout.startsWith('Error:')) {
-        reject(new Error(`claude returned error: ${stdout.slice(0, 200) || '(empty output)'}`));
+      const cleaned = stripClaudePreamble(stdout);
+      if (!cleaned || cleaned.startsWith('Error:')) {
+        reject(new Error(`claude returned error: ${cleaned.slice(0, 200) || '(empty output)'}`));
         return;
       }
-      resolve(stdout);
+      resolve(cleaned);
     });
 
     proc.stdin!.write(prompt);
@@ -201,6 +217,24 @@ function validateArtifact(filePath: string, label: string, minBytes = 500): void
   if (content.length < minBytes) {
     throw new Error(`${label} is too small (${content.length} bytes, expected >=${minBytes}). Content: "${content.slice(0, 200)}"`);
   }
+  // Detect conversational/narration output instead of the requested format.
+  // Strip leading backticks/whitespace/code fences before testing.
+  const contentStart = content.replace(/^[`\s]+/, '').slice(0, 300);
+  const narrationPatterns = [
+    /^I'll /i,
+    /^Let me /i,
+    /^Looking at /i,
+    /^Here's (?:what|a|the)/i,
+    /^Now (?:let|I'll)/i,
+    /^The (?:report|file|analysis|output) (?:has been|is|was)/i,
+    /^Key findings/i,
+    /written to [`']/i,
+  ];
+  for (const pat of narrationPatterns) {
+    if (pat.test(contentStart)) {
+      throw new Error(`${label} contains narration instead of the requested format. First 200 chars: "${content.slice(0, 200)}"`);
+    }
+  }
 }
 
 async function resolveAudit(sb: SupabaseClient, domain: string, userEmail: string) {
@@ -220,6 +254,88 @@ async function resolveAudit(sb: SupabaseClient, domain: string, userEmail: strin
   if (!audit) throw new Error(`No audit found for ${domain} / ${userEmail}`);
   return { audit, userId: user.id };
 }
+
+// ============================================================
+// Service keyword seeds — used for auto-supplementing thin ranked-keywords results
+// ============================================================
+
+// Maps service_key → common sub-service search terms consumers actually type.
+// When a domain has few organic rankings, these are crossed with locales to
+// generate a synthetic keyword universe (same as seed-matrix mode but automatic).
+const SERVICE_KEYWORD_SEEDS: Record<string, string[]> = {
+  hvac: [
+    'hvac', 'ac repair', 'air conditioning repair', 'furnace repair', 'heating repair',
+    'hvac installation', 'ac installation', 'furnace installation', 'duct cleaning',
+    'hvac maintenance', 'air conditioning service', 'heating and cooling',
+    'ac replacement', 'furnace replacement', 'heat pump installation', 'mini split installation',
+  ],
+  plumbing: [
+    'plumber', 'plumbing', 'drain cleaning', 'water heater repair', 'water heater installation',
+    'sewer repair', 'leak repair', 'plumbing repair', 'emergency plumber',
+    'sewer line replacement', 'toilet repair', 'faucet repair', 'garbage disposal repair',
+    'tankless water heater', 'water line repair', 'sump pump installation',
+  ],
+  electrical: [
+    'electrician', 'electrical repair', 'electrical panel upgrade', 'wiring repair',
+    'outlet installation', 'ceiling fan installation', 'lighting installation',
+    'generator installation', 'ev charger installation', 'electrical inspection',
+    'circuit breaker repair', 'whole house rewiring', 'emergency electrician',
+  ],
+  roofing: [
+    'roofing', 'roof repair', 'roof replacement', 'roof installation', 'roof inspection',
+    'shingle repair', 'metal roofing', 'flat roof repair', 'roof leak repair',
+    'gutter installation', 'gutter repair', 'storm damage roof repair', 'roofing contractor',
+  ],
+  remodeling: [
+    'remodeling', 'kitchen remodeling', 'bathroom remodeling', 'home renovation',
+    'basement remodeling', 'basement finishing', 'room addition', 'home addition',
+    'whole house remodel', 'interior remodeling', 'general contractor',
+    'kitchen renovation', 'bathroom renovation', 'home remodeling contractor',
+  ],
+  restoration: [
+    'restoration', 'water damage restoration', 'fire damage restoration', 'mold remediation',
+    'flood cleanup', 'storm damage repair', 'smoke damage restoration',
+    'water damage repair', 'emergency restoration', 'disaster restoration',
+  ],
+  garage_doors: [
+    'garage door repair', 'garage door installation', 'garage door opener repair',
+    'garage door replacement', 'garage door spring repair', 'garage door opener installation',
+    'emergency garage door repair', 'commercial garage door repair',
+  ],
+  landscaping: [
+    'landscaping', 'landscape design', 'lawn care', 'lawn maintenance', 'tree trimming',
+    'hardscaping', 'patio installation', 'retaining wall', 'irrigation installation',
+    'sod installation', 'landscape lighting', 'yard cleanup', 'mulching service',
+  ],
+  pest_control: [
+    'pest control', 'exterminator', 'termite treatment', 'bed bug treatment',
+    'rodent control', 'ant control', 'mosquito control', 'wildlife removal',
+    'cockroach exterminator', 'pest inspection', 'commercial pest control',
+  ],
+  fencing: [
+    'fence installation', 'fence repair', 'wood fence', 'vinyl fence', 'chain link fence',
+    'privacy fence', 'fence company', 'commercial fencing', 'iron fence', 'fence contractor',
+  ],
+  tree_service: [
+    'tree service', 'tree removal', 'tree trimming', 'stump grinding', 'stump removal',
+    'tree pruning', 'emergency tree removal', 'tree cutting', 'arborist',
+    'land clearing', 'tree care',
+  ],
+  general_contractor: [
+    'general contractor', 'home renovation', 'home remodeling', 'construction company',
+    'home improvement', 'room addition', 'home addition', 'commercial construction',
+    'new construction', 'design build', 'custom home builder',
+  ],
+  cleaning: [
+    'cleaning service', 'house cleaning', 'maid service', 'deep cleaning',
+    'commercial cleaning', 'office cleaning', 'move out cleaning', 'carpet cleaning',
+    'window cleaning', 'janitorial service', 'post construction cleaning',
+  ],
+};
+
+// Minimum ranked keywords before auto-supplementing with seed candidates.
+// Below this threshold, DataForSEO returned too few organic results for a useful analysis.
+const MIN_RANKED_KEYWORDS_THRESHOLD = 50;
 
 // ============================================================
 // Seed Mode helpers — synthetic keyword universe for new/zero-visibility sites
@@ -336,14 +452,101 @@ function buildSyntheticRankedKeywords(volumeResults: BulkVolumeResult[]): any {
 }
 
 // ============================================================
-// Phase 1: Jim — DataForSEO calls → research artifacts → Claude narrative
+// Phase 3: Jim — DataForSEO calls → research artifacts → Claude narrative
 // ============================================================
 
-async function runJim(sb: SupabaseClient, auditId: string, domain: string, seedMatrixPath?: string, competitorUrls?: string, mode: CliArgs['mode'] = 'full') {
+async function runJim(sb: SupabaseClient, auditId: string, domain: string, audit: any, seedMatrixPath?: string, competitorUrls?: string, mode: CliArgs['mode'] = 'full') {
   const env = loadEnv();
   const date = todayStr();
   const researchDir = path.join(AUDITS_BASE, domain, 'research', date);
   fs.mkdirSync(researchDir, { recursive: true });
+
+  // --- Read Dwight's site inventory (if available) ---
+  let siteInventory = '';
+  const auditorDir = findLatestAuditorDir(domain);
+  if (auditorDir) {
+    const auditReportPath = path.join(auditorDir, 'AUDIT_REPORT.md');
+    if (fs.existsSync(auditReportPath)) {
+      const reportContent = fs.readFileSync(auditReportPath, 'utf-8');
+
+      // Extract service pages — URLs under residential/commercial paths with H1/title
+      const servicePageLines: string[] = [];
+      const csvPath = path.join(auditorDir, 'internal_all.csv');
+      if (fs.existsSync(csvPath)) {
+        const csvContent = readCsvSafe(csvPath, false);
+        const csvLines = csvContent.split('\n');
+        const header = csvLines[0] ?? '';
+        const cols = header.split(',').map((c) => c.replace(/"/g, '').trim().toLowerCase());
+        const addrIdx = cols.indexOf('address');
+        const h1Idx = cols.findIndex((c) => c === 'h1-1');
+        const titleIdx = cols.findIndex((c) => c === 'title 1');
+
+        for (const line of csvLines.slice(1)) {
+          if (!line.trim()) continue;
+          // Simple CSV parse for the columns we need
+          const parts: string[] = [];
+          let cur = '';
+          let inQuote = false;
+          for (let i = 0; i < line.length; i++) {
+            const ch = line[i];
+            if (ch === '"') { inQuote = !inQuote; cur += ch; }
+            else if (ch === ',' && !inQuote) { parts.push(cur); cur = ''; }
+            else { cur += ch; }
+          }
+          parts.push(cur);
+
+          const addr = (parts[addrIdx] ?? '').replace(/"/g, '').trim();
+          if (addr && /\/(service|residential|commercial|what-we-do)/i.test(addr)) {
+            const h1 = (parts[h1Idx] ?? '').replace(/"/g, '').trim();
+            const title = (parts[titleIdx] ?? '').replace(/"/g, '').trim();
+            servicePageLines.push(`${addr} | H1: ${h1 || 'N/A'} | Title: ${title || 'N/A'}`);
+          }
+        }
+      }
+
+      // Extract location signals from the report
+      const locationMatch = reportContent.match(/areaServed[^\n]*\n([\s\S]*?)(?=\n##|\n#|$)/i);
+      const locationSignals = locationMatch ? locationMatch[1].trim().slice(0, 500) : '';
+
+      // Extract platform
+      const platformMatch = reportContent.match(/##[^#\n]*Platform\s+Observations[^\n]*\n([\s\S]*?)(?=\n##\s|\n#\s|$)/i);
+      const platformInfo = platformMatch ? platformMatch[1].trim().slice(0, 300) : '';
+
+      if (servicePageLines.length > 0 || locationSignals || platformInfo) {
+        siteInventory = `## Site Inventory (from Dwight's Crawl)\n`;
+        if (servicePageLines.length > 0) {
+          siteInventory += `### Service Pages (${servicePageLines.length} found)\nURL | H1 | Title\n${servicePageLines.join('\n')}\n\n`;
+        } else {
+          console.log('  Warning: No service pages found in Dwight\'s crawl data');
+        }
+        if (locationSignals) {
+          siteInventory += `### Location Signals\n${locationSignals}\n\n`;
+        } else {
+          console.log('  Warning: No location signals found in Dwight\'s audit report');
+        }
+        if (platformInfo) {
+          siteInventory += `### Platform\n${platformInfo}\n\n`;
+        }
+        console.log(`  Site inventory from Dwight: ${servicePageLines.length} service pages, location signals: ${locationSignals ? 'yes' : 'no'}, platform: ${platformInfo ? 'yes' : 'no'}`);
+      } else {
+        console.log('  Warning: Dwight\'s report produced no usable service pages, location signals, or platform info');
+      }
+    } else {
+      console.log('  Warning: AUDIT_REPORT.md not found — Dwight may not have run');
+    }
+  } else {
+    console.log('  Warning: No auditor directory found — Dwight has not run');
+  }
+
+  // --- Read KeywordResearch opportunities (if available) ---
+  let kwResearchSection = '';
+  const kwResearchResolved = resolveArtifactPath(domain, 'research', 'keyword_research_summary.md');
+  if (kwResearchResolved) {
+    kwResearchSection = fs.readFileSync(kwResearchResolved, 'utf-8');
+    console.log(`  keyword_research_summary.md: ${kwResearchSection.length} chars`);
+  } else {
+    console.log('  Warning: keyword_research_summary.md not found — KeywordResearch may not have run');
+  }
 
   const rankedFile = path.join(researchDir, 'ranked_keywords.json');
   const competitorsFile = path.join(researchDir, 'competitors.json');
@@ -487,6 +690,89 @@ async function runJim(sb: SupabaseClient, auditId: string, domain: string, seedM
     }
     if (!fs.existsSync(competitorsFile)) throw new Error('competitors.json not produced');
     console.log(`  competitors.json: ${(fs.statSync(competitorsFile).size / 1024).toFixed(0)}KB`);
+
+    // ── Auto-supplement: if ranked-keywords returned too few results, generate
+    //    synthetic keyword candidates from audit metadata (service_key × locales) ──
+    const existingData = JSON.parse(fs.readFileSync(rankedFile, 'utf-8'));
+    let existingCount = 0;
+    for (const task of existingData?.tasks ?? []) {
+      for (const result of task?.result ?? []) {
+        existingCount += (result?.items?.length ?? 0);
+      }
+    }
+
+    if (existingCount < MIN_RANKED_KEYWORDS_THRESHOLD) {
+      const serviceKey = audit.service_key ?? '';
+      const customLabel = audit.custom_service_label ?? '';
+      const marketCity = audit.market_city ?? '';
+      const marketState = audit.market_state ?? '';
+
+      // Get service seed terms — try exact key, then custom label as fallback
+      let serviceTerms = SERVICE_KEYWORD_SEEDS[serviceKey];
+      if (!serviceTerms && customLabel) {
+        // For custom categories, use the label itself as the base term
+        serviceTerms = [customLabel.toLowerCase()];
+      }
+
+      if (serviceTerms && marketCity && marketState) {
+        // Parse comma-separated locales from market_city
+        const locales = marketCity.split(',').map((l: string) => l.trim()).filter(Boolean);
+        console.log(`  Low keyword count (${existingCount} < ${MIN_RANKED_KEYWORDS_THRESHOLD}) — auto-supplementing from ${serviceTerms.length} service terms × ${locales.length} locale(s)`);
+
+        // Build mini seed matrix and generate candidates
+        const miniMatrix: SeedMatrix = {
+          business_type: customLabel || serviceKey.replace(/_/g, ' '),
+          services: serviceTerms,
+          locales,
+          state: marketState,
+        };
+        const candidates = generateKeywordCandidates(miniMatrix);
+
+        // Remove keywords the domain already ranks for
+        const existingKeywords = new Set<string>();
+        for (const task of existingData?.tasks ?? []) {
+          for (const result of task?.result ?? []) {
+            for (const item of result?.items ?? []) {
+              const kw = item?.keyword_data?.keyword?.toLowerCase();
+              if (kw) existingKeywords.add(kw);
+            }
+          }
+        }
+        const newCandidates = candidates.filter((k) => !existingKeywords.has(k));
+        console.log(`  ${newCandidates.length} new keyword candidates (${candidates.length} total, ${existingKeywords.size} already ranked)`);
+
+        if (newCandidates.length > 0) {
+          const volumeResults = await bulkKeywordVolume(env, newCandidates);
+          console.log(`  ${volumeResults.length} supplementary keywords with volume > 0`);
+
+          if (volumeResults.length > 0) {
+            // Merge synthetic items into the existing ranked_keywords.json
+            const syntheticItems = volumeResults.map((vr) => ({
+              ranked_serp_element: { serp_item: { rank_group: 100, url: '' } },
+              keyword_data: {
+                keyword: vr.keyword,
+                keyword_info: {
+                  search_volume: vr.volume,
+                  cpc: vr.cpc,
+                  competition: vr.competition,
+                  competition_level: vr.competition_level,
+                },
+                keyword_properties: { keyword_difficulty: null },
+              },
+            }));
+
+            // Append to first task/result
+            if (existingData.tasks?.[0]?.result?.[0]?.items) {
+              existingData.tasks[0].result[0].items.push(...syntheticItems);
+            }
+            fs.writeFileSync(rankedFile, JSON.stringify(existingData, null, 2), 'utf-8');
+            console.log(`  Merged: ${existingCount} ranked + ${syntheticItems.length} supplementary = ${existingCount + syntheticItems.length} total keywords`);
+          }
+        }
+      } else {
+        console.log(`  Low keyword count (${existingCount}) but no service_key/market_city metadata to supplement`);
+      }
+    }
   }
 
   // ── Common path: Parse JSON files and build rich prompt for Claude ──
@@ -544,10 +830,18 @@ async function runJim(sb: SupabaseClient, auditId: string, domain: string, seedM
       .filter(Boolean),
   )];
 
+  // Count organic vs supplemented keywords for prompt context
+  const organicKeywords = rawKeywords.filter((item) => (item.ranked_serp_element?.serp_item?.rank_group ?? 100) < 100);
+  const supplementedKeywords = rawKeywords.filter((item) => (item.ranked_serp_element?.serp_item?.rank_group ?? 100) >= 100);
+  const wasAutoSupplemented = !isSeedMode && supplementedKeywords.length > 0 && organicKeywords.length < MIN_RANKED_KEYWORDS_THRESHOLD;
+
   // Step 4: Call Anthropic API (sonnet) for comprehensive research_summary.md
   console.log('  Generating research_summary.md via Anthropic API (sonnet)...');
   const seedModeNote = isSeedMode
     ? `\nNOTE: This is a NEW SITE with no existing organic rankings. All keyword data represents the target keyword universe derived from a service-locale matrix, not current ranking performance. Position data shows synthetic rank 100 (unranked). Focus analysis on: keyword universe quality, volume distribution, competitive landscape from competitors data, and prioritized content opportunities.\n`
+    : '';
+  const autoSupplementNote = wasAutoSupplemented
+    ? `\nIMPORTANT: This domain has very low organic visibility (only ${organicKeywords.length} ranked keywords). The dataset has been supplemented with ${supplementedKeywords.length} high-opportunity target keywords for the ${audit.service_key?.replace(/_/g, ' ') ?? 'unknown'} industry in ${audit.market_city ?? 'unknown'}, ${audit.market_state ?? ''}. Keywords with Position = 100 are UNRANKED opportunity targets, not current rankings. Your analysis MUST focus on these opportunity keywords — evaluate their volume, CPC, competitive difficulty, and prioritize content recommendations around the highest-value targets. Do NOT focus primarily on the few branded/navigational terms the site currently ranks for.\n`
     : '';
   const salesModeNote = mode === 'sales'
     ? `\nSALES MODE — Produce a condensed report for a sales prospect. Follow these overrides:
@@ -559,10 +853,18 @@ async function runJim(sb: SupabaseClient, auditId: string, domain: string, seedM
 - Sections 9-10: 3 items max each
 All other formatting rules still apply.\n`
     : '';
-  const narrativePrompt = `You are Jim, The Scout — a foundational search intelligence analyst. You have full DataForSEO data for ${domain}. Write a comprehensive research_summary.md that another agent (Michael, The Architect) will use to plan the site's information architecture.
-${seedModeNote}${salesModeNote}
+  const hasUpstreamData = !!(siteInventory || kwResearchSection);
+  const upstreamNote = hasUpstreamData
+    ? `\nYou have upstream data from Dwight (technical crawl) and KeywordResearch (validated opportunity matrix). Use these as your PRIMARY research foundation. The DataForSEO ranked-keywords data below supplements this with actual ranking positions.\n`
+    : '';
+  const fallbackNote = !hasUpstreamData && !isSeedMode
+    ? `\nNOTE: No upstream data from Dwight or KeywordResearch is available. Using seed keyword fallback for supplementation.\n`
+    : '';
+  const narrativePrompt = `You are Jim, The Scout — a foundational search intelligence analyst. You have full DataForSEO data for ${domain}.
 
-## Raw Keyword Data (top 200 of ${totalKeywords} by volume)
+YOUR ENTIRE RESPONSE IS THE REPORT. Output ONLY the markdown content of research_summary.md — start with "# Research Summary" heading. Do NOT narrate, summarize what you did, or describe the file. Do NOT say "I'll write" or "Here's the report" or use backtick file paths. Just output the formatted report that Michael (The Architect) will use to plan the site's information architecture.
+${seedModeNote}${autoSupplementNote}${salesModeNote}${upstreamNote}${fallbackNote}
+${siteInventory ? `${siteInventory}\n` : ''}${kwResearchSection ? `## Keyword Opportunities (from KeywordResearch)\n${kwResearchSection}\n\n` : ''}## Raw Keyword Data (top 200 of ${totalKeywords} by volume)
 Keyword | Position | Volume | CPC | Difficulty | Competition | Ranking URL
 ${keywordTable}
 
@@ -686,10 +988,10 @@ You MUST use these exact section headings and table column orders. The downstrea
 - Add analysis commentary BELOW tables, not inside them.
 - This is a professional deliverable, not a summary of summaries.`;
 
-  const summaryMd = callClaude(narrativePrompt, 'sonnet');
+  const summaryMd = await callClaudeAsync(narrativePrompt, 'sonnet');
   const summaryPath = path.join(researchDir, 'research_summary.md');
   fs.writeFileSync(summaryPath, summaryMd, 'utf-8');
-  validateArtifact(summaryPath, 'research_summary.md');
+  validateArtifact(summaryPath, 'research_summary.md', 3000);
   console.log(`  Written research_summary.md (${summaryMd.length} chars) to ${path.relative(process.cwd(), researchDir)}/`);
 
   // Step 5: Insert audit_snapshots + agent_runs
@@ -729,8 +1031,52 @@ You MUST use these exact section headings and table column orders. The downstrea
 }
 
 // ============================================================
-// Phase 5: Michael — Read disk artifacts + Supabase clusters → architecture blueprint
+// Phase 6: Michael — Read disk artifacts + Supabase clusters → architecture blueprint
 // ============================================================
+
+/** Scan audits/{domain}/auditor/ for the latest date-named directory. */
+function findLatestAuditorDir(domain: string): string | null {
+  return findLatestDatedDir(path.join(AUDITS_BASE, domain, 'auditor'));
+}
+
+/**
+ * Find the latest date-named subdirectory (YYYY-MM-DD) under basePath.
+ * Returns the full path or null if none exist.
+ */
+function findLatestDatedDir(basePath: string): string | null {
+  if (!fs.existsSync(basePath)) return null;
+  const entries = fs.readdirSync(basePath).filter((e) => /^\d{4}-\d{2}-\d{2}$/.test(e)).sort();
+  if (entries.length === 0) return null;
+  return path.join(basePath, entries[entries.length - 1]);
+}
+
+/**
+ * Resolve a file from a dated directory, trying today first then falling back
+ * to the most recent date dir that contains the file. Handles date rollover
+ * between pipeline phases (e.g., Dwight ran yesterday, Jim runs today).
+ */
+function resolveArtifactPath(domain: string, subdir: 'research' | 'architecture', filename: string, preferredDate?: string): string | null {
+  const basePath = path.join(AUDITS_BASE, domain, subdir);
+
+  // Try preferred date first (today or explicit --date)
+  const preferred = preferredDate ?? todayStr();
+  const preferredPath = path.join(basePath, preferred, filename);
+  if (fs.existsSync(preferredPath)) return preferredPath;
+
+  // Fall back to most recent date dir containing the file
+  if (!fs.existsSync(basePath)) return null;
+  const dateDirs = fs.readdirSync(basePath).filter((e) => /^\d{4}-\d{2}-\d{2}$/.test(e)).sort();
+  for (let i = dateDirs.length - 1; i >= 0; i--) {
+    const candidate = path.join(basePath, dateDirs[i], filename);
+    if (fs.existsSync(candidate)) {
+      if (dateDirs[i] !== preferred) {
+        console.log(`  ${filename}: using ${dateDirs[i]}/ (date fallback from ${preferred})`);
+      }
+      return candidate;
+    }
+  }
+  return null;
+}
 
 async function runMichael(sb: SupabaseClient, auditId: string, domain: string, researchDate?: string, mode: CliArgs['mode'] = 'full') {
   const today = todayStr();
@@ -760,14 +1106,16 @@ async function runMichael(sb: SupabaseClient, auditId: string, domain: string, r
     .join('\n');
 
   // --- Disk: Jim's research_summary.md (REQUIRED) ---
-  const researchSummaryPath = path.join(researchDir, 'research_summary.md');
+  const researchSummaryPath = resolveArtifactPath(domain, 'research', 'research_summary.md', researchDate);
+  if (!researchSummaryPath) throw new Error('research_summary.md not found — Jim must run successfully first');
   validateArtifact(researchSummaryPath, 'research_summary.md (Jim must run successfully first)');
   const researchSummary = fs.readFileSync(researchSummaryPath, 'utf-8');
   console.log(`  research_summary.md: ${researchSummary.length} chars`);
 
   // --- Disk: Jim's ranked_keywords.json (REQUIRED — top 200 for keyword table) ---
   let keywordSection = '';
-  const rankedPath = path.join(researchDir, 'ranked_keywords.json');
+  const rankedPath = resolveArtifactPath(domain, 'research', 'ranked_keywords.json', researchDate);
+  if (!rankedPath) throw new Error('ranked_keywords.json not found — Jim must run successfully first');
   validateArtifact(rankedPath, 'ranked_keywords.json (Jim must run successfully first)', 1000);
   {
     const rankedData = JSON.parse(fs.readFileSync(rankedPath, 'utf-8'));
@@ -814,9 +1162,9 @@ ${allUrls.join('\n')}`;
 
   // --- Disk: Gap agent's content_gap_analysis.md ---
   let gapSection = '';
-  const gapPath = path.join(researchDir, 'content_gap_analysis.md');
-  if (fs.existsSync(gapPath)) {
-    gapSection = fs.readFileSync(gapPath, 'utf-8');
+  const gapResolvedPath = resolveArtifactPath(domain, 'research', 'content_gap_analysis.md', researchDate);
+  if (gapResolvedPath) {
+    gapSection = fs.readFileSync(gapResolvedPath, 'utf-8');
     console.log(`  content_gap_analysis.md: ${gapSection.length} chars`);
   } else {
     console.log('  Warning: content_gap_analysis.md not found — Gap agent may not have run');
@@ -824,9 +1172,10 @@ ${allUrls.join('\n')}`;
 
   // --- Disk: Dwight's internal_all.csv (copied by Dwight step) ---
   let crawlSection = '';
-  const internalAllPath = path.join(archDir, 'internal_all.csv');
-  if (fs.existsSync(internalAllPath)) {
-    const crawlContent = readCsvSafe(internalAllPath);
+  const internalAllResolved = resolveArtifactPath(domain, 'architecture', 'internal_all.csv');
+  if (internalAllResolved) {
+    const crawlContentRaw = readCsvSafe(internalAllResolved);
+    const crawlContent = filterCsvColumns(crawlContentRaw, INTERNAL_ALL_KEEP_COLUMNS);
     const crawlSummary = summarizeCsv(crawlContent, 100);
     crawlSection = `## Crawl Data Summary (${crawlSummary.rowCount} pages from Screaming Frog)
 ${crawlSummary.header}
@@ -838,9 +1187,9 @@ ${crawlSummary.rows}`;
 
   // --- Disk: Semantic similarity data (cannibalization signals) ---
   let semanticSection = '';
-  const semanticPath = path.join(archDir, 'semantically_similar_report.csv');
-  if (fs.existsSync(semanticPath)) {
-    const semanticContent = readCsvSafe(semanticPath);
+  const semanticResolved = resolveArtifactPath(domain, 'architecture', 'semantically_similar_report.csv');
+  if (semanticResolved) {
+    const semanticContent = readCsvSafe(semanticResolved);
     const semanticSummary = summarizeCsv(semanticContent, 50);
     if (semanticSummary.rowCount > 0) {
       semanticSection = `## Semantic Similarity Data (${semanticSummary.rowCount} page pairs — cannibalization signals)
@@ -850,10 +1199,33 @@ ${semanticSummary.rows}`;
     }
   }
 
-  console.log(`  Context loaded: ${clusters.length} clusters, research=${!!researchSummary}, keywords=${!!keywordSection}, gap=${!!gapSection}, crawl=${!!crawlSection}`);
+  // --- Disk: Dwight's AUDIT_REPORT.md — extract Platform Observations section ---
+  let platformSection = '';
+  const auditorDir = findLatestAuditorDir(domain);
+  if (auditorDir) {
+    const auditReportPath = path.join(auditorDir, 'AUDIT_REPORT.md');
+    if (fs.existsSync(auditReportPath)) {
+      const reportContent = fs.readFileSync(auditReportPath, 'utf-8');
+      const platformMatch = reportContent.match(/##[^#\n]*Platform\s+Observations[^\n]*\n([\s\S]*?)(?=\n##\s|\n#\s|$)/i);
+      if (platformMatch) {
+        platformSection = platformMatch[1].trim();
+        console.log(`  Platform Observations from AUDIT_REPORT.md: ${platformSection.length} chars`);
+      } else {
+        console.log('  Warning: No Platform Observations section found in AUDIT_REPORT.md');
+      }
+    } else {
+      console.log('  Warning: AUDIT_REPORT.md not found in auditor dir');
+    }
+  } else {
+    console.log('  Warning: No auditor directory found — Dwight may not have run');
+  }
+
+  console.log(`  Context loaded: ${clusters.length} clusters, research=${!!researchSummary}, keywords=${!!keywordSection}, gap=${!!gapSection}, crawl=${!!crawlSection}, platform=${!!platformSection}`);
 
   // --- Build comprehensive prompt ---
   const prompt = `You are Michael, The Architect — an information architecture and semantic content strategist.
+
+YOUR ENTIRE RESPONSE IS THE BLUEPRINT. Output ONLY the markdown content of architecture_blueprint.md — start with the "## Executive Summary" heading. Do NOT narrate, summarize what you did, or describe the file. Do NOT wrap in code fences. Just output the blueprint content directly.
 
 ## Task
 Generate a complete site architecture blueprint for ${audit.domain} (${audit.service_key} in ${audit.market_city}, ${audit.market_state}).
@@ -867,6 +1239,7 @@ ${clusterTable || 'No cluster data available yet.'}
 ${crawlSection ? `${crawlSection}\n` : ''}
 ${semanticSection ? `${semanticSection}\n` : ''}
 ${gapSection ? `## Content Gap Intelligence\nThe following analysis was produced by the Gap agent. Your architecture MUST address every identified gap.\n\n${gapSection}\n` : ''}
+${platformSection ? `## Platform Constraints (from Dwight's Technical Audit)\nThe following platform/CMS observations were identified by the technical auditor. Your architecture MUST account for these constraints.\n\n${platformSection}\n` : ''}
 ${mode === 'sales' ? `## SALES MODE OVERRIDE
 This is a condensed sales prospect report. Follow these overrides:
 - Executive Summary: 3-5 paragraphs strategic pitch focused on revenue opportunity
@@ -880,6 +1253,12 @@ You MUST produce output in this EXACT format. The parser depends on these headin
 \`\`\`
 ## Executive Summary
 [2-3 paragraphs analyzing current state and recommended architecture. Reference Jim's findings, crawl issues from Dwight, and gaps identified by the Gap agent.]
+\`\`\`
+
+### Then (only if Platform Constraints were provided above):
+\`\`\`
+## Platform Constraints
+[CMS type, URL slug limitations, any required workarounds for the recommended architecture.]
 \`\`\`
 
 ### Then for each silo (3-7 silos):
@@ -913,11 +1292,29 @@ You MUST produce output in this EXACT format. The parser depends on these headin
 9. Group related keywords into silos by semantic similarity and service category
 10. Prioritize near-miss keywords (positions 11-20) — these have the fastest ROI
 11. If Content Gap Intelligence is provided above, ensure every authority gap and unaddressed gap maps to at least one page in your architecture
-12. If crawl data shows technical issues (broken pages, redirects), note them alongside affected URL slugs`;
+12. If crawl data shows technical issues (broken pages, redirects), note them alongside affected URL slugs
+13. If Platform Constraints are provided, validate all URL slugs against CMS limitations. Flag any pattern not natively achievable with the workaround required.
+14. Do NOT use near-me keyword variants as primary_keyword for any page. Use the geographic variant instead (e.g. "plumber boise" not "plumber near me").
+
+REMINDER: Your response IS the blueprint content — start with "## Executive Summary" and output the full architecture. No preamble, no narration, no summary of what you did.`;
 
   console.log('  Generating architecture blueprint via Anthropic API (sonnet)...');
-  const result = await callClaudeAsync(prompt, 'sonnet');
+  let result = await callClaudeAsync(prompt, 'sonnet');
   console.log(`  Blueprint: ${result.length} chars`);
+
+  // Structural validation — blueprint must have Executive Summary + at least one Silo table
+  const hasExecSummary = /##\s*Executive Summary/i.test(result);
+  const hasSiloTable = /###\s*Silo\s+\d+/i.test(result);
+  if (!hasExecSummary || !hasSiloTable) {
+    console.log(`  WARNING: Blueprint incomplete (Executive Summary: ${hasExecSummary}, Silo tables: ${hasSiloTable}) — retrying...`);
+    result = await callClaudeAsync(prompt, 'sonnet');
+    console.log(`  Retry blueprint: ${result.length} chars`);
+    const retryHasExec = /##\s*Executive Summary/i.test(result);
+    const retryHasSilo = /###\s*Silo\s+\d+/i.test(result);
+    if (!retryHasExec || !retryHasSilo) {
+      console.error(`  ERROR: Blueprint still incomplete after retry (Executive Summary: ${retryHasExec}, Silo tables: ${retryHasSilo})`);
+    }
+  }
 
   // Write to disk
   const blueprintPath = path.join(archDir, 'architecture_blueprint.md');
@@ -927,7 +1324,7 @@ You MUST produce output in this EXACT format. The parser depends on these headin
 }
 
 // ============================================================
-// Phase 1b: Competitor SERP Analysis (DataForSEO)
+// Phase 4: Competitor SERP Analysis (DataForSEO)
 // ============================================================
 
 function normalizeDomain(raw: string): string {
@@ -1118,6 +1515,18 @@ JSON schema:
   // Deduplicate: if same canonical_key from multiple batches, keep the one with more keywords
   // (already handled — each keyword maps to exactly one group)
 
+  // Detect near-me keywords deterministically (national volume, not locally actionable)
+  const nearMeIds = new Set<string>();
+  for (const { kwId } of allGroups) {
+    const kw = keywords.find((k) => k.id === kwId);
+    if (kw && kw.keyword.toLowerCase().includes(' near me')) {
+      nearMeIds.add(kwId);
+    }
+  }
+  if (nearMeIds.size > 0) {
+    console.log(`  [canonicalize] Flagging ${nearMeIds.size} near-me keywords`);
+  }
+
   // Batch update audit_keywords
   let updated = 0;
   const BATCH_SIZE = 50;
@@ -1130,6 +1539,7 @@ JSON schema:
         cluster: group.canonical_topic,
         is_brand: group.keywords[0].is_brand,
         intent_type: group.keywords[0].intent_type,
+        is_near_me: nearMeIds.has(kwId),
       }).eq('id', kwId),
     );
     const results = await Promise.all(promises);
@@ -1356,7 +1766,7 @@ Respond with ONLY a JSON object mapping each domain to its category. Example:
 }
 
 // ============================================================
-// Phase 3: Content Gap Analysis
+// Phase 5: Content Gap Analysis
 // ============================================================
 
 async function runGap(sb: SupabaseClient, auditId: string, domain: string) {
@@ -1390,7 +1800,7 @@ async function runGap(sb: SupabaseClient, auditId: string, domain: string) {
   // 3. Client keywords
   const { data: kwData } = await sb
     .from('audit_keywords')
-    .select('keyword, rank_pos, search_volume, intent, intent_type, ranking_url, cluster, is_near_miss, cpc')
+    .select('keyword, rank_pos, search_volume, intent, intent_type, ranking_url, cluster, is_near_miss, is_near_me, cpc')
     .eq('audit_id', auditId);
   const keywords = (kwData ?? []) as any[];
 
@@ -1454,6 +1864,8 @@ async function runGap(sb: SupabaseClient, auditId: string, domain: string) {
 
   const prompt = `You are a Content Gap Analyst. Given the competitive landscape data for ${domain}, produce a JSON analysis identifying where competitors rank but the client is absent or weak.
 
+YOUR ENTIRE RESPONSE IS RAW JSON. Output ONLY the JSON object starting with {. No markdown, no code fences, no narration, no explanation before or after.
+
 ## Dominance Scores (worst first — low score = competitor dominates)
 ${topDominance || 'No dominance data available.'}
 
@@ -1471,7 +1883,7 @@ ${plannedSummary}
 
 ## Output — JSON with these keys:
 
-1. "authority_gaps": Array of objects with { topic, client_status ("absent"|"weak"|"behind"), client_position (null if absent), top_competitor, competitor_position, estimated_volume, revenue_opportunity }. Topics where competitors dominate and client is absent or ranking 50+. Max 15.
+1. "authority_gaps": Array of objects with { topic, client_status ("absent"|"weak"|"behind"), client_position (null if absent), top_competitor, competitor_position, estimated_volume, revenue_opportunity, data_source ("SERP dominance"|"keyword overlap") }. Use "SERP dominance" for gaps identified from the Dominance Scores or Absent/Weak Topics sections; use "keyword overlap" for gaps from Client Clusters by Revenue Opportunity. Topics where competitors dominate and client is absent or ranking 50+. Max 15.
 
 2. "format_gaps": Array of objects with { format, description, examples, competitor_using }. Content types competitors have that client lacks (e.g., FAQs, comparison pages, location pages, service+city pages, guides, cost calculators). Max 8.
 
@@ -1479,7 +1891,7 @@ ${plannedSummary}
 
 4. "priority_recommendations": Array of objects with { rank, action, target_keyword, estimated_volume, rationale }. Top 8 actionable items sorted by revenue opportunity.
 
-5. "summary": 2-3 sentence executive summary of the competitive gap landscape.
+5. "summary": 2-3 sentence executive summary of the competitive gap landscape. Note which data source (SERP dominance vs keyword overlap) drove the majority of identified gaps.
 
 ## QUALITY RULES for authority_gaps topics:
 - Each topic must be a COMPLETE, meaningful service phrase (e.g., "AC repair", "furnace installation"). Never use truncated fragments like "boise heating and" or "repair boise".
@@ -1488,8 +1900,11 @@ ${plannedSummary}
 - Exclude non-customer intent (job postings, supplier queries, industry news).
 - Topics should be service-category level ("AC repair", "furnace installation"), not raw keyword strings.
 - If two topics differ only by city name, merge into the service topic and note the city in revenue_opportunity.
+- Do NOT use near-me keywords for revenue_opportunity estimates — near-me volume is national, not locally actionable.
 
-CRITICAL: Respond with raw JSON only. No markdown code fences. Just the bare JSON object starting with {.`;
+CRITICAL: Respond with raw JSON only. No markdown code fences. Just the bare JSON object starting with {.
+
+REMINDER: Your response IS the JSON object — start with { and end with }. No preamble, no narration.`;
 
   console.log('  Generating content gap analysis via Anthropic API...');
   let gapAnalysis: any;
@@ -1571,10 +1986,10 @@ function buildGapAnalysisMd(domain: string, analysis: any): string {
   if (analysis.authority_gaps?.length > 0) {
     lines.push('## Authority Gaps\n');
     lines.push('Topics where competitors dominate and client is absent or weak.\n');
-    lines.push('| Topic | Client Status | Client Pos | Top Competitor | Comp Pos | Est. Volume | Revenue |');
-    lines.push('|-------|--------------|------------|----------------|----------|-------------|---------|');
+    lines.push('| Topic | Client Status | Client Pos | Top Competitor | Comp Pos | Est. Volume | Revenue | Data Source |');
+    lines.push('|-------|--------------|------------|----------------|----------|-------------|---------|-------------|');
     for (const g of analysis.authority_gaps) {
-      lines.push(`| ${g.topic} | ${g.client_status} | ${g.client_position ?? 'N/A'} | ${g.top_competitor} | ${g.competitor_position} | ${g.estimated_volume ?? 'N/A'} | ${g.revenue_opportunity ?? 'N/A'} |`);
+      lines.push(`| ${g.topic} | ${g.client_status} | ${g.client_position ?? 'N/A'} | ${g.top_competitor} | ${g.competitor_position} | ${g.estimated_volume ?? 'N/A'} | ${g.revenue_opportunity ?? 'N/A'} | ${g.data_source ?? 'N/A'} |`);
     }
   }
 
@@ -1611,7 +2026,7 @@ function buildGapAnalysisMd(domain: string, analysis: any): string {
 }
 
 // ============================================================
-// Phase 2: Dwight — Comprehensive SF Crawl + Claude analysis
+// Phase 1: Dwight — Comprehensive SF Crawl + Claude analysis
 // ============================================================
 
 function readCsvSafe(filePath: string, dropWideCols = true): string {
@@ -1663,6 +2078,65 @@ function readCsvSafe(filePath: string, dropWideCols = true): string {
     .join('\n');
 }
 
+/**
+ * Filter CSV to only include specified columns (by header name).
+ * Uses the same parseLine logic as readCsvSafe. Case-insensitive match.
+ */
+function filterCsvColumns(content: string, keepColumns: string[]): string {
+  const lines = content.split('\n').filter((l) => l.trim());
+  if (lines.length < 2) return content;
+
+  const parseLine = (line: string): string[] => {
+    const cols: string[] = [];
+    let cur = '';
+    let inQuote = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') { inQuote = !inQuote; cur += ch; }
+      else if (ch === ',' && !inQuote) { cols.push(cur); cur = ''; }
+      else { cur += ch; }
+    }
+    cols.push(cur);
+    return cols;
+  };
+
+  const headerCols = parseLine(lines[0]);
+  const keepLower = new Set(keepColumns.map((c) => c.toLowerCase()));
+  const keepIdx: number[] = [];
+  for (let i = 0; i < headerCols.length; i++) {
+    const name = headerCols[i].replace(/"/g, '').trim().toLowerCase();
+    if (keepLower.has(name)) keepIdx.push(i);
+  }
+
+  if (keepIdx.length === 0) return content; // no matches, return as-is
+
+  return lines
+    .map((line) => {
+      const cols = parseLine(line);
+      return keepIdx.map((i) => cols[i] ?? '').join(',');
+    })
+    .join('\n');
+}
+
+// Columns from internal_all.csv that matter for a technical SEO audit.
+// Dropping noise (pixel widths, CO2, hash, JS-specific links, semantic embeddings,
+// secondary headings, etc.) cuts the prompt from ~1.3MB to ~300KB for a typical site.
+const INTERNAL_ALL_KEEP_COLUMNS = [
+  'Address', 'Content Type', 'Status Code', 'Status',
+  'Indexability', 'Indexability Status',
+  'Title 1', 'Title 1 Length',
+  'Meta Description 1', 'Meta Description 1 Length',
+  'H1-1', 'H1-1 Length',
+  'H2-1', 'H2-1 Length',
+  'Meta Robots 1', 'Canonical Link Element 1',
+  'Word Count', 'Text Ratio', 'Readability',
+  'Crawl Depth', 'Link Score',
+  'Inlinks', 'Unique Inlinks', 'Outlinks', 'External Outlinks', 'Unique External Outlinks',
+  'Response Time', 'Redirect URL', 'Redirect Type',
+  'Spelling Errors', 'Grammar Errors',
+  'Size (bytes)',
+];
+
 function summarizeCsv(content: string, maxRows = 200): { header: string; rows: string; rowCount: number; full: boolean } {
   const lines = content.split('\n').filter((l) => l.trim());
   const header = lines[0] ?? '';
@@ -1673,7 +2147,7 @@ function summarizeCsv(content: string, maxRows = 200): { header: string; rows: s
   return { header, rows, rowCount, full };
 }
 
-function runDwight(domain: string) {
+async function runDwight(domain: string) {
   const date = todayStr();
   const outDir = path.join(AUDITS_BASE, domain, 'auditor', date);
   fs.mkdirSync(outDir, { recursive: true });
@@ -1774,9 +2248,10 @@ function runDwight(domain: string) {
     throw new Error(`Crawl completed but internal_all.csv not found at ${csvFile}`);
   }
 
-  const internalAll = readCsvSafe(csvFile);
+  const internalAllRaw = readCsvSafe(csvFile);
+  const internalAll = filterCsvColumns(internalAllRaw, INTERNAL_ALL_KEEP_COLUMNS);
   const internalSummary = summarizeCsv(internalAll);
-  console.log(`  internal_all.csv: ${internalSummary.rowCount} pages`);
+  console.log(`  internal_all.csv: ${internalSummary.rowCount} pages (${INTERNAL_ALL_KEEP_COLUMNS.length} columns selected)`);
 
   // Read supplementary CSVs for richer prompt context
   const supplementary: { name: string; summary: string }[] = [];
@@ -1855,7 +2330,9 @@ function runDwight(domain: string) {
     semanticSection = `## Semantically Similar Pages (${ss.rowCount} pairs)\n${ss.header}\n${ss.rows}`;
   }
 
-  const reportPrompt = `You are Dwight, a Technical SEO & Agentic Readiness Auditor. You have crawled ${domain} with Screaming Frog using comprehensive exports (${outputFiles.length} output files). Below is the full crawl data. Produce a comprehensive AUDIT_REPORT.md.
+  const reportPrompt = `You are Dwight, a Technical SEO & Agentic Readiness Auditor. You have crawled ${domain} with Screaming Frog using comprehensive exports (${outputFiles.length} output files). Below is the full crawl data.
+
+YOUR ENTIRE RESPONSE IS THE REPORT. Output ONLY the markdown content of AUDIT_REPORT.md — start with the "# Technical SEO" heading. Do NOT narrate, summarize, or describe what you are doing. Do NOT say "I'll analyze" or "Here's the report". Just output the report itself.
 
 ## Primary Crawl Data — Internal:All (${internalSummary.rowCount} pages${internalSummary.full ? ', complete' : `, showing first 200 of ${internalSummary.rowCount}`})
 ### CSV Header
@@ -1988,12 +2465,14 @@ IMPORTANT:
 - Every issue must reference specific URLs from the crawl data
 - The Agentic Readiness Scorecard (Section 10.4) is mandatory
 - Priority tables must use numbered rows (| 1 |, | 2 |, etc.)
-- Be thorough but factual — only report what you can verify from the data`;
+- Be thorough but factual — only report what you can verify from the data
+- Your response IS the file content — start with "# Technical SEO & Agentic Readiness Audit" and output the full report. No preamble, no narration, no summary of what you did.`;
 
-  const report = callClaude(reportPrompt, 'sonnet');
+  console.log(`  Prompt size: ${reportPrompt.length} chars`);
+  const report = await callClaudeAsync(reportPrompt, 'sonnet');
   const reportPath = path.join(outDir, 'AUDIT_REPORT.md');
   fs.writeFileSync(reportPath, report, 'utf-8');
-  validateArtifact(reportPath, 'AUDIT_REPORT.md');
+  validateArtifact(reportPath, 'AUDIT_REPORT.md', 5000);
   console.log(`  Written AUDIT_REPORT.md (${report.length} chars)`);
 
   // Copy key files to architecture dir for Michael
@@ -2014,6 +2493,468 @@ IMPORTANT:
 
   console.log(`  Dwight complete: ${internalSummary.rowCount} pages, ${outputFiles.length} export files`);
   console.log(`  Output: ${path.relative(process.cwd(), outDir)}/`);
+}
+
+// ============================================================
+// Phase 2: Keyword Research — service × city × intent matrix
+// ============================================================
+
+// Maximum keyword candidates to send to DataForSEO bulk volume API
+const MAX_KEYWORD_MATRIX_SIZE = 200;
+
+async function runKeywordResearch(sb: SupabaseClient, auditId: string, domain: string, researchDate?: string) {
+  const env = loadEnv();
+  const today = todayStr();
+  const researchDir = path.join(AUDITS_BASE, domain, 'research', researchDate ?? today);
+  fs.mkdirSync(researchDir, { recursive: true });
+
+  // --- Step 1: Read Dwight's AUDIT_REPORT.md ---
+  const auditorDir = findLatestAuditorDir(domain);
+  if (!auditorDir) throw new Error(`No auditor directory found for ${domain} — Dwight must run first`);
+
+  const auditReportPath = path.join(auditorDir, 'AUDIT_REPORT.md');
+  if (!fs.existsSync(auditReportPath)) throw new Error(`AUDIT_REPORT.md not found at ${auditReportPath} — Dwight must run first`);
+
+  const reportContent = fs.readFileSync(auditReportPath, 'utf-8');
+  console.log(`  AUDIT_REPORT.md: ${reportContent.length} chars`);
+
+  // Get audit metadata (select * to avoid column-not-found errors on optional fields)
+  const { data: auditRow, error: auditErr } = await sb
+    .from('audits')
+    .select('*')
+    .eq('id', auditId)
+    .single();
+  if (auditErr || !auditRow) throw new Error(`Audit metadata not found: ${auditErr?.message ?? 'no row returned'}`);
+
+  const serviceKey = auditRow.service_key ?? '';
+  const customLabel = auditRow.custom_service_label ?? '';
+  const marketCity = auditRow.market_city ?? '';
+  const marketState = auditRow.market_state ?? '';
+  const industryLabel = customLabel || serviceKey.replace(/_/g, ' ') || 'local service';
+
+  // --- Step 1: Extract services + locations via LLM ---
+  const extractionPrompt = `You are analyzing a technical SEO audit report for a ${industryLabel} business${marketCity ? ` in ${marketCity}, ${marketState}` : ''}.
+
+Extract two lists from the report below:
+
+1. SERVICES: All distinct services the business offers. Extract from:
+   - Service page URLs (residential/commercial paths)
+   - H1 headings and title tags on service pages
+   - Structured data (Service schema, hasOfferCatalog)
+   - Any service mentions in the executive summary
+
+2. LOCATIONS: All cities, counties, or regions the business serves. Extract from:
+   - areaServed schema markup
+   - Service area page URLs and slugs
+   - City names in page titles or H1s
+   - Footer or contact information mentions
+
+Rules:
+- Normalize services to clean labels (e.g., "Kitchen Remodeling" not "/residential/kitchen-remodeling/")
+- Normalize locations to city names only (e.g., "St. Charles" not "St. Charles, IL")
+- Deduplicate (e.g., "kitchen remodel" and "kitchen remodeling" → "Kitchen Remodeling")
+- If no services or locations are found, return empty arrays — do NOT guess
+
+YOUR ENTIRE RESPONSE IS RAW JSON. Output ONLY the JSON object starting with {. No markdown, no code fences, no narration.
+
+Respond with raw JSON only:
+{
+  "services": ["Kitchen Remodeling", "Bathroom Remodeling"],
+  "locations": ["St. Charles", "Naperville"],
+  "platform": "Squarespace|WordPress|Wix|unknown"
+}
+
+REMINDER: Your response IS the JSON — start with { and end with }. No preamble.
+
+## AUDIT REPORT
+${reportContent}`;
+
+  console.log('  Extracting services + locations from AUDIT_REPORT.md via Haiku...');
+  let extraction: { services: string[]; locations: string[]; platform: string };
+  try {
+    const extractResult = await callClaudeAsync(extractionPrompt, 'haiku');
+    extraction = JSON.parse(stripCodeFences(extractResult));
+  } catch (err: any) {
+    throw new Error(`Service/location extraction failed: ${err.message}`);
+  }
+
+  const services = extraction.services ?? [];
+  const locations = extraction.locations ?? [];
+  const platform = extraction.platform ?? 'unknown';
+
+  console.log(`  Services extracted (${services.length}): ${services.join(', ')}`);
+  console.log(`  Locations extracted (${locations.length}): ${locations.join(', ')}`);
+  console.log(`  Platform: ${platform}`);
+
+  if (services.length === 0) {
+    console.error('  ERROR: No services extracted from AUDIT_REPORT.md — cannot build keyword matrix');
+    console.error('  Check the audit report for service page URLs, H1s, or structured data');
+    return;
+  }
+  if (locations.length === 0) {
+    console.error('  ERROR: No locations extracted from AUDIT_REPORT.md — cannot build keyword matrix');
+    console.error('  Check the audit report for areaServed markup, service area pages, or city mentions');
+    return;
+  }
+
+  // --- Step 2: Build the matrix ---
+  interface MatrixKeyword {
+    keyword: string;
+    service: string;
+    city: string;
+    intent: 'commercial' | 'informational' | 'transactional';
+    is_near_me: boolean;
+    priority: number; // lower = higher priority
+  }
+
+  const matrix: MatrixKeyword[] = [];
+  let priorityCounter = 0;
+
+  // Primary city is the first (usually the business's main market)
+  const primaryCity = locations[0];
+  const secondaryCities = locations.slice(1);
+
+  for (const service of services) {
+    const svcLower = service.toLowerCase();
+
+    // Commercial intent — primary city first
+    matrix.push({ keyword: `${svcLower} ${primaryCity.toLowerCase()}`, service, city: primaryCity, intent: 'commercial', is_near_me: false, priority: priorityCounter++ });
+
+    // Commercial intent — secondary cities
+    for (const city of secondaryCities) {
+      matrix.push({ keyword: `${svcLower} ${city.toLowerCase()}`, service, city, intent: 'commercial', is_near_me: false, priority: priorityCounter++ });
+    }
+
+    // Informational intent
+    for (const city of locations) {
+      matrix.push({ keyword: `${svcLower} cost ${city.toLowerCase()}`, service, city, intent: 'informational', is_near_me: false, priority: priorityCounter++ });
+    }
+
+    // Transactional intent
+    for (const city of locations) {
+      matrix.push({ keyword: `best ${svcLower} ${city.toLowerCase()}`, service, city, intent: 'transactional', is_near_me: false, priority: priorityCounter++ });
+      matrix.push({ keyword: `${svcLower} contractor ${city.toLowerCase()}`, service, city, intent: 'transactional', is_near_me: false, priority: priorityCounter++ });
+    }
+
+    // Near-me variant — category signal only, flagged from the start
+    matrix.push({ keyword: `${svcLower} near me`, service, city: '', intent: 'commercial', is_near_me: true, priority: priorityCounter++ });
+  }
+
+  // Cap at MAX_KEYWORD_MATRIX_SIZE
+  const cappedMatrix = matrix.sort((a, b) => a.priority - b.priority).slice(0, MAX_KEYWORD_MATRIX_SIZE);
+  console.log(`  Matrix: ${matrix.length} total candidates → capped to ${cappedMatrix.length}`);
+
+  // --- Step 3: Validate with DataForSEO ---
+  console.log('  Validating matrix with DataForSEO bulk volume...');
+  const candidateKeywords = cappedMatrix.map((m) => m.keyword);
+  const volumeResults = await bulkKeywordVolume(env, candidateKeywords);
+
+  // Build lookup map
+  const volumeMap = new Map<string, BulkVolumeResult>();
+  for (const vr of volumeResults) {
+    volumeMap.set(vr.keyword.toLowerCase(), vr);
+  }
+
+  // Merge volume data back into matrix, filter zero-volume zero-CPC
+  const validated = cappedMatrix
+    .map((m) => {
+      const vol = volumeMap.get(m.keyword.toLowerCase());
+      return {
+        ...m,
+        volume: vol?.volume ?? 0,
+        cpc: vol?.cpc ?? 0,
+        competition: vol?.competition ?? null,
+        competition_level: vol?.competition_level ?? null,
+      };
+    })
+    .filter((m) => m.volume > 0 || m.cpc > 0);
+
+  // Sort by CPC descending (primary revenue signal), volume as tiebreaker
+  validated.sort((a, b) => (b.cpc - a.cpc) || (b.volume - a.volume));
+
+  console.log(`  Validated: ${validated.length} keywords with volume or CPC (of ${cappedMatrix.length} candidates)`);
+
+  // Write raw results to disk
+  const rawPath = path.join(researchDir, 'keyword_research_raw.json');
+  fs.writeFileSync(rawPath, JSON.stringify(validated, null, 2), 'utf-8');
+  console.log(`  Written keyword_research_raw.json (${validated.length} keywords)`);
+
+  // --- Step 4: LLM synthesis ---
+  // Check which services have existing pages from the crawl
+  const internalAllPath = path.join(auditorDir, 'internal_all.csv');
+  let existingUrls: string[] = [];
+  if (fs.existsSync(internalAllPath)) {
+    const csvContent = readCsvSafe(internalAllPath, false);
+    const csvLines = csvContent.split('\n').slice(1).filter((l) => l.trim());
+    existingUrls = csvLines.map((line) => {
+      const firstComma = line.indexOf(',');
+      return firstComma > 0 ? line.slice(0, firstComma).replace(/"/g, '').trim() : '';
+    }).filter(Boolean);
+  }
+
+  const validatedTable = validated.slice(0, 100)
+    .map((v) => `${v.keyword} | ${v.service} | ${v.city || 'N/A'} | ${v.intent} | ${v.volume} | $${v.cpc} | ${v.is_near_me ? 'yes' : 'no'}`)
+    .join('\n');
+
+  const synthesisPrompt = `You are a Keyword Research Analyst for a ${industryLabel} business in ${marketCity || 'unknown'}, ${marketState || ''}.
+
+## Site Inventory (from Dwight's Crawl)
+Services: ${services.join(', ')}
+Locations: ${locations.join(', ')}
+Platform: ${platform}
+Existing pages: ${existingUrls.length} URLs crawled
+
+## Validated Keyword Matrix (top 100 of ${validated.length}, sorted by CPC)
+Keyword | Service | City | Intent | Volume | CPC | Near-Me
+${validatedTable}
+
+## Task
+Analyze this keyword opportunity matrix and produce a JSON response:
+
+1. Top opportunities by revenue signal (CPC × estimated achievable volume)
+2. Flag any service the site claims to offer that has ZERO keyword volume in this market
+3. Identify gaps: services with strong volume that have no existing page on the site
+4. Score each keyword with priority_score: (cpc * volume) / 1000, rounded to 2 decimals
+
+YOUR ENTIRE RESPONSE IS RAW JSON. Output ONLY the JSON object starting with {. No markdown, no code fences, no narration.
+
+Respond with raw JSON only:
+{
+  "keyword_opportunities": [
+    {
+      "keyword": "string",
+      "service": "string",
+      "city": "string",
+      "intent": "commercial|informational|transactional",
+      "volume": 1000,
+      "cpc": 5.50,
+      "is_near_me": false,
+      "has_existing_page": true,
+      "priority_score": 5.50
+    }
+  ],
+  "zero_volume_services": ["service name with no measurable demand"],
+  "service_gaps": [
+    { "service": "string", "total_volume": 1000, "top_keyword": "string", "has_page": false }
+  ],
+  "summary": "2-3 sentence executive summary"
+}
+
+REMINDER: Your response IS the JSON — start with { and end with }. No preamble.`;
+
+  console.log('  Generating keyword research synthesis via Anthropic API (sonnet)...');
+  let synthesis: any;
+  try {
+    const synthResult = await callClaudeAsync(synthesisPrompt, 'sonnet');
+    synthesis = JSON.parse(stripCodeFences(synthResult));
+  } catch (err: any) {
+    throw new Error(`Keyword research synthesis failed: ${err.message}`);
+  }
+
+  const opportunities = synthesis.keyword_opportunities ?? [];
+  console.log(`  Synthesis: ${opportunities.length} opportunities, ${(synthesis.zero_volume_services ?? []).length} zero-volume services, ${(synthesis.service_gaps ?? []).length} service gaps`);
+
+  // Write summary markdown
+  const summaryMd = buildKeywordResearchMd(domain, synthesis, services, locations);
+  const summaryPath = path.join(researchDir, 'keyword_research_summary.md');
+  fs.writeFileSync(summaryPath, summaryMd, 'utf-8');
+  validateArtifact(summaryPath, 'keyword_research_summary.md', 200);
+  console.log(`  Written keyword_research_summary.md to ${path.relative(process.cwd(), researchDir)}/`);
+
+  // --- Step 5: Seed audit_keywords in Supabase ---
+  if (opportunities.length > 0) {
+    const BATCH_SIZE = 50;
+    let inserted = 0;
+    for (let i = 0; i < opportunities.length; i += BATCH_SIZE) {
+      const chunk = opportunities.slice(i, i + BATCH_SIZE);
+      const rows = chunk.map((opp: any) => ({
+        audit_id: auditId,
+        keyword: opp.keyword,
+        search_volume: opp.volume ?? 0,
+        cpc: opp.cpc ?? 0,
+        rank_pos: null,
+        intent: opp.intent ?? null,
+        is_near_me: opp.is_near_me ?? false,
+        source: 'keyword_research',
+      }));
+      const { error } = await sb.from('audit_keywords').insert(rows);
+      if (error) {
+        console.warn(`  Warning: audit_keywords insert batch failed: ${error.message}`);
+      } else {
+        inserted += rows.length;
+      }
+    }
+    console.log(`  Seeded ${inserted} keywords into audit_keywords (source: keyword_research)`);
+  }
+
+  console.log(`  KeywordResearch complete — ${validated.length} validated keywords, ${opportunities.length} opportunities`);
+}
+
+function buildKeywordResearchMd(domain: string, synthesis: any, services: string[], locations: string[]): string {
+  const lines: string[] = [];
+  lines.push(`# Keyword Research — ${domain}`);
+  lines.push(`\n**Generated:** ${new Date().toISOString()}`);
+  lines.push(`**Source:** pipeline-generate.ts (service × city × intent matrix)`);
+  lines.push(`**Services:** ${services.join(', ')}`);
+  lines.push(`**Locations:** ${locations.join(', ')}\n`);
+
+  if (synthesis.summary) {
+    lines.push(`## Executive Summary\n`);
+    lines.push(synthesis.summary + '\n');
+  }
+
+  const opportunities = synthesis.keyword_opportunities ?? [];
+  if (opportunities.length > 0) {
+    lines.push('## Opportunity Matrix\n');
+    lines.push('Sorted by priority score (CPC × volume).\n');
+    lines.push('| Keyword | Service | City | Intent | Volume | CPC | Near-Me | Has Page | Priority |');
+    lines.push('|---------|---------|------|--------|--------|-----|---------|----------|----------|');
+    for (const opp of opportunities) {
+      lines.push(`| ${opp.keyword} | ${opp.service} | ${opp.city || 'N/A'} | ${opp.intent} | ${opp.volume} | $${opp.cpc} | ${opp.is_near_me ? 'yes' : 'no'} | ${opp.has_existing_page ? 'yes' : 'no'} | ${opp.priority_score} |`);
+    }
+  }
+
+  const zeroVol = synthesis.zero_volume_services ?? [];
+  if (zeroVol.length > 0) {
+    lines.push('\n## Zero-Volume Services\n');
+    lines.push('Services the site claims to offer but have no measurable keyword demand in this market.\n');
+    for (const svc of zeroVol) {
+      lines.push(`- ${svc}`);
+    }
+  }
+
+  const gaps = synthesis.service_gaps ?? [];
+  if (gaps.length > 0) {
+    lines.push('\n## Service Gaps\n');
+    lines.push('Services with strong search volume but no existing page on the site.\n');
+    lines.push('| Service | Total Volume | Top Keyword | Has Page |');
+    lines.push('|---------|-------------|-------------|----------|');
+    for (const g of gaps) {
+      lines.push(`| ${g.service} | ${g.total_volume} | ${g.top_keyword} | ${g.has_page ? 'yes' : 'no'} |`);
+    }
+  }
+
+  return lines.join('\n');
+}
+
+// ============================================================
+// Phase 6.5: Coverage Validator — cross-check gaps vs blueprint
+// ============================================================
+
+async function runValidator(sb: SupabaseClient, auditId: string, domain: string, researchDate?: string) {
+  // Both artifacts required — resolve across date boundaries
+  const gapResolved = resolveArtifactPath(domain, 'research', 'content_gap_analysis.md', researchDate);
+  if (!gapResolved) throw new Error('content_gap_analysis.md not found — Gap agent must run first');
+
+  const blueprintResolved = resolveArtifactPath(domain, 'architecture', 'architecture_blueprint.md');
+  if (!blueprintResolved) throw new Error('architecture_blueprint.md not found — Michael must run first');
+
+  const gapContent = fs.readFileSync(gapResolved, 'utf-8');
+  const blueprintContent = fs.readFileSync(blueprintResolved, 'utf-8');
+
+  console.log(`  Gap analysis: ${gapContent.length} chars, Blueprint: ${blueprintContent.length} chars`);
+
+  const prompt = `You are a Coverage Validator. Compare the content gap analysis against the architecture blueprint and produce a structured coverage map.
+
+## Content Gap Analysis
+${gapContent}
+
+## Architecture Blueprint
+${blueprintContent}
+
+## Task
+For each gap identified in the analysis (authority_gaps, format_gaps, unaddressed_gaps), determine whether it is addressed by a page in the architecture blueprint.
+
+A gap is "addressed" if a blueprint page's primary keyword, URL slug, or silo clearly targets the gap topic.
+A gap is "partially_addressed" if a related page exists but doesn't directly target the gap.
+A gap is "unaddressed" if no blueprint page covers it.
+
+YOUR ENTIRE RESPONSE IS RAW JSON. Output ONLY the JSON object starting with {. No markdown, no code fences, no narration.
+
+Respond with raw JSON only. Schema:
+{
+  "coverage": [
+    { "gap_topic": "string", "gap_type": "authority|format|unaddressed", "blueprint_page": "url-slug or null", "status": "addressed|partially_addressed|unaddressed", "notes": "string" }
+  ],
+  "summary": "2-3 sentence summary of coverage quality"
+}
+
+REMINDER: Your response IS the JSON — start with { and end with }. No preamble.`;
+
+  console.log('  Running coverage validation via Anthropic API (haiku)...');
+  const result = await callClaudeAsync(prompt, 'haiku');
+  let validation: { coverage: any[]; summary: string };
+  try {
+    validation = JSON.parse(stripCodeFences(result));
+  } catch (err: any) {
+    throw new Error(`Coverage validation JSON parse failed: ${err.message}`);
+  }
+
+  const coverage = validation.coverage ?? [];
+  const addressed = coverage.filter((c) => c.status === 'addressed').length;
+  const partial = coverage.filter((c) => c.status === 'partially_addressed').length;
+  const unaddressed = coverage.filter((c) => c.status === 'unaddressed').length;
+
+  console.log(`  Coverage: ${addressed} addressed, ${partial} partially addressed, ${unaddressed} unaddressed (of ${coverage.length} gaps)`);
+
+  // Write markdown to disk — same directory as the gap analysis
+  const validationMd = buildCoverageValidationMd(domain, validation);
+  const outDir = path.dirname(gapResolved);
+  const outPath = path.join(outDir, 'coverage_validation.md');
+  fs.writeFileSync(outPath, validationMd, 'utf-8');
+  console.log(`  Written coverage_validation.md to ${path.relative(process.cwd(), outDir)}/`);
+
+  // Write to Supabase — DELETE + INSERT
+  await sb.from('audit_coverage_validation').delete().eq('audit_id', auditId);
+  if (coverage.length > 0) {
+    const rows = coverage.map((c) => ({
+      audit_id: auditId,
+      gap_topic: c.gap_topic,
+      gap_type: c.gap_type,
+      blueprint_page: c.blueprint_page ?? null,
+      status: c.status,
+      notes: c.notes ?? null,
+    }));
+    const { error } = await sb.from('audit_coverage_validation').insert(rows);
+    if (error) console.warn(`  Warning: Supabase insert failed: ${error.message}`);
+    else console.log(`  Inserted ${rows.length} rows into audit_coverage_validation`);
+  }
+
+  console.log(`  Validator complete — ${addressed}/${coverage.length} gaps addressed`);
+}
+
+function buildCoverageValidationMd(domain: string, validation: { coverage: any[]; summary: string }): string {
+  const lines: string[] = [];
+  lines.push(`# Coverage Validation — ${domain}`);
+  lines.push(`\n**Generated:** ${new Date().toISOString()}`);
+  lines.push(`**Source:** pipeline-generate.ts (gap vs blueprint cross-check)\n`);
+
+  if (validation.summary) {
+    lines.push(`## Summary\n`);
+    lines.push(validation.summary + '\n');
+  }
+
+  const unaddressed = (validation.coverage ?? []).filter((c) => c.status === 'unaddressed' || c.status === 'partially_addressed');
+  if (unaddressed.length > 0) {
+    lines.push('## Unaddressed / Partially Addressed Gaps\n');
+    lines.push('| Gap Topic | Gap Type | Status | Blueprint Page | Notes |');
+    lines.push('|-----------|----------|--------|---------------|-------|');
+    for (const c of unaddressed) {
+      lines.push(`| ${c.gap_topic} | ${c.gap_type} | ${c.status} | ${c.blueprint_page ?? 'N/A'} | ${c.notes ?? ''} |`);
+    }
+  }
+
+  const addressed = (validation.coverage ?? []).filter((c) => c.status === 'addressed');
+  if (addressed.length > 0) {
+    lines.push('\n## Addressed Gaps\n');
+    lines.push('| Gap Topic | Gap Type | Blueprint Page | Notes |');
+    lines.push('|-----------|----------|---------------|-------|');
+    for (const c of addressed) {
+      lines.push(`| ${c.gap_topic} | ${c.gap_type} | ${c.blueprint_page ?? 'N/A'} | ${c.notes ?? ''} |`);
+    }
+  }
+
+  return lines.join('\n');
 }
 
 // ============================================================
@@ -2047,7 +2988,7 @@ async function main() {
 
   switch (args.subcommand) {
     case 'jim':
-      await runJim(sb, audit.id, args.domain, args.seedMatrix, args.competitorUrls, args.mode);
+      await runJim(sb, audit.id, args.domain, audit, args.seedMatrix, args.competitorUrls, args.mode);
       break;
     case 'competitors':
       await runCompetitors(sb, audit.id, args.domain);
@@ -2059,10 +3000,16 @@ async function main() {
       await runMichael(sb, audit.id, args.domain, args.date, args.mode);
       break;
     case 'dwight':
-      runDwight(args.domain);
+      await runDwight(args.domain);
       break;
     case 'canonicalize':
       await runCanonicalize(sb, audit.id, args.domain);
+      break;
+    case 'validator':
+      await runValidator(sb, audit.id, args.domain, args.date);
+      break;
+    case 'keyword-research':
+      await runKeywordResearch(sb, audit.id, args.domain, args.date);
       break;
   }
 }

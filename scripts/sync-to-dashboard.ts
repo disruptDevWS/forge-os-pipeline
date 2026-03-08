@@ -544,7 +544,8 @@ async function syncJim(
   console.log(`  [jim] ${nearMiss.length} near-miss keywords (pos ${assumptions.near_miss_min_pos}-${assumptions.near_miss_max_pos}, vol >= ${assumptions.min_volume})`);
 
   // Idempotency: clear prior keyword/cluster/rollup data
-  await sb.from('audit_keywords').delete().eq('audit_id', auditId);
+  // Preserve KeywordResearch-seeded rows (source = 'keyword_research') — only delete Jim's ranked rows
+  await sb.from('audit_keywords').delete().eq('audit_id', auditId).neq('source', 'keyword_research');
   await sb.from('audit_clusters').delete().eq('audit_id', auditId);
   await sb.from('audit_rollups').delete().eq('audit_id', auditId);
 
@@ -598,6 +599,7 @@ async function syncJim(
       is_near_miss: isNearMiss,
       is_top_10: isTop10,
       is_striking_distance: isStrikingDistance,
+      source: 'ranked',
       ...opp,
     };
   });
