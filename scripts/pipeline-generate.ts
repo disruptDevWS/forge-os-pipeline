@@ -1467,7 +1467,11 @@ RULES:
 - canonical_topic: Title Case human-readable (e.g., "AC Repair", "Water Heater Repair")
 - Target 10-30 groups total
 - Mark branded keywords (company names, brand terms) with is_brand: true
-- Classify intent_type for each keyword: "commercial", "transactional", "informational", or "navigational"
+- Classify intent_type for each keyword using standard SEO intent taxonomy:
+  * "commercial" = researching/comparing services or providers. IMPORTANT: "[service] [city]" keywords like "basement remodeling naperville" or "plumber boise" are COMMERCIAL — the searcher is evaluating options, not yet committing. Most local service keywords fall here.
+  * "transactional" = ready to act NOW with an explicit action verb like "hire", "book", "schedule", "buy", "order", "get quote". Without an action verb, it is NOT transactional.
+  * "informational" = seeking knowledge — cost questions, how-to, guides (e.g., "basement finishing cost", "how to unclog drain")
+  * "navigational" = looking for a specific brand/company (e.g., "talon construction group")
 - Reference keywords by their number (index), not by string
 
 KEYWORDS:
@@ -1539,6 +1543,7 @@ JSON schema:
         cluster: group.canonical_topic,
         is_brand: group.keywords[0].is_brand,
         intent_type: group.keywords[0].intent_type,
+        intent: group.keywords[0].intent_type,  // backfill intent for dashboard display
         is_near_me: nearMeIds.has(kwId),
       }).eq('id', kwId),
     );
