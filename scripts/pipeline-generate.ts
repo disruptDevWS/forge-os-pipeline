@@ -2433,7 +2433,6 @@ ${semanticSection}
 ### 10.4 Agentic Readiness Scorecard
 | Signal | Status | Weight |
 |--------|--------|--------|
-| llms.txt present | PASS/FAIL | Low/Medium/High |
 | @graph entity graph | PASS/FAIL | High |
 | LocalBusiness @id IRI | PASS/FAIL | High |
 | Service-level schema | PASS/FAIL | High |

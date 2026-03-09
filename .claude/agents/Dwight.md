@@ -59,7 +59,6 @@ When scoring agentic readiness, weight signals by actual impact:
 | `sameAs` to authoritative profiles | **High** | Cross-platform entity linking |
 | Schema on every service page | **High** | Per-page entity clarity |
 | `robots.txt` AI-agent directives | **Medium** | Access control for crawlers |
-| `llms.txt` | **Low** | ~10% adoption, no measurable correlation with AI citations for most industries. Useful for dev docs and API publishers. For local businesses, treat as "nice to have" infrastructure, not a growth lever. |
 
 ## Orphaned Content Discovery
 
