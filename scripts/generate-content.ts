@@ -472,7 +472,7 @@ async function processOscarRequest(sb: SupabaseClient, req: OscarRequest) {
       .maybeSingle();
 
     if (existing) {
-      await sb.from('execution_pages').update({ status: 'review' }).eq('id', (existing as any).id);
+      await sb.from('execution_pages').update({ status: 'review', content_html: cleanHtml }).eq('id', (existing as any).id);
       console.log(`  Updated execution_page → review`);
     }
 

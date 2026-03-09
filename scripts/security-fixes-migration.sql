@@ -202,3 +202,9 @@ DO $$ BEGIN
       ));
   END IF;
 END $$;
+
+-- ============================================================
+-- 10. Add content_html column for Oscar draft storage
+-- ============================================================
+
+ALTER TABLE public.execution_pages ADD COLUMN IF NOT EXISTS content_html TEXT;
