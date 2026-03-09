@@ -107,8 +107,11 @@ function extractMetadataField(md: string, field: string): string | null {
   if (!match) return null;
   const lines = match[1].trim().split('\n').filter((l) => l.trim());
   for (const line of lines) {
+    // Extract value from blockquote lines (> Actual Value)
+    const bqMatch = line.match(/^>\s*(.+)/);
+    if (bqMatch) return bqMatch[1].trim();
     const cleaned = line.replace(/\*\*/g, '').replace(/`/g, '').trim();
-    if (cleaned && !cleaned.startsWith('(') && !cleaned.startsWith('Char') && !cleaned.startsWith('Rationale')) {
+    if (cleaned && !cleaned.startsWith('(') && !cleaned.startsWith('Char') && !cleaned.startsWith('Rationale') && !cleaned.startsWith('Recommended')) {
       return cleaned;
     }
   }
@@ -116,8 +119,13 @@ function extractMetadataField(md: string, field: string): string | null {
 }
 
 function extractWordCountTarget(md: string): number | null {
+  // Match "Total Word Count Target: 1,900–2,100 words" — use the upper bound of the range
+  const rangeMatch = md.match(/(?:estimated|target|total)\s+(?:total\s+)?word\s+count[:\s]*(\d[\d,]*)\s*[–\-—]\s*(\d[\d,]*)/i);
+  if (rangeMatch) return parseInt(rangeMatch[2].replace(/,/g, ''), 10);
+  // Match single number: "Total Word Count: 1,800"
   const match = md.match(/(?:estimated|target|total)\s+(?:total\s+)?word\s+count[:\s]*(\d[\d,]*)/i);
   if (match) return parseInt(match[1].replace(/,/g, ''), 10);
+  // Fallback: sum from a word count table
   const tableMatch = md.match(/word\s*count.*?\n\|[-\s|]+\n((?:\|.+\n?)*)/i);
   if (tableMatch) {
     const rows = tableMatch[1].trim().split('\n');

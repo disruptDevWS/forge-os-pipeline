@@ -472,8 +472,8 @@ async function processOscarRequest(sb: SupabaseClient, req: OscarRequest) {
       .maybeSingle();
 
     if (existing) {
-      await sb.from('execution_pages').update({ status: 'content_ready' }).eq('id', (existing as any).id);
-      console.log(`  Updated execution_page → content_ready`);
+      await sb.from('execution_pages').update({ status: 'review' }).eq('id', (existing as any).id);
+      console.log(`  Updated execution_page → review`);
     }
 
     // 13. Mark oscar_request complete (polling mode only)
