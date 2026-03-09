@@ -101,3 +101,104 @@ ALTER FUNCTION public.fn_canonicalize_audit_keywords(uuid) SET search_path = pub
 -- ============================================================
 
 ALTER TABLE public.audits ADD COLUMN IF NOT EXISTS business_name TEXT;
+
+-- ============================================================
+-- 7. Add brief_pdf_url column to execution_pages
+-- ============================================================
+
+ALTER TABLE public.execution_pages ADD COLUMN IF NOT EXISTS brief_pdf_url TEXT;
+
+-- ============================================================
+-- 8. Create oscar_requests table for content draft generation
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS public.oscar_requests (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  audit_id UUID NOT NULL REFERENCES public.audits(id),
+  page_url TEXT NOT NULL,
+  domain TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  error_message TEXT,
+  requested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  completed_at TIMESTAMPTZ
+);
+
+ALTER TABLE public.oscar_requests ENABLE ROW LEVEL SECURITY;
+
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE tablename = 'oscar_requests' AND policyname = 'Users can view own oscar_requests'
+  ) THEN
+    CREATE POLICY "Users can view own oscar_requests"
+      ON public.oscar_requests FOR SELECT
+      USING (EXISTS (
+        SELECT 1 FROM public.audits
+        WHERE audits.id = oscar_requests.audit_id
+          AND audits.user_id = auth.uid()
+      ));
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE tablename = 'oscar_requests' AND policyname = 'Users can insert own oscar_requests'
+  ) THEN
+    CREATE POLICY "Users can insert own oscar_requests"
+      ON public.oscar_requests FOR INSERT
+      WITH CHECK (EXISTS (
+        SELECT 1 FROM public.audits
+        WHERE audits.id = oscar_requests.audit_id
+          AND audits.user_id = auth.uid()
+      ));
+  END IF;
+END $$;
+
+-- ============================================================
+-- 9. Create client_profiles table for brand brief data
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS public.client_profiles (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  audit_id UUID NOT NULL REFERENCES public.audits(id) ON DELETE CASCADE,
+  business_name TEXT,
+  years_in_business INTEGER,
+  phone TEXT,
+  review_count INTEGER,
+  review_rating NUMERIC(2,1),
+  founder_background TEXT,
+  usps TEXT[],
+  brand_voice_notes TEXT,
+  service_differentiators TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(audit_id)
+);
+
+ALTER TABLE public.client_profiles ENABLE ROW LEVEL SECURITY;
+
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE tablename = 'client_profiles' AND policyname = 'Users can view own client_profiles'
+  ) THEN
+    CREATE POLICY "Users can view own client_profiles"
+      ON public.client_profiles FOR SELECT
+      USING (EXISTS (
+        SELECT 1 FROM public.audits
+        WHERE audits.id = client_profiles.audit_id
+          AND audits.user_id = auth.uid()
+      ));
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE tablename = 'client_profiles' AND policyname = 'Users can manage own client_profiles'
+  ) THEN
+    CREATE POLICY "Users can manage own client_profiles"
+      ON public.client_profiles FOR ALL
+      USING (EXISTS (
+        SELECT 1 FROM public.audits
+        WHERE audits.id = client_profiles.audit_id
+          AND audits.user_id = auth.uid()
+      ));
+  END IF;
+END $$;

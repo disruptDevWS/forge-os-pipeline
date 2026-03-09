@@ -48,9 +48,9 @@
 - Service terms should vary: "water heater replacement," "water heater installation," "new water heater," "replacing your water heater." The brief's keyword targets define the primary terms; expand from there.
 
 ### Content Length
-- Follow the brief's per-section word count targets. Stay within the specified range.
-- If the brief says 200-250 words for a section, aim for 220-240. Do not pad to hit the upper bound with filler.
-- Total page word count should meet or slightly exceed the brief's total target. Exceeding by more than 15% indicates padding.
+- Use the brief's per-section word count targets as a floor, not a ceiling. Meet or exceed the target for each section.
+- A section that fully covers its topic at 200 words is better than one that pads to 300. But a section that stops at 150 because the target said 150 is incomplete if the topic has more to say.
+- Coverage completeness takes priority over target adherence. Do not pad with restatements or transitional filler — but do not truncate substantive content to hit a number.
 
 ### CTA Placement
 - Include a CTA element wherever the brief specifies one.
@@ -149,8 +149,8 @@ Oscar runs these checks internally before finalizing output:
 - [ ] No generic anchor text ("click here", "learn more")
 
 ### Content
-- [ ] Per-section word counts within brief's target ranges
-- [ ] Total word count meets brief's overall target
+- [ ] Per-section word counts meet brief's minimums. No section terminates before its topic is fully covered
+- [ ] Total word count meets or exceeds brief's overall target
 - [ ] No AI-ism patterns (em dash overuse, "landscape", "leverage", "navigate", "delve")
 - [ ] No filler phrases
 - [ ] Active voice predominant

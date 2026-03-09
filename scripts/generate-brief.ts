@@ -282,7 +282,69 @@ async function gatherContext(sb: SupabaseClient, req: PamRequest) {
     }
   }
 
-  return { auditMeta, brief, keywords, siblings, blueprintExcerpt, siloName, serpEnrichment };
+  // 7. Jim's research summary — striking distance + key takeaways
+  let marketContext = '';
+  try {
+    const researchBase = path.join(AUDITS_BASE, req.domain, 'research');
+    const researchDate = getLatestDateDir(researchBase);
+    if (researchDate) {
+      const summaryPath = path.join(researchBase, researchDate, 'research_summary.md');
+      if (fs.existsSync(summaryPath)) {
+        const summaryMd = fs.readFileSync(summaryPath, 'utf-8');
+        // Extract ## Striking Distance and ## Key Takeaways sections
+        const sections = summaryMd.split(/\n(?=##\s)/);
+        for (const section of sections) {
+          if (/^##\s*\d*\.?\s*Striking\s+Distance/i.test(section) || /^##\s*\d*\.?\s*Key\s+Takeaways/i.test(section)) {
+            marketContext += section.trim() + '\n\n';
+          }
+        }
+      }
+    }
+  } catch {
+    // Research summary is optional
+  }
+
+  // 8. Content gap data from Phase 5 (Gap agent)
+  let authorityGaps: any[] = [];
+  let formatGaps: any[] = [];
+  try {
+    const { data: gapSnapshot } = await sb
+      .from('audit_snapshots')
+      .select('keyword_overview')
+      .eq('audit_id', req.audit_id)
+      .eq('agent_name', 'gap')
+      .order('snapshot_version', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (gapSnapshot?.keyword_overview) {
+      const kw = gapSnapshot.keyword_overview as any;
+      // Top 5 authority gaps by estimated volume, excluding near-me
+      authorityGaps = (kw.authority_gaps ?? [])
+        .filter((g: any) => !g.is_near_me)
+        .sort((a: any, b: any) => (b.estimated_volume ?? 0) - (a.estimated_volume ?? 0))
+        .slice(0, 5);
+      // Format gaps not already addressed by this page's silo
+      formatGaps = (kw.format_gaps ?? [])
+        .filter((g: any) => !siloName || !g.addressed_by_silo || g.addressed_by_silo !== siloName);
+    }
+  } catch {
+    // Gap snapshot may not exist
+  }
+
+  // 8. Client profile (brand brief)
+  let clientProfile: Record<string, any> | null = null;
+  try {
+    const { data } = await sb
+      .from('client_profiles')
+      .select('*')
+      .eq('audit_id', req.audit_id)
+      .maybeSingle();
+    clientProfile = data;
+  } catch {
+    // Table may not exist yet
+  }
+
+  return { auditMeta, brief, keywords, siblings, blueprintExcerpt, siloName, serpEnrichment, clientProfile, authorityGaps, formatGaps, marketContext };
 }
 
 function escapeRegex(s: string): string {
@@ -503,11 +565,56 @@ Rules:
   return parts.join('\n');
 }
 
+function buildContentGapSection(authorityGaps: any[], formatGaps: any[]): string {
+  if (authorityGaps.length === 0 && formatGaps.length === 0) return '';
+
+  const parts: string[] = ['## Content Gap Intelligence'];
+
+  if (authorityGaps.length > 0) {
+    parts.push('\n### Authority Gaps — topics competitors rank for that this page should address');
+    parts.push('| Topic | Top Competitor | Est. Volume | Revenue Opportunity | Data Source |');
+    parts.push('|-------|---------------|------------|--------------------:|-------------|');
+    for (const g of authorityGaps) {
+      parts.push(`| ${g.topic ?? g.keyword ?? '—'} | ${g.top_competitor ?? g.competitor ?? '—'} | ${g.estimated_volume ?? '—'} | ${g.revenue_opportunity ?? '—'} | ${g.data_source ?? '—'} |`);
+    }
+  }
+
+  if (formatGaps.length > 0) {
+    parts.push('\n### Format Gaps — content formats top competitors use that are absent from this domain');
+    for (const g of formatGaps) {
+      parts.push(`- **${g.format ?? g.gap_type ?? 'Unknown'}**: ${g.description ?? ''} ${g.competitor_using ? `(used by: ${g.competitor_using})` : ''}`);
+    }
+  }
+
+  parts.push('\nEach authority gap relevant to this page\'s intent must be addressed in at least one section of the content outline. Format gaps should be reflected in the section structure where appropriate.');
+
+  return parts.join('\n');
+}
+
+function buildClientProfileSection(profile: Record<string, any> | null): string {
+  if (!profile) {
+    return `## Client Profile — NOT PROVIDED
+Use placeholder brackets for any client-specific claims (years in business, review count, phone number, founder background). Do not fabricate specifics.`;
+  }
+
+  const lines: string[] = ['## Client Profile'];
+  if (profile.business_name) lines.push(`- **Business Name**: ${profile.business_name}`);
+  if (profile.years_in_business) lines.push(`- **Years in Business**: ${profile.years_in_business}`);
+  if (profile.phone) lines.push(`- **Phone**: ${profile.phone}`);
+  if (profile.review_count) lines.push(`- **Reviews**: ${profile.review_count} reviews${profile.review_rating ? ` (${profile.review_rating} avg rating)` : ''}`);
+  if (profile.founder_background) lines.push(`- **Founder Background**: ${profile.founder_background}`);
+  if (profile.usps && profile.usps.length > 0) lines.push(`- **USPs**: ${profile.usps.join('; ')}`);
+  if (profile.service_differentiators) lines.push(`- **Service Differentiators**: ${profile.service_differentiators}`);
+  if (profile.brand_voice_notes) lines.push(`\n**Brand Voice**: ${profile.brand_voice_notes}`);
+
+  return lines.join('\n');
+}
+
 function buildPrompt(
   req: PamRequest,
   ctx: Awaited<ReturnType<typeof gatherContext>>
 ): string {
-  const { auditMeta, brief, keywords, siblings, blueprintExcerpt, siloName } = ctx;
+  const { auditMeta, brief, keywords, siblings, blueprintExcerpt, siloName, clientProfile, authorityGaps, formatGaps, marketContext } = ctx;
   const slug = req.page_url.replace(/^\/+/, '');
   const actionType = req.action_type || 'create';
   const pageRole = req.page_role ?? brief?.role ?? 'service page';
@@ -562,10 +669,18 @@ ${keywordTable}
 ${siblingsTable}
 IMPORTANT: Your content outline MUST include internal links to/from these sibling pages. Each link should use descriptive anchor text matching the target page's primary keyword, not generic text like "learn more."
 
+${marketContext ? `## Market Context
+Use striking distance keywords to identify where the client has existing ranking momentum that this page can accelerate. Reference key takeaways when writing competitive differentiation and content direction for each section.
+
+${marketContext}` : ''}
 ## Architecture Blueprint Context
 ${blueprintExcerpt || 'No architecture blueprint available.'}
 
+${buildContentGapSection(authorityGaps, formatGaps)}
+
 ${buildSerpSection(ctx.serpEnrichment)}
+
+${buildClientProfileSection(clientProfile)}
 
 ## Output Format
 You MUST produce exactly three sections, delimited by sentinel markers:
@@ -720,9 +835,9 @@ async function processRequest(sb: SupabaseClient, req: PamRequest) {
     const result = await callClaudeAsync(prompt);
 
     // Save raw output for debugging
-    const debugDir = path.join(AUDITS_BASE, req.domain, 'content', '_debug');
-    fs.mkdirSync(debugDir, { recursive: true });
-    fs.writeFileSync(path.join(debugDir, `${slug}-raw.md`), result, 'utf-8');
+    const debugFile = path.join(AUDITS_BASE, req.domain, 'content', '_debug', `${slug}-raw.md`);
+    fs.mkdirSync(path.dirname(debugFile), { recursive: true });
+    fs.writeFileSync(debugFile, result, 'utf-8');
     console.log(`  Raw output: ${result.length} chars`);
 
     // 4. Parse output

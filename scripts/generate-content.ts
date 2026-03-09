@@ -255,10 +255,52 @@ async function gatherBrief(
 // Build Oscar prompt
 // ============================================================
 
-function buildOscarPrompt(config: OscarConfig, brief: BriefData): string {
+function loadOrCreateBrandVoice(domain: string, clientProfile?: Record<string, any> | null): string {
+  const brandVoicePath = path.join(AUDITS_BASE, domain, 'configs', 'brand-voice.md');
+
+  // Check for existing brand voice file
+  if (fs.existsSync(brandVoicePath)) {
+    return fs.readFileSync(brandVoicePath, 'utf-8');
+  }
+
+  // Auto-create from client_profiles.brand_voice_notes if available
+  if (clientProfile?.brand_voice_notes) {
+    const configDir = path.join(AUDITS_BASE, domain, 'configs');
+    fs.mkdirSync(configDir, { recursive: true });
+    const content = `# Brand Voice — ${domain}\n\n${clientProfile.brand_voice_notes}\n`;
+    fs.writeFileSync(brandVoicePath, content, 'utf-8');
+    console.log(`  Auto-created brand-voice.md from client profile`);
+    return content;
+  }
+
+  return '';
+}
+
+function buildOscarPrompt(config: OscarConfig, brief: BriefData, clientProfile?: Record<string, any> | null, competitiveFallback?: string): string {
   const schemaStr = brief.schemaJson
     ? (typeof brief.schemaJson === 'string' ? brief.schemaJson : JSON.stringify(brief.schemaJson, null, 2))
     : 'No schema JSON-LD provided.';
+
+  // Brand voice file
+  const brandVoice = loadOrCreateBrandVoice(brief.domain, clientProfile);
+  const brandVoiceSection = brandVoice
+    ? `## Brand Voice — ${brief.domain}\n${brandVoice}\n\n---\n`
+    : '';
+
+  // Build client profile section
+  let clientProfileSection = '';
+  if (clientProfile) {
+    const lines: string[] = ['## Client Profile'];
+    if (clientProfile.business_name) lines.push(`- **Business Name**: ${clientProfile.business_name}`);
+    if (clientProfile.years_in_business) lines.push(`- **Years in Business**: ${clientProfile.years_in_business}`);
+    if (clientProfile.phone) lines.push(`- **Phone**: ${clientProfile.phone}`);
+    if (clientProfile.review_count) lines.push(`- **Reviews**: ${clientProfile.review_count}${clientProfile.review_rating ? ` (${clientProfile.review_rating} avg)` : ''}`);
+    if (clientProfile.founder_background) lines.push(`- **Founder Background**: ${clientProfile.founder_background}`);
+    if (clientProfile.usps?.length > 0) lines.push(`- **USPs**: ${clientProfile.usps.join('; ')}`);
+    if (clientProfile.service_differentiators) lines.push(`- **Differentiators**: ${clientProfile.service_differentiators}`);
+    if (clientProfile.brand_voice_notes) lines.push(`\n**Brand Voice**: ${clientProfile.brand_voice_notes}`);
+    clientProfileSection = lines.join('\n') + '\n\n---\n';
+  }
 
   return `${config.systemPrompt}
 
@@ -268,6 +310,8 @@ ${config.seoPlaybook}
 
 ---
 
+${brandVoiceSection}
+${clientProfileSection}
 ## Content Brief
 
 ### Metadata
@@ -279,6 +323,7 @@ ${brief.contentOutlineMarkdown || 'No content outline provided.'}
 ### Schema JSON-LD
 ${schemaStr}
 
+${competitiveFallback || ''}
 ---
 
 Produce the semantic HTML now. Follow the execution process defined in your system prompt.`;
@@ -312,32 +357,104 @@ async function processOscarRequest(sb: SupabaseClient, req: OscarRequest) {
     }
     console.log(`  Brief: metadata=${brief.metadataMarkdown ? 'yes' : 'no'}, outline=${brief.contentOutlineMarkdown.length} chars, schema=${brief.schemaJson ? 'yes' : 'no'}`);
 
-    // 2. Load Oscar config
+    // 2. Load client profile
+    let clientProfile: Record<string, any> | null = null;
+    try {
+      const { data } = await sb.from('client_profiles').select('*').eq('audit_id', req.audit_id).maybeSingle();
+      clientProfile = data;
+    } catch { /* table may not exist */ }
+
+    // 3. Write client profile to disk if present
+    if (clientProfile) {
+      const profileDir = path.join(AUDITS_BASE, req.domain, 'configs');
+      fs.mkdirSync(profileDir, { recursive: true });
+      const profileLines: string[] = ['# Client Profile'];
+      for (const [key, val] of Object.entries(clientProfile)) {
+        if (val != null && key !== 'id' && key !== 'audit_id' && key !== 'created_at') {
+          profileLines.push(`- **${key}**: ${Array.isArray(val) ? val.join('; ') : val}`);
+        }
+      }
+      const date = todayStr();
+      const slugDir = path.join(AUDITS_BASE, req.domain, 'content', date, slug);
+      fs.mkdirSync(slugDir, { recursive: true });
+      fs.writeFileSync(path.join(slugDir, 'client-profile.md'), profileLines.join('\n'), 'utf-8');
+    }
+
+    // 4. Competitive context fallback — if Pam's outline lacks it, build from competitor data
+    let competitiveFallback = '';
+    const hasCompetitiveContext = brief.contentOutlineMarkdown?.includes('## Competitive Context')
+      || brief.contentOutlineMarkdown?.includes('### Competitive Context');
+    if (!hasCompetitiveContext) {
+      try {
+        // Get page's cluster from execution_pages
+        const normalizedSlug = slug.replace(/^\/+/, '');
+        const { data: pageRow } = await sb
+          .from('execution_pages')
+          .select('silo')
+          .eq('audit_id', req.audit_id)
+          .or(`url_slug.eq.${normalizedSlug},url_slug.eq./${normalizedSlug}`)
+          .maybeSingle();
+        const cluster = (pageRow as any)?.silo;
+        if (cluster) {
+          const { data: competitors } = await sb
+            .from('audit_topic_competitors')
+            .select('domain, keyword_overlap_pct, avg_position')
+            .eq('audit_id', req.audit_id)
+            .eq('topic', cluster)
+            .order('keyword_overlap_pct', { ascending: false })
+            .limit(5);
+          const { data: dominance } = await sb
+            .from('audit_topic_dominance')
+            .select('topic, client_avg_position, competitor_avg_position, gap_direction')
+            .eq('audit_id', req.audit_id)
+            .eq('topic', cluster)
+            .maybeSingle();
+
+          if (competitors && competitors.length > 0) {
+            const lines: string[] = ['## Competitive Context (fallback — from competitor analysis)'];
+            lines.push('| Domain | Keyword Overlap | Avg Position |');
+            lines.push('|--------|----------------:|-------------:|');
+            for (const c of competitors) {
+              lines.push(`| ${c.domain} | ${c.keyword_overlap_pct ?? '—'}% | ${c.avg_position ? Number(c.avg_position).toFixed(1) : '—'} |`);
+            }
+            if (dominance) {
+              lines.push(`\nClient avg position: ${Number((dominance as any).client_avg_position).toFixed(1)} | Competitor avg: ${Number((dominance as any).competitor_avg_position).toFixed(1)} | Gap: ${(dominance as any).gap_direction}`);
+            }
+            competitiveFallback = lines.join('\n');
+            console.log(`  Injected competitive fallback: ${competitors.length} competitors for cluster "${cluster}"`);
+          }
+        }
+      } catch {
+        // Competitive fallback is optional
+      }
+    }
+
+    // 5. Load Oscar config
     const config = loadOscarConfig();
 
-    // 3. Build prompt
-    const prompt = buildOscarPrompt(config, brief);
+    // 6. Build prompt
+    const prompt = buildOscarPrompt(config, brief, clientProfile, competitiveFallback);
 
-    // 4. Call Claude
+    // 7. Call Claude
     console.log('  Running claude --print (sonnet)...');
     const htmlOutput = await callClaudeAsync(prompt, 'sonnet');
     console.log(`  Claude output: ${htmlOutput.length} chars`);
 
-    // 5. Write debug output (raw, before parsing)
+    // 8. Write debug output (raw, before parsing)
     const debugDir = path.join(AUDITS_BASE, req.domain, 'content', '_debug');
     fs.mkdirSync(debugDir, { recursive: true });
     fs.writeFileSync(path.join(debugDir, `${slug}-oscar-raw.html`), htmlOutput, 'utf-8');
 
-    // 6. Extract clean HTML — strip Claude preamble/postamble
+    // 9. Extract clean HTML — strip Claude preamble/postamble
     const cleanHtml = extractHtmlContent(htmlOutput);
     console.log(`  Cleaned HTML: ${cleanHtml.length} chars (stripped ${htmlOutput.length - cleanHtml.length})`);
 
-    // 7. Validate output
+    // 10. Validate output
     if (!cleanHtml.includes('<article>')) {
       console.log('  Warning: Output does not contain <article> tag');
     }
 
-    // 8. Write HTML file
+    // 11. Write HTML file
     const date = todayStr();
     const outDir = path.join(AUDITS_BASE, req.domain, 'content', date, slug);
     fs.mkdirSync(outDir, { recursive: true });
@@ -345,7 +462,7 @@ async function processOscarRequest(sb: SupabaseClient, req: OscarRequest) {
     fs.writeFileSync(htmlPath, cleanHtml, 'utf-8');
     console.log(`  Written ${path.relative(process.cwd(), htmlPath)}`);
 
-    // 8. Update execution_pages status
+    // 12. Update execution_pages status
     const normalizedSlug = slug.replace(/^\/+/, '');
     const { data: existing } = await sb
       .from('execution_pages')
@@ -359,7 +476,7 @@ async function processOscarRequest(sb: SupabaseClient, req: OscarRequest) {
       console.log(`  Updated execution_page → content_ready`);
     }
 
-    // 9. Mark oscar_request complete (polling mode only)
+    // 13. Mark oscar_request complete (polling mode only)
     if (req.id) {
       await sb.from('oscar_requests').update({
         status: 'complete',

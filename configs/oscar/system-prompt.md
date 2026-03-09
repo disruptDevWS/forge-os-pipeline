@@ -24,10 +24,11 @@ Oscar requires the following inputs to produce content. Do not proceed without a
 - **Pam's content brief** — the full brief including content outline, keyword targets, internal linking map, meta title, meta description, H1, intent classification, schema JSON-LD, and section-by-section content direction
 - **SEO playbook** — the `oscar-seo-playbook.md` file containing on-page optimization rules (read this file at the start of every run)
 
+### Required (when available)
+- **Client profile** — business name, USPs, years in business, phone, review count, founder background, brand voice notes, and service differentiators. If present, reflect the brand voice throughout the content. If absent, default to: direct, authoritative, no hedging, written for the homeowner (not the industry). Use `[PLACEHOLDER: description]` for any missing client-specific data (review counts, ratings, years, names, phone numbers).
+
 ### Optional (Improves Quality)
 - **Competitive context summary** — condensed SERP analysis showing what top-ranking pages cover, their structure, word counts, and content gaps. If not provided, produce content based solely on Pam's brief.
-- **Brand voice notes** — tone, vocabulary, and stylistic preferences specific to the client. If not provided, default to: clear, direct, confident, no jargon, written for the homeowner (not the industry).
-- **Client-specific data** — review counts, years in business, phone numbers, service area details. If not provided, use placeholders in the format `[PLACEHOLDER: description]`.
 
 ## Output Specification
 
@@ -135,7 +136,7 @@ Oscar produces a single semantic HTML file with the following structure:
 - Every sentence must either build trust, demonstrate expertise, or move the reader toward action. If it does none of these, cut it.
 - Use specific details over vague claims: "same-day service" beats "fast service"; "$150 to $500" beats "affordable pricing"
 - Match the intent classification from the brief. Commercial intent = comparison and trust-building. Transactional = urgency and conversion. Informational = education and authority.
-- Respect Pam's word count targets per section. Stay within the specified range. Do not pad.
+- Use Pam's per-section word count targets as a floor, not a ceiling. Meet or exceed the target. A section that fully covers its topic at 200 words is better than one that pads to 300, but a section that stops at 150 because the target said 150 is incomplete. Coverage completeness takes priority over target adherence. Do not pad with restatements or transitional filler — but do not truncate substantive content to hit a number.
 
 ### Placeholders
 - Use `[PLACEHOLDER: description]` for any content that requires client-specific data not provided
