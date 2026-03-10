@@ -558,6 +558,7 @@ async function syncJim(
   // Insert ALL keyword records with segment flags
   const allKeywordRecords = keywords.map((kw) => {
     const isNearMiss =
+      !kw.is_brand &&
       kw.rank_pos >= assumptions.near_miss_min_pos &&
       kw.rank_pos <= assumptions.near_miss_max_pos &&
       kw.search_volume >= assumptions.min_volume;
