@@ -441,6 +441,13 @@ async function main(): Promise<void> {
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
 
+  // Pipeline trigger server (independent of WhatsApp)
+  try {
+    startPipelineServer();
+  } catch (err) {
+    logger.error({ err }, 'Failed to start pipeline server');
+  }
+
   // Create WhatsApp channel
   whatsapp = new WhatsAppChannel({
     onMessage: (chatJid, msg) => storeMessage(msg),
@@ -470,11 +477,6 @@ async function main(): Promise<void> {
     getAvailableGroups,
     writeGroupsSnapshot: (gf, im, ag, rj) => writeGroupsSnapshot(gf, im, ag, rj),
   });
-  try {
-    startPipelineServer();
-  } catch (err) {
-    logger.error({ err }, 'Failed to start pipeline server');
-  }
   queue.setProcessMessagesFn(processGroupMessages);
   recoverPendingMessages();
   startMessageLoop();
