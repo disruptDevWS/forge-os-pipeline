@@ -482,7 +482,7 @@ function extractTopic(keyword: string): string {
   const words = keyword.toLowerCase().split(/\s+/);
   const stop = ['near', 'me', 'in', 'the', 'a', 'an', 'best', 'top', 'local', 'cheap', 'affordable'];
   const meaningful = words.filter((w) => w.length > 2 && !stop.includes(w) && !/^\d+$/.test(w));
-  return meaningful.slice(0, 3).join(' ') || 'general';
+  return meaningful.slice(0, 5).join(' ') || 'general';
 }
 
 async function syncJim(
