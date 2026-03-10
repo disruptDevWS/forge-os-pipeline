@@ -1471,7 +1471,7 @@ RULES:
   * "commercial" = researching/comparing services or providers. IMPORTANT: "[service] [city]" keywords like "basement remodeling naperville" or "plumber boise" are COMMERCIAL — the searcher is evaluating options, not yet committing. Most local service keywords fall here.
   * "transactional" = ready to act NOW with an explicit action verb like "hire", "book", "schedule", "buy", "order", "get quote". Without an action verb, it is NOT transactional.
   * "informational" = seeking knowledge — cost questions, how-to, guides (e.g., "basement finishing cost", "how to unclog drain")
-  * "navigational" = looking for a specific brand/company (e.g., "talon construction group")
+  * "navigational" = looking for a specific brand/company BY NAME (e.g., "talon construction group", "ross dress for less boise"). ONLY use navigational when the keyword contains a recognizable brand name. Generic service keywords like "hvac contractors boise" or "air conditioning repair meridian" are NEVER navigational — they are commercial.
 - Reference keywords by their number (index), not by string
 
 KEYWORDS:
@@ -1557,6 +1557,24 @@ JSON schema:
   // Count distinct groups
   const uniqueKeys = new Set(allGroups.map((g) => g.group.canonical_key));
   console.log(`  [canonicalize] Updated ${updated}/${keywords.length} keywords across ${uniqueKeys.size} topics`);
+
+  // Post-canonicalize: clear is_near_miss for branded/navigational keywords
+  // (is_brand and intent_type may have changed during canonicalization)
+  const { data: staleNearMiss } = await sb.from('audit_keywords')
+    .select('id')
+    .eq('audit_id', auditId)
+    .eq('is_near_miss', true)
+    .or('is_brand.eq.true,intent_type.eq.navigational');
+  if (staleNearMiss && staleNearMiss.length > 0) {
+    const ids = staleNearMiss.map((r: any) => r.id);
+    for (let i = 0; i < ids.length; i += BATCH_SIZE) {
+      const chunk = ids.slice(i, i + BATCH_SIZE);
+      await sb.from('audit_keywords')
+        .update({ is_near_miss: false, delta_revenue_low: 0, delta_revenue_mid: 0, delta_revenue_high: 0, delta_leads_low: 0, delta_leads_high: 0, delta_traffic: 0 })
+        .in('id', chunk);
+    }
+    console.log(`  [canonicalize] Cleared is_near_miss for ${ids.length} branded/navigational keywords`);
+  }
 }
 
 async function runCompetitors(sb: SupabaseClient, auditId: string, domain: string) {

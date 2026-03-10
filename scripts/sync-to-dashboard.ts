@@ -559,6 +559,7 @@ async function syncJim(
   const allKeywordRecords = keywords.map((kw) => {
     const isNearMiss =
       !kw.is_brand &&
+      kw.intent !== 'navigational' &&
       kw.rank_pos >= assumptions.near_miss_min_pos &&
       kw.rank_pos <= assumptions.near_miss_max_pos &&
       kw.search_volume >= assumptions.min_volume;
