@@ -448,6 +448,12 @@ async function main(): Promise<void> {
     logger.error({ err }, 'Failed to start pipeline server');
   }
 
+  // --pipeline-only mode: skip WhatsApp and just run the pipeline server
+  if (process.argv.includes('--pipeline-only')) {
+    logger.info('Running in pipeline-only mode (no WhatsApp)');
+    return;
+  }
+
   // Create WhatsApp channel
   whatsapp = new WhatsAppChannel({
     onMessage: (chatJid, msg) => storeMessage(msg),
