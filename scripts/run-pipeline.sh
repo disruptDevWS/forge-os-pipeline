@@ -55,6 +55,16 @@ MODE_ARGS=""
 
 echo "=== Post-Audit Pipeline: $DOMAIN ($DATE) [mode=$MODE] ==="
 
+# Helper: update dashboard pipeline status (non-fatal)
+update_status() {
+  npx tsx scripts/update-pipeline-status.ts "$DOMAIN" "$EMAIL" "$1" 2>/dev/null || true
+}
+
+# Trap errors to mark pipeline as failed
+trap 'update_status failed' ERR
+
+update_status audit
+
 # ─── Phase 1: Dwight — Comprehensive SF Crawl ───────────────
 # Runs Screaming Frog CLI with 15 export tabs, 12 bulk exports,
 # 5 reports. Produces 20+ CSV files + AUDIT_REPORT.md.
@@ -71,6 +81,8 @@ npx tsx scripts/pipeline-generate.ts dwight --domain "$DOMAIN" --user-email "$EM
 echo ""
 echo "--- Phase 2: Keyword Research (Service × City Matrix) ---"
 npx tsx scripts/pipeline-generate.ts keyword-research --domain "$DOMAIN" --user-email "$EMAIL"
+
+update_status research
 
 # ─── Phase 3: Jim — DataForSEO → disk artifacts ─────────────
 # Calls foundational_scout.sh for ranked-keywords + competitors,
@@ -100,6 +112,8 @@ npx tsx scripts/sync-to-dashboard.ts --domain "$DOMAIN" --user-email "$EMAIL" --
 echo ""
 echo "--- Phase 3c: Canonicalize Topics (Claude Haiku) ---"
 npx tsx scripts/pipeline-generate.ts canonicalize --domain "$DOMAIN" --user-email "$EMAIL"
+
+update_status architecture
 
 if [[ "$MODE" != "sales" ]]; then
   # ─── Phase 4: Competitor SERP Analysis ──────────────────────
@@ -148,6 +162,8 @@ npx tsx scripts/sync-to-dashboard.ts --domain "$DOMAIN" --user-email "$EMAIL" --
 echo ""
 echo "--- Phase 6c: Sync Dwight → Supabase ---"
 npx tsx scripts/sync-to-dashboard.ts --domain "$DOMAIN" --user-email "$EMAIL" --agents dwight
+
+update_status complete
 
 # ─── Summary ──────────────────────────────────────────────────
 echo ""
