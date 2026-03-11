@@ -25,6 +25,7 @@ interface CliArgs {
   domain: string;
   userEmail: string;
   skipKeywords: boolean;
+  rebuildClusters: boolean;
   agents: string[]; // empty = all available
   date?: string; // YYYY-MM-DD override, else latest
 }
@@ -46,7 +47,7 @@ function parseArgs(): CliArgs {
   }
 
   if (!flags.domain || !flags['user-email']) {
-    console.error('Usage: npx tsx scripts/sync-to-dashboard.ts --domain <domain> --user-email <email> [--skip-keywords] [--agents jim,dwight,michael,pam] [--date YYYY-MM-DD]');
+    console.error('Usage: npx tsx scripts/sync-to-dashboard.ts --domain <domain> --user-email <email> [--skip-keywords] [--rebuild-clusters] [--agents jim,dwight,michael,pam] [--date YYYY-MM-DD]');
     process.exit(1);
   }
 
@@ -54,6 +55,7 @@ function parseArgs(): CliArgs {
     domain: flags.domain,
     userEmail: flags['user-email'],
     skipKeywords: flags['skip-keywords'] === 'true',
+    rebuildClusters: flags['rebuild-clusters'] === 'true',
     agents: flags.agents ? flags.agents.split(',').map((a) => a.trim()) : [],
     date: flags.date,
   };
@@ -146,6 +148,88 @@ async function updateStalenessTimestamp(sb: SupabaseClient, auditId: string, age
   const col = columnMap[agentName];
   if (!col) return;
   await sb.from('audits').update({ [col]: new Date().toISOString() }).eq('id', auditId);
+}
+
+// ============================================================
+// Auto-create audit_assumptions from benchmark defaults
+// ============================================================
+
+async function ensureAssumptions(sb: SupabaseClient, auditId: string, serviceKey: string) {
+  // Check if assumptions already exist
+  const { data: existing } = await sb
+    .from('audit_assumptions')
+    .select('audit_id')
+    .eq('audit_id', auditId)
+    .maybeSingle();
+
+  if (existing) return;
+
+  console.log(`  [assumptions] Creating from benchmark defaults (service_key=${serviceKey})`);
+
+  // Fetch benchmark for this service, fall back to 'other'
+  let { data: benchmark } = await sb
+    .from('benchmarks')
+    .select('*')
+    .eq('service_key', serviceKey)
+    .eq('is_active', true)
+    .order('effective_date', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (!benchmark) {
+    const { data: otherBenchmark } = await sb
+      .from('benchmarks')
+      .select('*')
+      .eq('service_key', 'other')
+      .eq('is_active', true)
+      .limit(1)
+      .maybeSingle();
+    benchmark = otherBenchmark;
+  }
+
+  if (!benchmark) {
+    console.error('  [assumptions] No benchmark found — cannot auto-create assumptions');
+    return;
+  }
+
+  // Fetch default CTR model
+  const { data: ctrModel } = await sb
+    .from('ctr_models')
+    .select('*')
+    .eq('is_default', true)
+    .maybeSingle();
+
+  if (!ctrModel) {
+    console.error('  [assumptions] No default CTR model found — cannot auto-create assumptions');
+    return;
+  }
+
+  const crMid = (benchmark.cr_min + benchmark.cr_max) / 2;
+  const acvMid = (benchmark.acv_min + benchmark.acv_max) / 2;
+
+  const { error } = await sb.from('audit_assumptions').insert({
+    audit_id: auditId,
+    benchmark_id: benchmark.id,
+    ctr_model_id: ctrModel.id,
+    target_bucket: '2-3_avg',
+    target_ctr: 0.14,
+    near_miss_min_pos: 11,
+    near_miss_max_pos: 30,
+    min_volume: 50,
+    cr_used_min: benchmark.cr_min,
+    cr_used_max: benchmark.cr_max,
+    cr_used_mid: crMid,
+    acv_used_min: benchmark.acv_min,
+    acv_used_max: benchmark.acv_max,
+    acv_used_mid: acvMid,
+    floor_ctr_over30: ctrModel.buckets?.['>30'] ?? 0.0025,
+  });
+
+  if (error) {
+    console.error(`  [assumptions] Insert failed: ${error.message}`);
+  } else {
+    console.log(`  [assumptions] Created with benchmark=${benchmark.service_key}, CTR model=${ctrModel.label}`);
+  }
 }
 
 // ============================================================
@@ -485,6 +569,196 @@ function extractTopic(keyword: string): string {
   return meaningful.slice(0, 5).join(' ') || 'general';
 }
 
+// ============================================================
+// Cluster + rollup rebuild (extracted so it can run independently)
+// ============================================================
+
+type ClusterAgg = {
+  topic: string;
+  positions: number[];
+  keywords: string[];
+  revLow: number;
+  revMid: number;
+  revHigh: number;
+  leadsLow: number;
+  leadsHigh: number;
+  volMax: number;
+  kwTotal: number;
+  kwEligible: number;
+};
+
+function buildClusterMap(rows: any[]): Map<string, ClusterAgg> {
+  const map = new Map<string, ClusterAgg>();
+  for (const r of rows) {
+    const intent = String(r.intent_type ?? r.intent ?? '').toLowerCase();
+    const isBrand = r.is_brand === true;
+
+    // Skip brand keywords and non-customer intent entirely
+    if (isBrand) continue;
+    if (intent === 'informational' || intent === 'navigational') continue;
+
+    // Prefer canonical_key (set by canonicalize) over raw cluster/topic
+    const key = r.canonical_key ?? r.cluster ?? r.topic ?? 'general';
+    const topic = r.canonical_topic ?? r.cluster ?? r.topic ?? key;
+    const vol = Number(r.search_volume ?? 0);
+    const pos = Number(r.rank_pos ?? 0);
+
+    const existing = map.get(key);
+    if (existing) {
+      existing.positions.push(pos);
+      existing.keywords.push(r.keyword);
+      existing.revLow += Number(r.delta_revenue_low ?? 0);
+      existing.revMid += Number(r.delta_revenue_mid ?? 0);
+      existing.revHigh += Number(r.delta_revenue_high ?? 0);
+      existing.leadsLow += Number(r.delta_leads_low ?? 0);
+      existing.leadsHigh += Number(r.delta_leads_high ?? 0);
+      existing.kwEligible++;
+      existing.volMax = Math.max(existing.volMax, vol);
+      existing.kwTotal++;
+    } else {
+      map.set(key, {
+        topic,
+        positions: [pos],
+        keywords: [r.keyword],
+        revLow: Number(r.delta_revenue_low ?? 0),
+        revMid: Number(r.delta_revenue_mid ?? 0),
+        revHigh: Number(r.delta_revenue_high ?? 0),
+        leadsLow: Number(r.delta_leads_low ?? 0),
+        leadsHigh: Number(r.delta_leads_high ?? 0),
+        volMax: vol,
+        kwTotal: 1,
+        kwEligible: 1,
+      });
+    }
+  }
+  return map;
+}
+
+async function rebuildClustersAndRollups(sb: SupabaseClient, auditId: string, label: string = 'rebuild') {
+  // Load assumptions
+  const { data: assumptions } = await sb
+    .from('audit_assumptions')
+    .select('*')
+    .eq('audit_id', auditId)
+    .maybeSingle();
+
+  if (!assumptions) {
+    console.error(`  [${label}] No audit_assumptions found — cannot rebuild clusters`);
+    return;
+  }
+
+  // Load CTR model
+  const { data: ctrModel } = await sb
+    .from('ctr_models')
+    .select('*')
+    .eq('id', assumptions.ctr_model_id)
+    .maybeSingle();
+
+  if (!ctrModel) {
+    console.error(`  [${label}] No CTR model found — cannot rebuild clusters`);
+    return;
+  }
+
+  const ctrBuckets = ctrModel.buckets as CtrBuckets;
+
+  // Clear existing clusters + rollups
+  await sb.from('audit_clusters').delete().eq('audit_id', auditId);
+  await sb.from('audit_rollups').delete().eq('audit_id', auditId);
+
+  // Pull near-miss keywords
+  const { data: kwRows } = await sb
+    .from('audit_keywords')
+    .select('keyword, rank_pos, search_volume, cpc, delta_traffic, delta_revenue_low, delta_revenue_mid, delta_revenue_high, delta_leads_low, delta_leads_high, canonical_key, canonical_topic, cluster, intent_type, intent, is_brand, is_near_miss, topic')
+    .eq('audit_id', auditId)
+    .eq('is_near_miss', true);
+
+  let clusterMap = buildClusterMap((kwRows ?? []) as any[]);
+
+  // Fallback: if near-miss clustering produces 0 non-brand commercial topics,
+  // build from ALL non-brand keywords with volume >= min_volume.
+  if (clusterMap.size === 0) {
+    console.log(`  [${label}] No near-miss opportunity clusters — falling back to full keyword opportunity`);
+    const FALLBACK_MAX_VOLUME = 2000;
+    const { data: allKwRows } = await sb
+      .from('audit_keywords')
+      .select('keyword, rank_pos, search_volume, cpc, canonical_key, canonical_topic, cluster, intent_type, intent, is_brand, is_near_me, topic')
+      .eq('audit_id', auditId)
+      .gte('search_volume', assumptions.min_volume)
+      .lte('search_volume', FALLBACK_MAX_VOLUME);
+
+    const conservativeTargetCtr = ctrBuckets['6-10'] ?? ctrBuckets['4-5'] ?? assumptions.target_ctr * 0.25;
+    console.log(`  [${label}] Fallback target CTR: ${(conservativeTargetCtr * 100).toFixed(1)}% (page 1 bottom)`);
+    const fallbackRows = (allKwRows ?? []).map((r: any) => {
+      const vol = Number(r.search_volume ?? 0);
+      const pos = Number(r.rank_pos ?? 100);
+      const currentCtr = getCtrForPosition(pos, ctrBuckets, assumptions.floor_ctr_over30);
+      const currentTraffic = vol * currentCtr;
+      const targetTraffic = vol * conservativeTargetCtr;
+      const deltaTraffic = Math.max(0, targetTraffic - currentTraffic);
+      const effectiveCrMid = assumptions.cr_used_mid ?? (assumptions.cr_used_min + assumptions.cr_used_max) / 2;
+      const effectiveAcvMid = assumptions.acv_used_mid ?? (assumptions.acv_used_min + assumptions.acv_used_max) / 2;
+      return {
+        ...r,
+        delta_revenue_low: deltaTraffic * assumptions.cr_used_min * assumptions.acv_used_min,
+        delta_revenue_mid: deltaTraffic * effectiveCrMid * effectiveAcvMid,
+        delta_revenue_high: deltaTraffic * assumptions.cr_used_max * assumptions.acv_used_max,
+        delta_leads_low: deltaTraffic * assumptions.cr_used_min,
+        delta_leads_high: deltaTraffic * assumptions.cr_used_max,
+        delta_traffic: deltaTraffic,
+      };
+    });
+    clusterMap = buildClusterMap(fallbackRows);
+    console.log(`  [${label}] Fallback: ${fallbackRows.length} keywords evaluated, ${clusterMap.size} opportunity clusters`);
+  }
+
+  const nearMissCount = (kwRows ?? []).length;
+
+  const clusterRecords = Array.from(clusterMap.entries())
+    .sort((a, b) => b[1].revHigh - a[1].revHigh)
+    .map(([, c]) => {
+      const minPos = Math.min(...c.positions);
+      const maxPos = Math.max(...c.positions);
+      return {
+        audit_id: auditId,
+        topic: c.topic,
+        near_miss_positions: minPos === maxPos ? `${minPos}` : `${minPos}-${maxPos}`,
+        total_volume: c.volMax,
+        est_new_leads_low: round2(c.leadsLow),
+        est_new_leads_high: round2(c.leadsHigh),
+        est_revenue_low: round2(c.revLow),
+        est_revenue_mid: round2(c.revMid),
+        est_revenue_high: round2(c.revHigh),
+        sample_keywords: c.keywords.slice(0, 5),
+      };
+    });
+
+  if (clusterRecords.length > 0) {
+    const { error } = await sb.from('audit_clusters').insert(clusterRecords);
+    if (error) throw new Error(`cluster insert failed: ${error.message}`);
+    console.log(`  [${label}] Inserted ${clusterRecords.length} clusters`);
+  }
+
+  // Rollup
+  const totalVol = clusterRecords.reduce((s, c) => s + c.total_volume, 0);
+  const totalRevLow = clusterRecords.reduce((s, c) => s + c.est_revenue_low, 0);
+  const totalRevMid = clusterRecords.reduce((s, c) => s + c.est_revenue_mid, 0);
+  const totalRevHigh = clusterRecords.reduce((s, c) => s + c.est_revenue_high, 0);
+
+  const { error: rollupErr } = await sb.from('audit_rollups').insert({
+    audit_id: auditId,
+    total_volume_analyzed: totalVol,
+    near_miss_keyword_count: nearMissCount,
+    opportunity_topics_count: clusterRecords.length,
+    monthly_revenue_low: round2(totalRevLow),
+    monthly_revenue_mid: round2(totalRevMid),
+    monthly_revenue_high: round2(totalRevHigh),
+  });
+  if (rollupErr) throw new Error(`rollup insert failed: ${rollupErr.message}`);
+
+  console.log(`  [${label}] Revenue range: $${round2(totalRevLow)} / $${round2(totalRevMid)} / $${round2(totalRevHigh)} per mo (low/mid/high)`);
+  return { clusterCount: clusterRecords.length, nearMissCount };
+}
+
 async function syncJim(
   sb: SupabaseClient,
   auditId: string,
@@ -515,7 +789,7 @@ async function syncJim(
     .maybeSingle();
 
   if (!assumptions) {
-    console.log('  [jim] No audit_assumptions found — cannot calculate revenue. Skipping keyword sync.');
+    console.error('  [jim] No audit_assumptions found after ensureAssumptions — cannot calculate revenue');
     return null;
   }
 
@@ -622,165 +896,8 @@ async function syncJim(
     console.log(`  [jim] Inserted ${allKeywordRecords.length} keywords (${nearMiss.length} near-miss)`);
   }
 
-  // Pull back near-miss keywords for clustering (primary revenue calculation)
-  const { data: kwRows } = await sb
-    .from('audit_keywords')
-    .select('keyword, rank_pos, search_volume, cpc, delta_traffic, delta_revenue_low, delta_revenue_mid, delta_revenue_high, delta_leads_low, delta_leads_high, canonical_key, canonical_topic, cluster, intent_type, intent, is_brand, is_near_miss, topic')
-    .eq('audit_id', auditId)
-    .eq('is_near_miss', true);
-
-  // Cluster by canonicalized cluster field (falls back to canonical_key/topic)
-  type ClusterAgg = {
-    topic: string;
-    positions: number[];
-    keywords: string[];
-    revLow: number;
-    revMid: number;
-    revHigh: number;
-    leadsLow: number;
-    leadsHigh: number;
-    volMax: number;
-    kwTotal: number;
-    kwEligible: number;
-  };
-
-  function buildClusterMap(rows: any[]): Map<string, ClusterAgg> {
-    const map = new Map<string, ClusterAgg>();
-    for (const r of rows) {
-      const intent = String(r.intent_type ?? r.intent ?? '').toLowerCase();
-      const isBrand = r.is_brand === true;
-
-      // Skip brand keywords and non-customer intent entirely
-      if (isBrand) continue;
-      if (intent === 'informational' || intent === 'navigational') continue;
-
-      const key = r.cluster ?? r.canonical_key ?? r.topic ?? 'general';
-      const topic = r.cluster ?? r.canonical_topic ?? r.topic ?? key;
-      const vol = Number(r.search_volume ?? 0);
-      const pos = Number(r.rank_pos ?? 0);
-
-      const existing = map.get(key);
-      if (existing) {
-        existing.positions.push(pos);
-        existing.keywords.push(r.keyword);
-        existing.revLow += Number(r.delta_revenue_low ?? 0);
-        existing.revMid += Number(r.delta_revenue_mid ?? 0);
-        existing.revHigh += Number(r.delta_revenue_high ?? 0);
-        existing.leadsLow += Number(r.delta_leads_low ?? 0);
-        existing.leadsHigh += Number(r.delta_leads_high ?? 0);
-        existing.kwEligible++;
-        existing.volMax = Math.max(existing.volMax, vol);
-        existing.kwTotal++;
-      } else {
-        map.set(key, {
-          topic,
-          positions: [pos],
-          keywords: [r.keyword],
-          revLow: Number(r.delta_revenue_low ?? 0),
-          revMid: Number(r.delta_revenue_mid ?? 0),
-          revHigh: Number(r.delta_revenue_high ?? 0),
-          leadsLow: Number(r.delta_leads_low ?? 0),
-          leadsHigh: Number(r.delta_leads_high ?? 0),
-          volMax: vol,
-          kwTotal: 1,
-          kwEligible: 1,
-        });
-      }
-    }
-    return map;
-  }
-
-  let clusterMap = buildClusterMap((kwRows ?? []) as any[]);
-
-  // Fallback: if near-miss clustering produces 0 non-brand commercial topics,
-  // build opportunity clusters from ALL non-brand keywords with volume >= min_volume.
-  // This covers domains with no near-miss rankings (e.g., all branded pos 11-30).
-  if (clusterMap.size === 0) {
-    console.log('  [jim] No near-miss opportunity clusters — falling back to full keyword opportunity');
-    // Fetch non-brand keywords with reasonable local volume.
-    // Cap at 2000/mo to exclude national-volume queries (e.g., "kitchen remodeling" at 110K/mo)
-    // that inflate opportunity estimates for local-market audits.
-    const FALLBACK_MAX_VOLUME = 2000;
-    const { data: allKwRows } = await sb
-      .from('audit_keywords')
-      .select('keyword, rank_pos, search_volume, cpc, canonical_key, canonical_topic, cluster, intent_type, intent, is_brand, is_near_me, topic')
-      .eq('audit_id', auditId)
-      .gte('search_volume', assumptions.min_volume)
-      .lte('search_volume', FALLBACK_MAX_VOLUME);
-
-    // Compute opportunity for each keyword based on reaching page 1.
-    // Use a conservative target: CTR for position 6-10 bucket (page 1 bottom)
-    // rather than the aggressive target_ctr (position 2-3). Keywords at pos 50+
-    // reaching page 1 is already ambitious — position 2-3 would overstate opportunity.
-    const conservativeTargetCtr = ctrBuckets['6-10'] ?? ctrBuckets['4-5'] ?? assumptions.target_ctr * 0.25;
-    console.log(`  [jim] Fallback target CTR: ${(conservativeTargetCtr * 100).toFixed(1)}% (page 1 bottom)`);
-    const fallbackRows = (allKwRows ?? []).map((r: any) => {
-      const vol = Number(r.search_volume ?? 0);
-      const pos = Number(r.rank_pos ?? 100); // unranked = 100
-      const currentCtr = getCtrForPosition(pos, ctrBuckets, assumptions.floor_ctr_over30);
-      const currentTraffic = vol * currentCtr;
-      const targetTraffic = vol * conservativeTargetCtr;
-      const deltaTraffic = Math.max(0, targetTraffic - currentTraffic);
-      const effectiveCrMid = assumptions.cr_used_mid ?? (assumptions.cr_used_min + assumptions.cr_used_max) / 2;
-      const effectiveAcvMid = assumptions.acv_used_mid ?? (assumptions.acv_used_min + assumptions.acv_used_max) / 2;
-      return {
-        ...r,
-        delta_revenue_low: deltaTraffic * assumptions.cr_used_min * assumptions.acv_used_min,
-        delta_revenue_mid: deltaTraffic * effectiveCrMid * effectiveAcvMid,
-        delta_revenue_high: deltaTraffic * assumptions.cr_used_max * assumptions.acv_used_max,
-        delta_leads_low: deltaTraffic * assumptions.cr_used_min,
-        delta_leads_high: deltaTraffic * assumptions.cr_used_max,
-        delta_traffic: deltaTraffic,
-      };
-    });
-
-    clusterMap = buildClusterMap(fallbackRows);
-    console.log(`  [jim] Fallback: ${fallbackRows.length} keywords evaluated, ${clusterMap.size} opportunity clusters`);
-  }
-
-  const clusterRecords = Array.from(clusterMap.entries())
-    .sort((a, b) => b[1].revHigh - a[1].revHigh)
-    .map(([, c]) => {
-      const minPos = Math.min(...c.positions);
-      const maxPos = Math.max(...c.positions);
-      return {
-        audit_id: auditId,
-        topic: c.topic,
-        near_miss_positions: minPos === maxPos ? `${minPos}` : `${minPos}-${maxPos}`,
-        total_volume: c.volMax,
-        est_new_leads_low: round2(c.leadsLow),
-        est_new_leads_high: round2(c.leadsHigh),
-        est_revenue_low: round2(c.revLow),
-        est_revenue_mid: round2(c.revMid),
-        est_revenue_high: round2(c.revHigh),
-        sample_keywords: c.keywords.slice(0, 5),
-      };
-    });
-
-  if (clusterRecords.length > 0) {
-    const { error } = await sb.from('audit_clusters').insert(clusterRecords);
-    if (error) throw new Error(`cluster insert failed: ${error.message}`);
-    console.log(`  [jim] Inserted ${clusterRecords.length} clusters`);
-  }
-
-  // Rollup
-  const totalVol = clusterRecords.reduce((s, c) => s + c.total_volume, 0);
-  const totalRevLow = clusterRecords.reduce((s, c) => s + c.est_revenue_low, 0);
-  const totalRevMid = clusterRecords.reduce((s, c) => s + c.est_revenue_mid, 0);
-  const totalRevHigh = clusterRecords.reduce((s, c) => s + c.est_revenue_high, 0);
-
-  const { error: rollupErr } = await sb.from('audit_rollups').insert({
-    audit_id: auditId,
-    total_volume_analyzed: totalVol,
-    near_miss_keyword_count: nearMiss.length,
-    opportunity_topics_count: clusterRecords.length,
-    monthly_revenue_low: round2(totalRevLow),
-    monthly_revenue_mid: round2(totalRevMid),
-    monthly_revenue_high: round2(totalRevHigh),
-  });
-  if (rollupErr) throw new Error(`rollup insert failed: ${rollupErr.message}`);
-
-  console.log(`  [jim] Revenue range: $${round2(totalRevLow)} / $${round2(totalRevMid)} / $${round2(totalRevHigh)} per mo (low/mid/high)`);
+  // Build clusters + rollups from keyword data
+  await rebuildClustersAndRollups(sb, auditId, 'jim');
 
   // Parse research_summary.md for site-level findings
   const summaryFile = path.join(dir, 'research_summary.md');
@@ -1912,17 +2029,29 @@ async function main() {
     const { data: newAudit, error } = await sb.from('audits').insert({
       user_id: user.id,
       domain: args.domain,
-      service_key: 'plumbing',
-      market_city: 'Boise',
-      market_state: 'ID',
+      service_key: 'other',
+      market_city: 'Unknown',
+      market_state: 'XX',
       status: 'draft',
       agent_pipeline_domain: args.domain,
     }).select().single();
     if (error) throw new Error(`Failed to create audit: ${error.message}`);
     audit = newAudit;
+    console.warn('  Auto-created audit with service_key=other — update in dashboard for accurate benchmarks');
   }
 
   console.log(`Audit ID: ${audit!.id}`);
+
+  // Ensure audit_assumptions exist (auto-create from benchmarks if missing)
+  await ensureAssumptions(sb, audit!.id, audit!.service_key);
+
+  // Standalone cluster rebuild (run after canonicalize without re-syncing keywords)
+  if (args.rebuildClusters) {
+    console.log('\n--- REBUILD CLUSTERS ---');
+    await rebuildClustersAndRollups(sb, audit!.id, 'rebuild');
+    console.log('\nCluster rebuild complete.');
+    return;
+  }
 
   // Determine which agents to sync
   const agentsToSync = args.agents.length > 0

@@ -1,11 +1,40 @@
 #!/bin/bash
 # run-pipeline.sh — Sequential post-audit agent pipeline
 #
+# DATA OWNERSHIP CONTRACT (see docs/PIPELINE.md for full spec)
+# ─────────────────────────────────────────────────────────────
+# EXPECTS TO EXIST:
+#   audits              — created by Dashboard useCreateAudit
+#   audit_assumptions   — created by Dashboard (or auto-created by sync from benchmarks)
+#   benchmarks          — seeded reference data (one row per service vertical)
+#   ctr_models          — seeded reference data (one row with is_default=true)
+#
+# THIS PIPELINE WRITES:
+#   audit_keywords      — Phase 2 (source='keyword_research'), Phase 3b (source='ranked'),
+#                         Phase 3c (UPDATE canonical_key/topic/intent/brand)
+#   audit_clusters      — Phase 3b (preliminary), Phase 3d (canonical, authoritative)
+#   audit_rollups       — Phase 3b (preliminary), Phase 3d (canonical, authoritative)
+#   audit_topic_competitors — Phase 4
+#   audit_topic_dominance   — Phase 4
+#   audit_coverage_validation — Phase 6.5
+#   agent_architecture_pages  — Phase 6b
+#   agent_architecture_blueprint — Phase 6b
+#   execution_pages     — Phase 6b (UPSERT)
+#   agent_technical_pages — Phase 6c
+#   audit_snapshots     — Phase 3b, 6b, 6c
+#   agent_runs          — all generation phases
+#   audits              — agent_pipeline_status updates throughout
+#
+# THE run-audit EDGE FUNCTION WRITES NOTHING TO THE ABOVE.
+# It only sets audits.status='running' + agent_pipeline_status='queued'.
+# ─────────────────────────────────────────────────────────────
+#
 # Phase 1:  Dwight — Comprehensive SF crawl + analysis → AUDIT_REPORT.md + CSVs
 # Phase 2:  KeywordResearch — Service × city × intent matrix → keyword_research_summary.md + audit_keywords (seeded)
 # Phase 3:  Jim — DataForSEO ranked-keywords + competitors → research_summary.md
 # Phase 3b: sync jim — ranked_keywords.json → Supabase (audit_keywords, clusters, rollups)
 # Phase 3c: canonicalize — Claude Haiku semantic topic grouping → canonical_key/topic
+# Phase 3d: rebuild clusters — re-aggregate using canonical_key (post-canonicalize)
 # Phase 4:  Competitors — DataForSEO SERP per topic → audit_topic_competitors/dominance
 # Phase 5:  Gap — Competitive gap synthesis → content_gap_analysis.md + audit_snapshots
 # Phase 6:  Michael — Reads ALL disk artifacts → architecture_blueprint.md
@@ -113,6 +142,13 @@ echo ""
 echo "--- Phase 3c: Canonicalize Topics (Claude Haiku) ---"
 npx tsx scripts/pipeline-generate.ts canonicalize --domain "$DOMAIN" --user-email "$EMAIL"
 
+# ─── Phase 3d: Rebuild Clusters ──────────────────────────────
+# Canonicalize updates canonical_key/topic on keywords but doesn't
+# rebuild clusters. Re-aggregate using canonical groupings.
+echo ""
+echo "--- Phase 3d: Rebuild Clusters (post-canonicalize) ---"
+npx tsx scripts/sync-to-dashboard.ts --domain "$DOMAIN" --user-email "$EMAIL" --rebuild-clusters
+
 update_status architecture
 
 if [[ "$MODE" != "sales" ]]; then
@@ -171,8 +207,9 @@ echo "=== Pipeline Complete [mode=$MODE] ==="
 echo "  Phase 1:  Dwight   — Comprehensive SF crawl (20+ CSVs) → AUDIT_REPORT.md"
 echo "  Phase 2:  KWRes.   — Service × city × intent matrix → keyword_research_summary.md"
 echo "  Phase 3:  Jim      — DataForSEO ranked-keywords + competitors → research_summary.md"
-echo "  Phase 3b: sync     — ranked_keywords.json → audit_keywords (~1000 rows)"
+echo "  Phase 3b: sync     — ranked_keywords.json → audit_keywords (preliminary clusters)"
 echo "  Phase 3c: canon.   — Claude Haiku semantic topic grouping → canonical_key/topic"
+echo "  Phase 3d: rebuild  — Re-aggregate clusters using canonical groupings"
 if [[ "$MODE" != "sales" ]]; then
   echo "  Phase 4:  Compet.  — SERP analysis → audit_topic_competitors/dominance"
   echo "  Phase 5:  Gap      — Competitive gap synthesis → content_gap_analysis.md"

@@ -1,11 +1,26 @@
 # Audit Pipeline — Complete Reference
 
+> **This is a contract.** Every phase declares what it reads, what it writes, and what must exist before it runs. When a phase's responsibility changes, update this file in the same commit. See also: `docs/DECISIONS.md` for the "why" behind non-obvious choices.
+
 Orchestrator: `./scripts/run-pipeline.sh <domain> <email> [seed_matrix.json] [competitor_urls] [--mode sales|full]`
+
+Trigger: Dashboard `useCreateAudit` → `run-audit` Edge Function (thin trigger) → HTTP POST to NanoClaw pipeline server → `run-pipeline.sh`
 
 Core scripts:
 - `scripts/pipeline-generate.ts` — agent generation logic
 - `scripts/sync-to-dashboard.ts` — Supabase sync logic
 - `scripts/foundational_scout.sh` — DataForSEO CLI wrapper
+
+## Prerequisites (must exist before pipeline starts)
+
+| Table | Created By | Required Fields |
+|-------|-----------|----------------|
+| `audits` | Dashboard `useCreateAudit` | domain, service_key, market_city, market_state, user_id |
+| `audit_assumptions` | Dashboard `useCreateAudit` (primary), `sync-to-dashboard.ts ensureAssumptions()` (fallback) | benchmark_id, ctr_model_id, cr_used_min/max/mid, acv_used_min/max/mid, target_ctr, near_miss_min/max_pos, min_volume |
+| `benchmarks` | Seeded (one row per service vertical + 'other' fallback) | cr_min, cr_max, acv_min, acv_max |
+| `ctr_models` | Seeded (one row with is_default=true) | buckets JSON |
+
+The `run-audit` Edge Function writes **nothing** to keyword/cluster/rollup tables. It only marks the audit as `running` and fires the pipeline. All DataForSEO, keyword seeding, clustering, and revenue modeling happens inside the pipeline phases below.
 
 ---
 
@@ -30,12 +45,23 @@ Phase 3 (Jim)
       ▼
 Phase 3b (sync jim)
   READS:     ranked_keywords.json, research_summary.md
-  PRODUCES:  Supabase → audit_keywords (source='ranked'), audit_clusters, audit_rollups
+  REQUIRES:  audit_assumptions (auto-created from benchmarks if missing)
+  PRODUCES:  Supabase → audit_keywords (source='ranked', revenue fields populated)
+             Supabase → audit_clusters, audit_rollups (preliminary — rebuilt in 3d)
       │
       ▼
 Phase 3c (Canonicalize)
   READS:     Supabase ← audit_keywords
-  PRODUCES:  Supabase → audit_keywords (canonical_key, canonical_topic, cluster, is_near_me)
+  PRODUCES:  Supabase → audit_keywords (canonical_key, canonical_topic, cluster,
+             intent_type, is_brand, is_near_me)
+  POST-STEP: Clears is_near_miss for branded/navigational keywords
+      │
+      ▼
+Phase 3d (Rebuild Clusters)
+  READS:     Supabase ← audit_keywords (with canonical_key from 3c)
+  PRODUCES:  Supabase → audit_clusters (DELETE+INSERT), audit_rollups (DELETE+INSERT)
+  WHY:       3b builds clusters before canonical_key exists; 3d rebuilds using
+             canonical groupings so "ac repair boise" + "ac repair boise id" merge
       │
       ▼
 Phase 4 (Competitors)                    ← skipped in sales mode
@@ -171,18 +197,22 @@ Phase 6c (sync dwight)
 
 **Supabase reads:** `audit_assumptions` (CR/ACV rates), `ctr_models` (CTR by position)
 
+**Precondition:** `audit_assumptions` must exist. `ensureAssumptions()` runs at the start of every sync and auto-creates from `benchmarks` defaults if missing.
+
 **Supabase writes:**
 
 | Table | Operation | Notes |
 |-------|-----------|-------|
 | `audit_keywords` | DELETE (where source ≠ 'keyword_research') + INSERT | Preserves KeywordResearch-seeded rows. New rows tagged `source: 'ranked'` |
-| `audit_clusters` | DELETE + INSERT | ~30-80 topic clusters |
-| `audit_rollups` | DELETE + INSERT | 1 summary row |
+| `audit_clusters` | DELETE + INSERT | Preliminary clusters from `extractTopic()` — rebuilt in Phase 3d |
+| `audit_rollups` | DELETE + INSERT | Preliminary — rebuilt in Phase 3d |
 | `audit_snapshots` | INSERT | 1 (parsed research sections) |
 | `baseline_snapshots` | UPSERT | 1 (first sync only) |
 | `audits` | UPDATE | status='completed', completed_at |
 
-Each `audit_keywords` row includes revenue estimates: `delta_revenue_low/mid/high` computed from `delta_traffic × CR × ACV` at three tiers.
+Each `audit_keywords` row includes revenue estimates: `delta_revenue_low/mid/high` computed from `delta_traffic × CR × ACV` at three tiers. Near-miss filter: `is_brand=false AND intent≠navigational AND pos in [min,max] AND vol≥min_volume`.
+
+**Important:** Clusters built here use raw `extractTopic()` (5-word truncation) because `canonical_key` doesn't exist yet. Phase 3d rebuilds clusters after canonicalize provides clean keys.
 
 ---
 
@@ -194,9 +224,31 @@ Batches all `audit_keywords` (up to 250 per call) through Haiku for semantic gro
 
 **Near-me flagging:** After grouping, flags keywords containing "near me" with `is_near_me: true`. This supplements the flags already set by KeywordResearch on seeded keywords.
 
+**Post-canonicalize cleanup:** Clears `is_near_miss` (and zeroes revenue fields) for any keywords where canonicalize set `is_brand=true` or `intent_type=navigational`, since these shouldn't appear in striking distance opportunities.
+
 **Supabase writes:** `audit_keywords` UPDATE (canonical_key, canonical_topic, cluster, is_brand, intent_type, is_near_me)
 
 **Why before Competitors:** Clean canonical keys eliminate duplicate SERP calls (e.g., "plumber boise" and "plumber boise id" map to the same canonical_key).
+
+**Does NOT rebuild clusters.** Phase 3d handles that.
+
+---
+
+### Phase 3d: Rebuild Clusters — Post-Canonicalize Re-aggregation
+
+**Function:** `rebuildClustersAndRollups()` in sync-to-dashboard.ts | **No external APIs**
+
+**Invocation:** `npx tsx scripts/sync-to-dashboard.ts --domain <d> --user-email <e> --rebuild-clusters`
+
+**Why this exists:** Phase 3b builds clusters before canonical_key is set, producing one cluster per keyword variation (e.g., "air conditioner repair boise idaho" and "air conditioner repair boise" as separate clusters). After canonicalize assigns canonical_key, this phase re-aggregates using the clean keys so all AC repair variants merge into one "AC Repair" cluster.
+
+**Clustering key priority:** `canonical_key > cluster > topic > 'general'`
+
+**Supabase writes:**
+- `audit_clusters` — DELETE + INSERT (using canonical groupings)
+- `audit_rollups` — DELETE + INSERT (recalculated totals)
+
+**Filters:** Excludes `is_brand=true`, `intent_type=informational`, `intent_type=navigational` from clusters.
 
 ---
 
@@ -361,10 +413,11 @@ Cross-checks Gap's identified gaps against Michael's blueprint to verify coverag
 |-------|---------|------------|
 | `audits` | All agents, all syncs | Jim, sync-jim, sync-michael, sync-dwight |
 | `audit_keywords` | Canonicalize, Competitors, Gap, sync-jim, sync-michael | KeywordResearch (INSERT, source='keyword_research'), sync-jim (DELETE+INSERT, source='ranked'), Canonicalize (UPDATE), sync-michael (UPDATE cluster) |
-| `audit_clusters` | Gap, Michael | sync-jim (DELETE+INSERT) |
-| `audit_rollups` | — | sync-jim (DELETE+INSERT) |
-| `audit_assumptions` | sync-jim | — |
-| `ctr_models` | sync-jim | — |
+| `audit_clusters` | Gap, Michael | sync-jim (preliminary), rebuild-clusters Phase 3d (canonical, authoritative) |
+| `audit_rollups` | — | sync-jim (preliminary), rebuild-clusters Phase 3d (canonical, authoritative) |
+| `audit_assumptions` | sync-jim, rebuild-clusters | Dashboard `useCreateAudit` (primary), `ensureAssumptions()` in sync (fallback from benchmarks) |
+| `ctr_models` | sync-jim, rebuild-clusters | — (seeded) |
+| `benchmarks` | `ensureAssumptions()`, Dashboard `useCreateAudit` | — (seeded) |
 | `audit_snapshots` | Jim, Gap, sync-jim, sync-dwight, sync-michael | Jim, Dwight, Gap, sync-jim, sync-dwight, sync-michael |
 | `agent_runs` | — | All generation agents |
 | `audit_topic_competitors` | Competitors, Gap | Competitors (DELETE+INSERT) |

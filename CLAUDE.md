@@ -8,6 +8,8 @@ NanoClaw is a personal Claude assistant. Single Node.js process connects to What
 
 See [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) for architecture decisions and [docs/SECURITY.md](docs/SECURITY.md) for the trust model.
 
+**Before modifying pipeline code**, read [docs/PIPELINE.md](docs/PIPELINE.md) (authoritative phase contract — who owns what data) and [docs/DECISIONS.md](docs/DECISIONS.md) (why non-obvious choices were made). If a phase responsibility changes, update PIPELINE.md in the same commit.
+
 ## Development Commands
 
 ```bash
