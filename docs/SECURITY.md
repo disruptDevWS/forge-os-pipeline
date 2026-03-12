@@ -60,7 +60,18 @@ Messages and task operations are verified against group identity:
 | View all tasks | ✓ | Own only |
 | Manage other groups | ✓ | ✗ |
 
-### 5. Credential Handling
+### 5. Pipeline Server (External Access)
+
+The pipeline server (`src/pipeline-server.ts`, port 3847) is exposed to the internet so Supabase Edge Functions can trigger pipeline runs. Security measures:
+
+- **Bearer token auth** — Every request must include `Authorization: Bearer <PIPELINE_TRIGGER_SECRET>`. Requests without valid tokens receive 401.
+- **Input validation** — Domain and email formats are regex-validated before any action. Invalid payloads are rejected with 400.
+- **Duplicate guard** — An in-flight `Set<domain>` prevents concurrent pipeline runs for the same domain (409 on duplicate).
+- **No credential exposure** — The server never returns credentials, file contents, or internal state beyond success/error status.
+
+**Exposure surface:** Only three POST endpoints (`/trigger-pipeline`, `/scout-config`, `/scout-report`). All other methods/paths return 404. The server binds to `0.0.0.0:3847` — restrict at the firewall/router level to Supabase's IP ranges if needed.
+
+### 6. Credential Handling
 
 **Mounted Credentials:**
 - Claude auth tokens (filtered from `.env`, read-only)

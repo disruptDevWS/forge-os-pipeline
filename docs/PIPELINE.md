@@ -4,7 +4,14 @@
 
 Orchestrator: `./scripts/run-pipeline.sh <domain> <email> [seed_matrix.json] [competitor_urls] [--mode sales|full|prospect] [--prospect-config <path>]`
 
-Trigger: Dashboard `useCreateAudit` → `run-audit` Edge Function (thin trigger) → HTTP POST to NanoClaw pipeline server → `run-pipeline.sh`
+Trigger paths:
+- **New audit:** Dashboard `useCreateAudit` → `run-audit` Edge Function → HTTP POST to NanoClaw pipeline server → `run-pipeline.sh`
+- **Prospect conversion:** Dashboard `useConvertProspect` → creates audit + assumptions → `run-audit` Edge Function → same pipeline path
+- **Scout:** Dashboard Scout UI → `scout-config` Edge Function → NanoClaw pipeline server (`/scout-config` + `/trigger-pipeline` with `--mode prospect`)
+
+Edge Functions (deployed from [Lovable repo](https://github.com/disruptDevWS/market-position-audit-lovable)):
+- `run-audit` — validates audit, marks `running`, POSTs to `/trigger-pipeline`
+- `scout-config` — writes prospect config to disk, triggers scout, reads reports via `/scout-report`
 
 Core scripts:
 - `scripts/pipeline-generate.ts` — agent generation logic
@@ -15,8 +22,8 @@ Core scripts:
 
 | Table | Created By | Required Fields |
 |-------|-----------|----------------|
-| `audits` | Dashboard `useCreateAudit` | domain, service_key, market_city, market_state, geo_mode, market_geos, user_id |
-| `audit_assumptions` | Dashboard `useCreateAudit` (primary), `sync-to-dashboard.ts ensureAssumptions()` (fallback) | benchmark_id, ctr_model_id, cr_used_min/max/mid, acv_used_min/max/mid, target_ctr, near_miss_min/max_pos, min_volume |
+| `audits` | Dashboard `useCreateAudit` or `useConvertProspect` | domain, service_key, market_city, market_state, geo_mode, market_geos, user_id |
+| `audit_assumptions` | Dashboard `useCreateAudit` or `useConvertProspect` (primary), `sync-to-dashboard.ts ensureAssumptions()` (fallback) | benchmark_id, ctr_model_id, cr_used_min/max/mid, acv_used_min/max/mid, target_ctr, near_miss_min/max_pos, min_volume |
 | `benchmarks` | Seeded (one row per service vertical + 'other' fallback) | cr_min, cr_max, acv_min, acv_max |
 | `ctr_models` | Seeded (one row with is_default=true) | buckets JSON |
 
@@ -33,6 +40,12 @@ Phase 0 (Scout) ← prospect mode only, exits after completion
              Supabase → prospects (upsert)
       │
       ▼ (exits — full pipeline runs separately after conversion)
+
+--- Prospect Conversion (Dashboard) ---
+  useConvertProspect: prospect → audit INSERT (with geo_mode, market_geos)
+                      + audit_assumptions INSERT + prospect status='converted'
+                      → run-audit Edge Function → /trigger-pipeline
+  scope.json persists on disk for Phase 2 (KeywordResearch reads it as optional priors)
 
 Phase 1 (Dwight)
   PRODUCES:  internal_all.csv, AUDIT_REPORT.md, 20+ CSVs
@@ -524,6 +537,58 @@ published    → (manual, via dashboard)
 **Retry:** Michael includes structural validation (Executive Summary + Silo headings present) with one automatic retry if the output is incomplete.
 
 **Source preservation:** sync jim's DELETE preserves `source='keyword_research'` rows so KeywordResearch-seeded keywords survive re-syncs.
+
+---
+
+## Pipeline Server Infrastructure
+
+The NanoClaw pipeline server (`src/pipeline-server.ts`) is an HTTP server that Supabase Edge Functions call to trigger pipeline runs, write scout configs, and read scout reports.
+
+**Endpoints:**
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | `/trigger-pipeline` | Start a full/sales/prospect pipeline run |
+| POST | `/scout-config` | Write prospect-config.json to disk |
+| POST | `/scout-report` | Read scout markdown + scope.json |
+
+**Auth:** All endpoints require `Authorization: Bearer <PIPELINE_TRIGGER_SECRET>`.
+
+**Startup:** `npx tsx src/index.ts --pipeline-only` (skips WhatsApp, runs only the pipeline server). Production: `nanoclaw-pipeline.service` systemd unit.
+
+### Supabase Secrets
+
+| Secret | Value | Purpose |
+|--------|-------|---------|
+| `PIPELINE_BASE_URL` | `http://<public-ip>:3847` | Pipeline server base URL (edge functions append endpoint paths) |
+| `PIPELINE_TRIGGER_SECRET` | Bearer token | Shared secret between edge functions and pipeline server |
+| `DEFAULT_PIPELINE_EMAIL` | `matt@forgegrowth.ai` | Fallback email for pipeline trigger when no user JWT |
+
+Edge functions read `PIPELINE_BASE_URL` with fallback to `PIPELINE_TRIGGER_URL` (deprecated).
+
+### Public IP Considerations
+
+The pipeline server currently runs on a residential ISP connection. Supabase Edge Functions reach it via public IP + port 3847 (forwarded through EERO router).
+
+**Known risk:** ISP may reassign the public IP on DHCP lease renewal or router reboot. If the pipeline stops triggering:
+
+1. **Diagnose:** `curl -s ifconfig.me` on the NanoClaw host — compare against the `PIPELINE_BASE_URL` secret
+2. **Quick fix:** Update the Supabase secret: `supabase secrets set PIPELINE_BASE_URL=http://<new-ip>:3847 --project-ref hohuimkcpihdufunrzvg`
+3. **Permanent fix:** Replace the public IP with a Cloudflare Tunnel for a stable hostname:
+   ```bash
+   # Install cloudflared
+   curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o /usr/local/bin/cloudflared
+   chmod +x /usr/local/bin/cloudflared
+
+   # Create tunnel (one-time)
+   cloudflared tunnel login
+   cloudflared tunnel create nanoclaw-pipeline
+   cloudflared tunnel route dns nanoclaw-pipeline pipeline.forgegrowth.ai
+
+   # Run tunnel (point to local pipeline server)
+   cloudflared tunnel run --url http://localhost:3847 nanoclaw-pipeline
+   ```
+   Then update the secret to `PIPELINE_BASE_URL=https://pipeline.forgegrowth.ai` — stable across IP changes, reboots, and ISP migrations.
 
 ---
 

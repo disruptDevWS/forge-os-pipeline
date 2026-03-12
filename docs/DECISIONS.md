@@ -74,3 +74,15 @@ Oscar's `gatherBrief()` had a dual-source pattern: query `execution_pages` from 
 **2026-03-12: Pam logs warnings for missing enrichment files**
 
 `generate-brief.ts` had empty catch blocks around `architecture_blueprint.md` and `research_summary.md` reads — when these files were absent, the brief was generated silently without silo structure or striking distance context. Added WARNING logs after each try-catch so operators can see which enrichments are missing. No behavior change — files remain optional.
+
+**2026-03-12: PIPELINE_BASE_URL replaces PIPELINE_TRIGGER_URL**
+
+Edge functions (`run-audit`, `scout-config`) were inconsistent: `run-audit` used `PIPELINE_TRIGGER_URL` as a full endpoint URL, while `scout-config` treated it as a base URL and appended paths. Standardized to `PIPELINE_BASE_URL` — edge functions append `/trigger-pipeline`, `/scout-config`, `/scout-report` in code. Both functions fall back to `PIPELINE_TRIGGER_URL` for backward compatibility. This means one Supabase secret serves all three pipeline server endpoints.
+
+**2026-03-12: Pipeline server exposed via public IP (Cloudflare Tunnel recommended)**
+
+Supabase Edge Functions need to reach the NanoClaw pipeline server running on a residential ISP connection. Currently exposed via public IP + port 3847 forwarded through EERO router. This works but the IP may change on DHCP lease renewal. If pipelines stop triggering, check `curl -s ifconfig.me` against the `PIPELINE_BASE_URL` secret. Recommended permanent fix: Cloudflare Tunnel with a stable hostname (e.g., `pipeline.forgegrowth.ai`), which survives IP changes and adds TLS.
+
+**2026-03-12: Convert-to-client wired end-to-end (Scout → Pipeline)**
+
+Prospect conversion flow: Dashboard `useConvertProspect` creates an `audits` row (with `geo_mode` and `market_geos` from the prospect — required by `resolveGeoScope()`), creates `audit_assumptions`, updates prospect `status='converted'`, then invokes `run-audit` edge function. The edge function sets audit `status='running'` and POSTs to `/trigger-pipeline`. KeywordResearch (Phase 2) automatically finds Scout's `scope.json` on disk and pre-seeds the keyword matrix with gap keywords. No manual data migration needed between prospect and audit phases.
