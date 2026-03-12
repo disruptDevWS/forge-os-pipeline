@@ -30,3 +30,35 @@ NanoClaw's main process connects to WhatsApp via baileys, which blocks startup i
 **2026-03-10: 409 from pipeline server treated as success in run-audit Edge Function**
 
 When the same domain is triggered twice (user clicks retry, or race condition), the pipeline server returns 409 (already running). The edge function initially treated this as a fatal error, marking the audit as failed. Changed to treat 409 as success with `status: "pipeline_already_running"`.
+
+**2026-03-11: Scout (Phase 0) uses JSON config, not YAML**
+
+Scout takes a `prospect-config.json` file as input rather than CLI flags or YAML. JSON was chosen because: (1) the pipeline already uses JSON everywhere (seed_matrix.json, ranked_keywords.json, scope.json), (2) no YAML dependency exists in the project, (3) config files are version-controlled per-prospect in `audits/{domain}/prospect-config.json` alongside other artifacts.
+
+**2026-03-11: Scout skips resolveAudit — uses prospects table instead**
+
+Scout runs before a client is onboarded, so no `audits` row exists. Instead of creating a throwaway audit record, Scout uses a separate `prospects` table with its own lifecycle (discovery → scouted → converted). The `converted_to_audit_id` FK links a prospect to its eventual audit after conversion. This keeps the `audits` table clean for actual paying clients.
+
+**2026-03-11: Lightweight SF crawl for Scout (Internal:All only)**
+
+Scout's Screaming Frog crawl exports only `Internal:All` — no semantic config, no bulk exports, no reports. This makes the crawl 5–10x faster than Dwight's comprehensive crawl (15 export tabs + 9 bulk exports). If SF fails entirely (e.g., domain is unreachable), Scout gracefully falls back to DataForSEO-only mode instead of aborting.
+
+**2026-03-11: Prospect mode exits after Scout — no full pipeline**
+
+When `run-pipeline.sh` is called with `--mode prospect`, only Phase 0 (Scout) runs, then the script exits cleanly. The full pipeline (Phases 1–6c) runs separately after the prospect converts to a client. This prevents wasting compute/API budget on prospects that may never convert.
+
+**2026-03-11: Geo-flexibility via geo_mode + market_geos on audits table**
+
+The pipeline originally hardcoded one geographic model: `market_state` (single state) + `market_city` (comma-separated cities). This breaks for course providers, regional businesses, and multi-state expansion plays where the unit of geography is a state or metro. Added `geo_mode` (`city`|`metro`|`state`|`national`) and `market_geos` (JSONB) columns. A `resolveGeoScope(audit)` helper replaces all direct `market_city`/`market_state` reads — returns `{ mode, locales[], state, label }` ready for query construction. Existing `market_city`/`market_state` columns are NOT removed (backward compat with Dashboard code).
+
+**2026-03-11: resolveGeoScope throws on null geo_mode — no silent defaults**
+
+If an audit row has `geo_mode=NULL` (should not happen after migration backfill, but could occur from manual inserts), `resolveGeoScope()` throws a loud error instead of silently defaulting to city mode. This prevents accidental misclassification of geographic scope. The backfill `UPDATE` in the migration sets all existing rows to `geo_mode='city'`.
+
+**2026-03-11: Mode-aware MATRIX_CAPS for KeywordResearch**
+
+`MAX_KEYWORD_MATRIX_SIZE` was a flat cap of 200 for all audits. For state mode (e.g., 4 states × 15 services × 4 intent variants), the matrix can grow significantly. Replaced with per-mode caps: city=200, metro=300, state=500, national=200 (no geo multiplier). Truncation logs a warning but does not throw.
+
+**2026-03-11: generateKeywordCandidates handles state/national modes**
+
+For state mode, `locales` are state names (e.g., "Idaho", "Washington") — the `{service} {locale} {state}` variant is skipped to avoid "phlebotomy training Idaho Idaho". For national mode, `locales` is empty — candidates are `{service}` without any geo modifier.

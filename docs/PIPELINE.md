@@ -2,7 +2,7 @@
 
 > **This is a contract.** Every phase declares what it reads, what it writes, and what must exist before it runs. When a phase's responsibility changes, update this file in the same commit. See also: `docs/DECISIONS.md` for the "why" behind non-obvious choices.
 
-Orchestrator: `./scripts/run-pipeline.sh <domain> <email> [seed_matrix.json] [competitor_urls] [--mode sales|full]`
+Orchestrator: `./scripts/run-pipeline.sh <domain> <email> [seed_matrix.json] [competitor_urls] [--mode sales|full|prospect] [--prospect-config <path>]`
 
 Trigger: Dashboard `useCreateAudit` → `run-audit` Edge Function (thin trigger) → HTTP POST to NanoClaw pipeline server → `run-pipeline.sh`
 
@@ -15,7 +15,7 @@ Core scripts:
 
 | Table | Created By | Required Fields |
 |-------|-----------|----------------|
-| `audits` | Dashboard `useCreateAudit` | domain, service_key, market_city, market_state, user_id |
+| `audits` | Dashboard `useCreateAudit` | domain, service_key, market_city, market_state, geo_mode, market_geos, user_id |
 | `audit_assumptions` | Dashboard `useCreateAudit` (primary), `sync-to-dashboard.ts ensureAssumptions()` (fallback) | benchmark_id, ctr_model_id, cr_used_min/max/mid, acv_used_min/max/mid, target_ctr, near_miss_min/max_pos, min_volume |
 | `benchmarks` | Seeded (one row per service vertical + 'other' fallback) | cr_min, cr_max, acv_min, acv_max |
 | `ctr_models` | Seeded (one row with is_default=true) | buckets JSON |
@@ -27,6 +27,13 @@ The `run-audit` Edge Function writes **nothing** to keyword/cluster/rollup table
 ## Data Flow Overview
 
 ```
+Phase 0 (Scout) ← prospect mode only, exits after completion
+  READS:     prospect-config.json (local file)
+  PRODUCES:  scout-{domain}-{date}.md, scope.json
+             Supabase → prospects (upsert)
+      │
+      ▼ (exits — full pipeline runs separately after conversion)
+
 Phase 1 (Dwight)
   PRODUCES:  internal_all.csv, AUDIT_REPORT.md, 20+ CSVs
              Copies internal_all.csv + semantically_similar_report.csv → architecture/
@@ -102,6 +109,45 @@ Phase 6c (sync dwight)
 ---
 
 ## Phase Details
+
+### Phase 0: Scout — Prospect Discovery (prospect mode only)
+
+**Function:** `runScout()` | **Models:** Claude Haiku (topic extraction) + Claude Sonnet (report generation)
+
+**Invocation:** `npx tsx scripts/pipeline-generate.ts scout --domain <domain> --prospect-config <path>` or via `run-pipeline.sh --mode prospect --prospect-config <path>`
+
+**Prerequisites:** `prospect-config.json` file with `name`, `domain`, `target_geos`, `topic_patterns`, `state`. No audit record required — uses `prospects` table instead.
+
+**Steps:**
+1. **Lightweight SF crawl** — `Internal:All` only (no semantic config, no bulk exports). Falls back to DataForSEO-only mode if SF fails.
+2. **Topic extraction** — Haiku reads crawl data + topic patterns → 5–15 canonical topics. If no crawl, extracts from ranked keywords.
+3. **Current rankings** — DataForSEO `ranked_keywords/live` for the domain. Falls back to `buildSyntheticRankedKeywords()` if <50 results.
+4. **Opportunity map** — DataForSEO bulk volume for `topic × geo` candidates.
+5. **Gap matrix** — Cross-references rankings vs opportunity: defending (1–10), weak (11–30), gap (not ranking).
+6. **Report + scope.json** — Sonnet generates scout report; scope.json is Jim-compatible seed data.
+
+**External APIs:**
+
+| API | Endpoint | Purpose |
+|-----|----------|---------|
+| Screaming Frog CLI | `--crawl --headless --export-tabs Internal:All` | Lightweight page inventory |
+| DataForSEO Ranked Keywords | `/v3/dataforseo_labs/google/ranked_keywords/live` | Current organic rankings |
+| DataForSEO Bulk Volume | `/v3/keywords_data/google_ads/search_volume/live` | Opportunity map volume |
+| Claude CLI (haiku) | `callClaude()` sync | Topic extraction |
+| Claude CLI (sonnet) | `callClaudeAsync()` async | Scout report generation |
+
+**Budget:** `SCOUT_SESSION_BUDGET` env var (default $2.00). Each API call checks remaining budget before proceeding.
+
+**Output files** (relative to `audits/{domain}/`):
+- `scout/{date}/scout-{domain}-{date}.md` — Full scout report
+- `scout/{date}/scope.json` — Jim-compatible seed matrix
+- `scout/{date}/internal_all.csv` — Crawl data (if SF succeeded)
+
+**Supabase writes:** `prospects` (INSERT or UPDATE status/scout_run_at/scout_output_path)
+
+**Important:** Scout exits after completion. The full pipeline (Phases 1–6c) runs separately after the prospect converts to a client.
+
+---
 
 ### Phase 1: Dwight — Technical Crawl + Audit Report
 
@@ -396,6 +442,7 @@ Cross-checks Gap's identified gaps against Michael's blueprint to verify coverag
 
 | Phase | Agent | Model | Method | Purpose |
 |-------|-------|-------|--------|---------|
+| 0 | Scout | **haiku** + **sonnet** | `callClaude()` + `callClaudeAsync()` | Topic extraction (haiku) + scout report (sonnet) |
 | 1 | Dwight | **sonnet** | `callClaudeAsync()` | AUDIT_REPORT.md |
 | 2 | KeywordResearch | **haiku** + **sonnet** | `callClaudeAsync()` | Service extraction (haiku) + synthesis (sonnet) |
 | 3 | Jim | **sonnet** | `callClaudeAsync()` | research_summary.md |
@@ -429,6 +476,7 @@ Cross-checks Gap's identified gaps against Michael's blueprint to verify coverag
 | `execution_pages` | sync-michael | sync-michael (UPSERT) |
 | `baseline_snapshots` | sync-jim | sync-jim (UPSERT, first run only) |
 | `audit_coverage_validation` | — | Validator (DELETE+INSERT) |
+| `prospects` | Scout | Scout (INSERT/UPDATE) |
 
 ## Disk Artifact Reference
 
@@ -449,3 +497,5 @@ All paths relative to `audits/{domain}/`. Cross-phase reads use `resolveArtifact
 | `research/{date}/content_gap_analysis.md` | Gap | Michael, Validator |
 | `research/{date}/coverage_validation.md` | Validator | — (review) |
 | `architecture/{date}/architecture_blueprint.md` | Michael | sync-michael, Validator |
+| `scout/{date}/scout-{domain}-{date}.md` | Scout | — (review) |
+| `scout/{date}/scope.json` | Scout | — (Jim seed input) |

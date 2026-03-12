@@ -45,35 +45,45 @@
 # All phases run synchronously. No NanoClaw, Docker, or WhatsApp dependency.
 #
 # Usage:
-#   ./scripts/run-pipeline.sh <domain> <email> [seed_matrix.json] [competitor_urls] [--mode sales|full]
+#   ./scripts/run-pipeline.sh <domain> <email> [seed_matrix.json] [competitor_urls] [--mode sales|full|prospect] [--prospect-config <path>]
 #   ./scripts/run-pipeline.sh foxhvacpro.com matt@forgegrowth.ai
 #   ./scripts/run-pipeline.sh foxhvacpro.com matt@forgegrowth.ai --mode sales
 #   ./scripts/run-pipeline.sh newsite.com matt@forgegrowth.ai audits/newsite.com/seed_matrix.json "comp1.com,comp2.com"
+#   ./scripts/run-pipeline.sh prospect.com matt@forgegrowth.ai --mode prospect --prospect-config audits/prospect.com/prospect-config.json
 
 set -euo pipefail
 
-DOMAIN="${1:?Usage: ./scripts/run-pipeline.sh <domain> <email> [seed_matrix.json] [competitor_urls] [--mode sales|full]}"
-EMAIL="${2:?Usage: ./scripts/run-pipeline.sh <domain> <email> [seed_matrix.json] [competitor_urls] [--mode sales|full]}"
+DOMAIN="${1:?Usage: ./scripts/run-pipeline.sh <domain> <email> [seed_matrix.json] [competitor_urls] [--mode sales|full|prospect] [--prospect-config <path>]}"
+EMAIL="${2:?Usage: ./scripts/run-pipeline.sh <domain> <email> [seed_matrix.json] [competitor_urls] [--mode sales|full|prospect] [--prospect-config <path>]}"
 SEED_MATRIX="${3:-}"
 COMPETITOR_URLS="${4:-}"
 DATE=$(date +%Y-%m-%d)
 
-# Parse --mode flag from any position
+# Parse --mode and --prospect-config flags from any position
 MODE="full"
+PROSPECT_CONFIG=""
+NEXT_FLAG=""
 for i in "$@"; do
   if [[ "$i" == "--mode" ]]; then
-    shift_next=true
+    NEXT_FLAG="mode"
     continue
   fi
-  if [[ "${shift_next:-}" == "true" ]]; then
+  if [[ "$i" == "--prospect-config" ]]; then
+    NEXT_FLAG="prospect-config"
+    continue
+  fi
+  if [[ "$NEXT_FLAG" == "mode" ]]; then
     MODE="$i"
-    shift_next=false
+    NEXT_FLAG=""
+  elif [[ "$NEXT_FLAG" == "prospect-config" ]]; then
+    PROSPECT_CONFIG="$i"
+    NEXT_FLAG=""
   fi
 done
 
-# Clear positional args that were actually --mode flags
-[[ "$SEED_MATRIX" == "--mode" ]] && SEED_MATRIX=""
-[[ "$COMPETITOR_URLS" == "--mode" || "$COMPETITOR_URLS" == "sales" || "$COMPETITOR_URLS" == "full" ]] && COMPETITOR_URLS=""
+# Clear positional args that were actually flags
+[[ "$SEED_MATRIX" == "--mode" || "$SEED_MATRIX" == "--prospect-config" ]] && SEED_MATRIX=""
+[[ "$COMPETITOR_URLS" == "--mode" || "$COMPETITOR_URLS" == "sales" || "$COMPETITOR_URLS" == "full" || "$COMPETITOR_URLS" == "--prospect-config" ]] && COMPETITOR_URLS=""
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
@@ -83,6 +93,22 @@ MODE_ARGS=""
 [[ "$MODE" != "full" ]] && MODE_ARGS="--mode $MODE"
 
 echo "=== Post-Audit Pipeline: $DOMAIN ($DATE) [mode=$MODE] ==="
+
+# ─── Phase 0: Scout (Prospect Discovery) ─────────────────────
+# In prospect mode, only Scout runs — skips the full pipeline.
+if [[ "$MODE" = "prospect" ]]; then
+  if [[ -z "$PROSPECT_CONFIG" ]]; then
+    echo "ERROR: --prospect-config is required for prospect mode"
+    exit 1
+  fi
+  echo ""
+  echo "--- Phase 0: Scout (Prospect Discovery) ---"
+  npx tsx scripts/pipeline-generate.ts scout \
+    --domain "$DOMAIN" --prospect-config "$PROSPECT_CONFIG"
+  echo ""
+  echo "=== Scout Complete ==="
+  exit 0
+fi
 
 # Helper: update dashboard pipeline status (non-fatal)
 update_status() {

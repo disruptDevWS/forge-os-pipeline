@@ -53,20 +53,21 @@ function loadEnv(): Record<string, string> {
 // ============================================================
 
 interface CliArgs {
-  subcommand: 'jim' | 'competitors' | 'michael' | 'dwight' | 'gap' | 'canonicalize' | 'validator' | 'keyword-research';
+  subcommand: 'jim' | 'competitors' | 'michael' | 'dwight' | 'gap' | 'canonicalize' | 'validator' | 'keyword-research' | 'scout';
   domain: string;
   userEmail?: string;
   date?: string;
   seedMatrix?: string;
   competitorUrls?: string;
+  prospectConfig?: string;
   mode: 'sales' | 'full';
 }
 
 function parseArgs(): CliArgs {
   const args = process.argv.slice(2);
   const subcommand = args[0] as CliArgs['subcommand'];
-  if (!['jim', 'competitors', 'michael', 'dwight', 'gap', 'canonicalize', 'validator', 'keyword-research'].includes(subcommand)) {
-    console.error('Usage: npx tsx scripts/pipeline-generate.ts <jim|competitors|gap|michael|dwight|canonicalize|validator|keyword-research> --domain <domain> --user-email <email> [--date YYYY-MM-DD] [--mode sales|full]');
+  if (!['jim', 'competitors', 'michael', 'dwight', 'gap', 'canonicalize', 'validator', 'keyword-research', 'scout'].includes(subcommand)) {
+    console.error('Usage: npx tsx scripts/pipeline-generate.ts <jim|competitors|gap|michael|dwight|canonicalize|validator|keyword-research|scout> --domain <domain> --user-email <email> [--date YYYY-MM-DD] [--mode sales|full] [--prospect-config <path>]');
     process.exit(1);
   }
 
@@ -96,6 +97,7 @@ function parseArgs(): CliArgs {
     date: flags.date,
     seedMatrix: flags['seed-matrix'],
     competitorUrls: flags['competitor-urls'],
+    prospectConfig: flags['prospect-config'],
     mode,
   };
 }
@@ -256,6 +258,72 @@ async function resolveAudit(sb: SupabaseClient, domain: string, userEmail: strin
 }
 
 // ============================================================
+// Geo scope resolution — replaces direct market_city/market_state reads
+// ============================================================
+
+interface GeoScope {
+  mode: 'city' | 'metro' | 'state' | 'national';
+  locales: string[];  // flat list ready for query construction
+  state: string;      // separate state qualifier (empty for state/national modes)
+  label: string;      // human-readable e.g. "Idaho (Boise, Nampa)" or "WA, OR, CA, UT"
+}
+
+function resolveGeoScope(audit: any): GeoScope {
+  const geoMode = audit.geo_mode;
+  if (!geoMode) {
+    throw new Error(
+      `Audit ${audit.id ?? 'unknown'} (${audit.domain ?? 'unknown'}) has no geo_mode set. ` +
+      `Set geo_mode explicitly on this audit before running the pipeline.`
+    );
+  }
+
+  const geos = audit.market_geos;
+
+  switch (geoMode) {
+    case 'city': {
+      // Fall back to market_city.split(',') if market_geos is null (pre-migration rows)
+      const cities = geos?.cities
+        ?? (audit.market_city ?? '').split(',').map((s: string) => s.trim()).filter(Boolean);
+      const state = geos?.state ?? audit.market_state ?? '';
+      return {
+        mode: 'city',
+        locales: cities,
+        state,
+        label: state ? `${state} (${cities.join(', ')})` : cities.join(', '),
+      };
+    }
+    case 'metro': {
+      const metros = geos?.metros ?? [];
+      const state = geos?.state ?? audit.market_state ?? '';
+      return {
+        mode: 'metro',
+        locales: metros,
+        state,
+        label: state ? `${state} (${metros.join(', ')})` : metros.join(', '),
+      };
+    }
+    case 'state': {
+      const states = geos?.states ?? [];
+      return {
+        mode: 'state',
+        locales: states,
+        state: '',
+        label: states.join(', '),
+      };
+    }
+    case 'national':
+      return {
+        mode: 'national',
+        locales: [],
+        state: '',
+        label: 'National',
+      };
+    default:
+      throw new Error(`Unknown geo_mode: ${geoMode}`);
+  }
+}
+
+// ============================================================
 // Service keyword seeds — used for auto-supplementing thin ranked-keywords results
 // ============================================================
 
@@ -352,22 +420,36 @@ function generateKeywordCandidates(matrix: SeedMatrix): string[] {
   const { business_type, services, locales, state } = matrix;
   const candidates = new Set<string>();
 
-  for (const service of services) {
-    // Near-me variant (no locale)
-    candidates.add(`${service} near me`);
+  if (locales.length === 0) {
+    // National mode — no geo modifier
+    for (const service of services) {
+      candidates.add(service);
+      candidates.add(`${service} near me`);
+      candidates.add(`best ${service}`);
+      candidates.add(`${service} cost`);
+    }
+    candidates.add(business_type);
+    candidates.add(`best ${business_type}`);
+  } else {
+    for (const service of services) {
+      // Near-me variant (no locale)
+      candidates.add(`${service} near me`);
+
+      for (const locale of locales) {
+        candidates.add(`${service} ${locale}`);
+        // Only add "{service} {locale} {state}" when state is a separate qualifier
+        // (skip for state mode where locales ARE states)
+        if (state) candidates.add(`${service} ${locale} ${state}`);
+        candidates.add(`${service} cost ${locale}`);
+        candidates.add(`${service} services ${locale}`);
+      }
+    }
 
     for (const locale of locales) {
-      candidates.add(`${service} ${locale}`);
-      candidates.add(`${service} ${locale} ${state}`);
-      candidates.add(`${service} cost ${locale}`);
-      candidates.add(`${service} services ${locale}`);
+      candidates.add(`${business_type} ${locale}`);
+      if (state) candidates.add(`${business_type} ${locale} ${state}`);
+      candidates.add(`best ${business_type} ${locale}`);
     }
-  }
-
-  for (const locale of locales) {
-    candidates.add(`${business_type} ${locale}`);
-    candidates.add(`${business_type} ${locale} ${state}`);
-    candidates.add(`best ${business_type} ${locale}`);
   }
 
   return [...candidates].map((k) => k.toLowerCase());
@@ -704,8 +786,7 @@ async function runJim(sb: SupabaseClient, auditId: string, domain: string, audit
     if (existingCount < MIN_RANKED_KEYWORDS_THRESHOLD) {
       const serviceKey = audit.service_key ?? '';
       const customLabel = audit.custom_service_label ?? '';
-      const marketCity = audit.market_city ?? '';
-      const marketState = audit.market_state ?? '';
+      const geoScope = resolveGeoScope(audit);
 
       // Get service seed terms — try exact key, then custom label as fallback
       let serviceTerms = SERVICE_KEYWORD_SEEDS[serviceKey];
@@ -714,17 +795,15 @@ async function runJim(sb: SupabaseClient, auditId: string, domain: string, audit
         serviceTerms = [customLabel.toLowerCase()];
       }
 
-      if (serviceTerms && marketCity && marketState) {
-        // Parse comma-separated locales from market_city
-        const locales = marketCity.split(',').map((l: string) => l.trim()).filter(Boolean);
-        console.log(`  Low keyword count (${existingCount} < ${MIN_RANKED_KEYWORDS_THRESHOLD}) — auto-supplementing from ${serviceTerms.length} service terms × ${locales.length} locale(s)`);
+      if (serviceTerms && (geoScope.locales.length > 0 || geoScope.mode === 'national')) {
+        console.log(`  Low keyword count (${existingCount} < ${MIN_RANKED_KEYWORDS_THRESHOLD}) — auto-supplementing from ${serviceTerms.length} service terms × ${geoScope.locales.length} locale(s) (${geoScope.mode} mode)`);
 
         // Build mini seed matrix and generate candidates
         const miniMatrix: SeedMatrix = {
           business_type: customLabel || serviceKey.replace(/_/g, ' '),
           services: serviceTerms,
-          locales,
-          state: marketState,
+          locales: geoScope.locales,
+          state: geoScope.state,
         };
         const candidates = generateKeywordCandidates(miniMatrix);
 
@@ -770,7 +849,7 @@ async function runJim(sb: SupabaseClient, auditId: string, domain: string, audit
           }
         }
       } else {
-        console.log(`  Low keyword count (${existingCount}) but no service_key/market_city metadata to supplement`);
+        console.log(`  Low keyword count (${existingCount}) but no service_key or geo metadata to supplement`);
       }
     }
   }
@@ -841,7 +920,7 @@ async function runJim(sb: SupabaseClient, auditId: string, domain: string, audit
     ? `\nNOTE: This is a NEW SITE with no existing organic rankings. All keyword data represents the target keyword universe derived from a service-locale matrix, not current ranking performance. Position data shows synthetic rank 100 (unranked). Focus analysis on: keyword universe quality, volume distribution, competitive landscape from competitors data, and prioritized content opportunities.\n`
     : '';
   const autoSupplementNote = wasAutoSupplemented
-    ? `\nIMPORTANT: This domain has very low organic visibility (only ${organicKeywords.length} ranked keywords). The dataset has been supplemented with ${supplementedKeywords.length} high-opportunity target keywords for the ${audit.service_key?.replace(/_/g, ' ') ?? 'unknown'} industry in ${audit.market_city ?? 'unknown'}, ${audit.market_state ?? ''}. Keywords with Position = 100 are UNRANKED opportunity targets, not current rankings. Your analysis MUST focus on these opportunity keywords — evaluate their volume, CPC, competitive difficulty, and prioritize content recommendations around the highest-value targets. Do NOT focus primarily on the few branded/navigational terms the site currently ranks for.\n`
+    ? `\nIMPORTANT: This domain has very low organic visibility (only ${organicKeywords.length} ranked keywords). The dataset has been supplemented with ${supplementedKeywords.length} high-opportunity target keywords for the ${audit.service_key?.replace(/_/g, ' ') ?? 'unknown'} industry in ${resolveGeoScope(audit).label}. Keywords with Position = 100 are UNRANKED opportunity targets, not current rankings. Your analysis MUST focus on these opportunity keywords — evaluate their volume, CPC, competitive difficulty, and prioritize content recommendations around the highest-value targets. Do NOT focus primarily on the few branded/navigational terms the site currently ranks for.\n`
     : '';
   const salesModeNote = mode === 'sales'
     ? `\nSALES MODE — Produce a condensed report for a sales prospect. Follow these overrides:
@@ -1089,10 +1168,11 @@ async function runMichael(sb: SupabaseClient, auditId: string, domain: string, r
   // --- Supabase: audit metadata + clusters (has revenue estimates from syncJim) ---
   const { data: audit } = await sb
     .from('audits')
-    .select('domain, service_key, market_city, market_state')
+    .select('id, domain, service_key, geo_mode, market_geos, market_city, market_state')
     .eq('id', auditId)
     .single();
   if (!audit) throw new Error('Audit metadata not found');
+  const michaelGeo = resolveGeoScope(audit);
 
   const { data: clusterData } = await sb
     .from('audit_clusters')
@@ -1228,7 +1308,7 @@ ${semanticSummary.rows}`;
 YOUR ENTIRE RESPONSE IS THE BLUEPRINT. Output ONLY the markdown content of architecture_blueprint.md — start with the "## Executive Summary" heading. Do NOT narrate, summarize what you did, or describe the file. Do NOT wrap in code fences. Just output the blueprint content directly.
 
 ## Task
-Generate a complete site architecture blueprint for ${audit.domain} (${audit.service_key} in ${audit.market_city}, ${audit.market_state}).
+Generate a complete site architecture blueprint for ${audit.domain} (${audit.service_key} in ${michaelGeo.label}).
 
 ${researchSummary ? `## Jim's Research Summary (Foundational Search Intelligence)\n${researchSummary}\n` : ''}
 ${keywordSection ? `${keywordSection}\n` : ''}
@@ -1383,13 +1463,12 @@ async function runCanonicalize(sb: SupabaseClient, auditId: string, domain: stri
   // Fetch audit metadata for context
   const { data: auditRow } = await sb
     .from('audits')
-    .select('service_key, market_city, market_state')
+    .select('id, domain, service_key, geo_mode, market_geos, market_city, market_state')
     .eq('id', auditId)
     .single();
   const serviceKey = auditRow?.service_key ?? '';
-  const city = auditRow?.market_city ?? '';
-  const state = auditRow?.market_state ?? '';
-  const locationCtx = [city, state].filter(Boolean).join(', ');
+  const canonGeo = resolveGeoScope(auditRow);
+  const locationCtx = canonGeo.label;
 
   // Fetch all keywords for this audit
   const { data: kwData, error: kwErr } = await sb
@@ -1721,12 +1800,13 @@ async function runCompetitors(sb: SupabaseClient, auditId: string, domain: strin
   // Fetch the audit's service_key for industry context
   const { data: auditMeta } = await sb
     .from('audits')
-    .select('service_key, market_city, market_state')
+    .select('id, domain, service_key, geo_mode, market_geos, market_city, market_state')
     .eq('id', auditId)
     .single();
 
   const serviceKey = (auditMeta as any)?.service_key ?? 'unknown';
-  const market = [(auditMeta as any)?.market_city, (auditMeta as any)?.market_state].filter(Boolean).join(', ');
+  const compGeo = resolveGeoScope(auditMeta);
+  const market = compGeo.label;
 
   console.log(`  Classifying ${uniqueDomains.length} competitor domains (industry: ${serviceKey}, market: ${market})...`);
 
@@ -2521,8 +2601,13 @@ IMPORTANT:
 // Phase 2: Keyword Research — service × city × intent matrix
 // ============================================================
 
-// Maximum keyword candidates to send to DataForSEO bulk volume API
-const MAX_KEYWORD_MATRIX_SIZE = 200;
+// Maximum keyword candidates to send to DataForSEO bulk volume API (per geo_mode)
+const MATRIX_CAPS: Record<string, number> = {
+  city: 200,
+  metro: 300,
+  state: 500,
+  national: 200,
+};
 
 async function runKeywordResearch(sb: SupabaseClient, auditId: string, domain: string, researchDate?: string) {
   const env = loadEnv();
@@ -2550,12 +2635,11 @@ async function runKeywordResearch(sb: SupabaseClient, auditId: string, domain: s
 
   const serviceKey = auditRow.service_key ?? '';
   const customLabel = auditRow.custom_service_label ?? '';
-  const marketCity = auditRow.market_city ?? '';
-  const marketState = auditRow.market_state ?? '';
+  const kwGeo = resolveGeoScope(auditRow);
   const industryLabel = customLabel || serviceKey.replace(/_/g, ' ') || 'local service';
 
   // --- Step 1: Extract services + locations via LLM ---
-  const extractionPrompt = `You are analyzing a technical SEO audit report for a ${industryLabel} business${marketCity ? ` in ${marketCity}, ${marketState}` : ''}.
+  const extractionPrompt = `You are analyzing a technical SEO audit report for a ${industryLabel} business${kwGeo.label ? ` in ${kwGeo.label}` : ''}.
 
 Extract two lists from the report below:
 
@@ -2662,8 +2746,12 @@ ${reportContent}`;
     matrix.push({ keyword: `${svcLower} near me`, service, city: '', intent: 'commercial', is_near_me: true, priority: priorityCounter++ });
   }
 
-  // Cap at MAX_KEYWORD_MATRIX_SIZE
-  const cappedMatrix = matrix.sort((a, b) => a.priority - b.priority).slice(0, MAX_KEYWORD_MATRIX_SIZE);
+  // Cap at mode-aware limit
+  const matrixCap = MATRIX_CAPS[kwGeo.mode] ?? 200;
+  const cappedMatrix = matrix.sort((a, b) => a.priority - b.priority).slice(0, matrixCap);
+  if (matrix.length > matrixCap) {
+    console.log(`  [KeywordResearch] Matrix truncated: ${matrix.length} → ${matrixCap} keywords (geo_mode: ${kwGeo.mode})`);
+  }
   console.log(`  Matrix: ${matrix.length} total candidates → capped to ${cappedMatrix.length}`);
 
   // --- Step 3: Validate with DataForSEO ---
@@ -2986,6 +3074,622 @@ function buildCoverageValidationMd(domain: string, validation: { coverage: any[]
 }
 
 // ============================================================
+// Phase 0: Scout — Pre-pipeline prospect discovery
+// ============================================================
+
+interface ProspectConfig {
+  name: string;
+  domain: string;
+  geo_type: string;
+  target_geos: Array<{ state: string; metros: string[] }>;
+  topic_patterns: string[];
+  state: string;
+}
+
+interface ProspectRecord {
+  id: string;
+  name: string;
+  domain: string;
+  geo_type: string;
+  target_geos: any;
+  status: string;
+}
+
+const SCOUT_SESSION_BUDGET = parseFloat(process.env.SCOUT_SESSION_BUDGET || '2.00');
+
+function logDataForSeoCost(endpoint: string, cost: number): void {
+  const logPath = path.join(AUDITS_BASE, '.dataforseo_cost.log');
+  const line = `${new Date().toISOString()} | ${endpoint} | $${cost.toFixed(4)}\n`;
+  fs.appendFileSync(logPath, line);
+}
+
+async function resolveProspect(sb: SupabaseClient, domain: string, config: ProspectConfig): Promise<ProspectRecord> {
+  // Check if prospect already exists
+  const { data: existing } = await sb
+    .from('prospects')
+    .select('*')
+    .eq('domain', domain)
+    .maybeSingle();
+
+  if (existing) {
+    console.log(`  Existing prospect: ${existing.id} (status=${existing.status})`);
+    return existing as ProspectRecord;
+  }
+
+  // Create new prospect
+  const { data: created, error } = await sb
+    .from('prospects')
+    .insert({
+      name: config.name,
+      domain: config.domain,
+      geo_type: config.geo_type,
+      target_geos: config.target_geos,
+      status: 'discovery',
+    })
+    .select()
+    .single();
+
+  if (error) throw new Error(`Failed to create prospect: ${error.message}`);
+  console.log(`  Created prospect: ${created.id}`);
+  return created as ProspectRecord;
+}
+
+async function runScout(sb: SupabaseClient, domain: string, prospectConfigPath: string) {
+  const env = loadEnv();
+  const date = todayStr();
+  const scoutDir = path.join(AUDITS_BASE, domain, 'scout', date);
+  fs.mkdirSync(scoutDir, { recursive: true });
+
+  console.log(`\n=== Scout (Phase 0): ${domain} ===`);
+  console.log(`  Output: ${path.relative(process.cwd(), scoutDir)}/`);
+
+  // Load and validate prospect config
+  if (!fs.existsSync(prospectConfigPath)) {
+    throw new Error(`Prospect config not found: ${prospectConfigPath}`);
+  }
+  const config: ProspectConfig = JSON.parse(fs.readFileSync(prospectConfigPath, 'utf-8'));
+  if (!config.name || !config.domain || !config.target_geos?.length || !config.topic_patterns?.length) {
+    throw new Error('Prospect config must have name, domain, target_geos[], and topic_patterns[]');
+  }
+
+  // Resolve or create prospect in Supabase
+  const prospect = await resolveProspect(sb, domain, config);
+
+  // Flatten geos for keyword generation
+  const allGeos: string[] = [];
+  for (const geo of config.target_geos) {
+    for (const metro of geo.metros) {
+      allGeos.push(metro);
+      allGeos.push(`${metro} ${geo.state}`);
+    }
+  }
+  console.log(`  Target geos: ${allGeos.length / 2} metros across ${config.target_geos.length} state(s)`);
+
+  let sessionCost = 0;
+
+  // ── Step 1: Lightweight Screaming Frog crawl ──
+  console.log('\n--- Step 1: Lightweight SF Crawl ---');
+  let crawlData = '';
+  let hasCrawlData = false;
+
+  const sfBin = process.env.SF_BIN || 'screamingfrogseospider';
+  const url = domain.startsWith('http') ? domain : `https://${domain}`;
+  const shellEscape = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
+
+  try {
+    const sfCmd = `${shellEscape(sfBin)} \\\n  --crawl ${shellEscape(url)} \\\n  --headless \\\n  --output-folder ${shellEscape(scoutDir)} \\\n  --overwrite \\\n  --export-tabs ${shellEscape('Internal:All')}`;
+
+    const tmpScript = path.join(scoutDir, '_sf_crawl.sh');
+    fs.writeFileSync(tmpScript, `#!/bin/bash\nset -x\n${sfCmd}\n`, { mode: 0o755 });
+
+    console.log(`  Crawling ${url} (Internal:All only)...`);
+    const sfResult = child_process.spawnSync('bash', [tmpScript], {
+      timeout: 300_000,
+      stdio: 'inherit',
+      cwd: process.cwd(),
+    });
+
+    try { fs.unlinkSync(tmpScript); } catch {}
+
+    const csvPath = path.join(scoutDir, 'internal_all.csv');
+    if (fs.existsSync(csvPath) && fs.statSync(csvPath).size > 100) {
+      crawlData = readCsvSafe(csvPath, false);
+      hasCrawlData = true;
+      const lineCount = crawlData.split('\n').filter((l) => l.trim()).length - 1;
+      console.log(`  Crawl complete: ${lineCount} pages`);
+    } else {
+      console.log('  Warning: internal_all.csv not produced — continuing with DataForSEO-only mode');
+    }
+  } catch (err: any) {
+    console.log(`  Warning: SF crawl failed (${err.message}) — continuing with DataForSEO-only mode`);
+  }
+
+  // ── Step 2: Topic extraction via Claude Haiku ──
+  console.log('\n--- Step 2: Topic Extraction ---');
+  let canonicalTopics: Array<{ key: string; label: string }> = [];
+
+  if (hasCrawlData) {
+    // Parse crawl data — filter to 200-status pages, extract URL + title + H1
+    const csvLines = crawlData.split('\n');
+    const header = csvLines[0] ?? '';
+    const cols = header.split(',').map((c) => c.replace(/"/g, '').trim().toLowerCase());
+    const addrIdx = cols.indexOf('address');
+    const statusIdx = cols.findIndex((c) => c === 'status code');
+    const h1Idx = cols.findIndex((c) => c === 'h1-1');
+    const titleIdx = cols.findIndex((c) => c === 'title 1');
+
+    const parseLine = (line: string): string[] => {
+      const parts: string[] = [];
+      let cur = '';
+      let inQuote = false;
+      for (let i = 0; i < line.length; i++) {
+        const ch = line[i];
+        if (ch === '"') { inQuote = !inQuote; cur += ch; }
+        else if (ch === ',' && !inQuote) { parts.push(cur); cur = ''; }
+        else { cur += ch; }
+      }
+      parts.push(cur);
+      return parts;
+    };
+
+    const pageEntries: string[] = [];
+    for (const line of csvLines.slice(1)) {
+      if (!line.trim()) continue;
+      const parts = parseLine(line);
+      const status = (parts[statusIdx] ?? '').replace(/"/g, '').trim();
+      if (status !== '200') continue;
+      const addr = (parts[addrIdx] ?? '').replace(/"/g, '').trim();
+      const h1 = (parts[h1Idx] ?? '').replace(/"/g, '').trim();
+      const title = (parts[titleIdx] ?? '').replace(/"/g, '').trim();
+      if (addr) pageEntries.push(`${addr} | ${title} | ${h1}`);
+    }
+
+    const topicPrompt = `You are analyzing a crawl of ${domain} to identify canonical service/product topics.
+
+Here are the pages (URL | Title | H1):
+${pageEntries.slice(0, 200).join('\n')}
+
+Topic patterns to look for: ${config.topic_patterns.join(', ')}
+
+Return a JSON array of 5–15 canonical topics found on this site. Each topic should be:
+- key: lowercase slug (e.g., "emt-training")
+- label: Title Case display name (e.g., "EMT Training")
+
+Only include topics that appear in the site content. Group similar pages into a single topic.
+
+YOUR ENTIRE RESPONSE IS RAW JSON — no markdown, no code fences, no explanation.
+Output a JSON array starting with [`;
+
+    try {
+      const topicOutput = callClaude(topicPrompt, 'haiku');
+      const parsed = JSON.parse(stripCodeFences(topicOutput));
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        canonicalTopics = parsed.filter((t: any) => t.key && t.label);
+        console.log(`  Extracted ${canonicalTopics.length} topics: ${canonicalTopics.map((t) => t.label).join(', ')}`);
+      }
+    } catch (err: any) {
+      console.log(`  Warning: Topic extraction failed (${err.message}) — will extract from rankings`);
+    }
+  }
+
+  // ── Step 3: Current rankings from DataForSEO ──
+  console.log('\n--- Step 3: Current Rankings (DataForSEO) ---');
+
+  const dfLogin = env.DATAFORSEO_LOGIN;
+  const dfPassword = env.DATAFORSEO_PASSWORD;
+  if (!dfLogin || !dfPassword) throw new Error('DATAFORSEO_LOGIN / DATAFORSEO_PASSWORD not set in .env');
+
+  const authString = Buffer.from(`${dfLogin}:${dfPassword}`).toString('base64');
+  let rankedKeywords: Array<{ keyword: string; position: number; volume: number; cpc: number; url: string; intent: string | null }> = [];
+
+  // Fetch ranked keywords
+  const rankPayload = [{
+    target: domain,
+    location_code: 2840,
+    language_code: 'en',
+    limit: 1000,
+  }];
+
+  const rankCost = 0.05; // approximate cost per ranked_keywords call
+  if (sessionCost + rankCost > SCOUT_SESSION_BUDGET) {
+    console.log(`  Budget exceeded ($${sessionCost.toFixed(2)} + $${rankCost} > $${SCOUT_SESSION_BUDGET}) — skipping rankings`);
+  } else {
+    try {
+      console.log('  Fetching ranked keywords...');
+      const resp = await fetch('https://api.dataforseo.com/v3/dataforseo_labs/google/ranked_keywords/live', {
+        method: 'POST',
+        headers: { Authorization: `Basic ${authString}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(rankPayload),
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      sessionCost += rankCost;
+      logDataForSeoCost('ranked_keywords/live', rankCost);
+
+      for (const task of data?.tasks ?? []) {
+        for (const result of task?.result ?? []) {
+          for (const item of result?.items ?? []) {
+            const kd = item.keyword_data;
+            const se = item.ranked_serp_element;
+            if (kd?.keyword) {
+              rankedKeywords.push({
+                keyword: kd.keyword,
+                position: se?.serp_item?.rank_group ?? 100,
+                volume: kd.keyword_info?.search_volume ?? 0,
+                cpc: kd.keyword_info?.cpc ?? 0,
+                url: se?.serp_item?.url ?? '',
+                intent: kd.search_intent_info?.main_intent ?? null,
+              });
+            }
+          }
+        }
+      }
+      console.log(`  ${rankedKeywords.length} ranked keywords found`);
+    } catch (err: any) {
+      console.log(`  Warning: Ranked keywords fetch failed (${err.message})`);
+    }
+  }
+
+  // If <50 rankings and no topics yet, build synthetic keywords
+  if (rankedKeywords.length < 50 && canonicalTopics.length === 0) {
+    console.log('  Low rankings + no crawl topics — building synthetic keyword candidates');
+    const candidates: string[] = [];
+    for (const pattern of config.topic_patterns) {
+      for (const geo of allGeos) {
+        candidates.push(`${pattern} ${geo}`.toLowerCase());
+      }
+    }
+    const volumeResults = await bulkKeywordVolume(env, candidates.slice(0, 200));
+    sessionCost += 0.02;
+    logDataForSeoCost('search_volume/live (synthetic)', 0.02);
+
+    if (volumeResults.length > 0) {
+      const synthetic = buildSyntheticRankedKeywords(volumeResults);
+      for (const task of synthetic?.tasks ?? []) {
+        for (const result of task?.result ?? []) {
+          for (const item of result?.items ?? []) {
+            rankedKeywords.push({
+              keyword: item.keyword_data.keyword,
+              position: 100,
+              volume: item.keyword_data.keyword_info.search_volume,
+              cpc: item.keyword_data.keyword_info.cpc ?? 0,
+              url: '',
+              intent: null,
+            });
+          }
+        }
+      }
+      console.log(`  Added ${volumeResults.length} synthetic keywords (rank=100)`);
+    }
+  }
+
+  // Filter ranked keywords by topic patterns (stem match)
+  const topicStems = canonicalTopics.length > 0
+    ? canonicalTopics.map((t) => t.key.replace(/-/g, ' ').toLowerCase())
+    : config.topic_patterns.map((p) => p.toLowerCase());
+
+  const topicRankings: typeof rankedKeywords = [];
+  const otherRankings: typeof rankedKeywords = [];
+
+  for (const kw of rankedKeywords) {
+    const kwLower = kw.keyword.toLowerCase();
+    if (topicStems.some((stem) => kwLower.includes(stem))) {
+      topicRankings.push(kw);
+    } else {
+      otherRankings.push(kw);
+    }
+  }
+  console.log(`  Topic-relevant: ${topicRankings.length}, Other: ${otherRankings.length}`);
+
+  // If no topics were extracted from crawl, extract from ranked keywords
+  if (canonicalTopics.length === 0 && topicRankings.length > 0) {
+    console.log('  Extracting topics from ranked keywords...');
+    const kwList = topicRankings.slice(0, 100).map((k) => k.keyword).join('\n');
+    const topicPrompt = `Given these keywords for ${domain}:
+${kwList}
+
+Topic patterns: ${config.topic_patterns.join(', ')}
+
+Return a JSON array of 5–15 canonical topics. Each topic:
+- key: lowercase slug (e.g., "emt-training")
+- label: Title Case display name (e.g., "EMT Training")
+
+Group related keywords into single topics. YOUR ENTIRE RESPONSE IS RAW JSON — no markdown, no code fences. Start with [`;
+
+    try {
+      const topicOutput = callClaude(topicPrompt, 'haiku');
+      const parsed = JSON.parse(stripCodeFences(topicOutput));
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        canonicalTopics = parsed.filter((t: any) => t.key && t.label);
+        console.log(`  Extracted ${canonicalTopics.length} topics from rankings: ${canonicalTopics.map((t) => t.label).join(', ')}`);
+      }
+    } catch (err: any) {
+      console.log(`  Warning: Topic extraction from keywords failed (${err.message})`);
+      // Fallback: use topic_patterns directly
+      canonicalTopics = config.topic_patterns.slice(0, 10).map((p) => ({
+        key: p.toLowerCase().replace(/\s+/g, '-'),
+        label: p.charAt(0).toUpperCase() + p.slice(1),
+      }));
+    }
+  }
+
+  // ── Step 4: Opportunity map via DataForSEO bulk volume ──
+  console.log('\n--- Step 4: Opportunity Map (Bulk Volume) ---');
+  let opportunityMap: BulkVolumeResult[] = [];
+
+  const candidates: string[] = [];
+  for (const topic of canonicalTopics) {
+    const topicPhrase = topic.label.toLowerCase();
+    for (const geo of config.target_geos) {
+      for (const metro of geo.metros) {
+        candidates.push(`${topicPhrase} ${metro}`.toLowerCase());
+        candidates.push(`${topicPhrase} ${metro} ${geo.state}`.toLowerCase());
+      }
+    }
+  }
+
+  // Deduplicate
+  const uniqueCandidates = [...new Set(candidates)];
+  console.log(`  ${uniqueCandidates.length} keyword candidates (${canonicalTopics.length} topics × ${allGeos.length / 2} metros)`);
+
+  const volCost = 0.02 * Math.ceil(uniqueCandidates.length / 1000);
+  if (sessionCost + volCost > SCOUT_SESSION_BUDGET) {
+    console.log(`  Budget exceeded ($${sessionCost.toFixed(2)} + $${volCost.toFixed(2)} > $${SCOUT_SESSION_BUDGET}) — skipping volume`);
+  } else if (uniqueCandidates.length > 0) {
+    opportunityMap = await bulkKeywordVolume(env, uniqueCandidates);
+    sessionCost += volCost;
+    logDataForSeoCost('search_volume/live (opportunity)', volCost);
+    console.log(`  ${opportunityMap.length} keywords with volume > 0`);
+  }
+
+  // ── Step 5: Gap matrix assembly ──
+  console.log('\n--- Step 5: Gap Matrix ---');
+
+  interface GapEntry {
+    keyword: string;
+    topic: string;
+    status: 'defending' | 'weak' | 'gap' | 'no_demand';
+    position: number | null;
+    volume: number;
+    cpc: number;
+  }
+
+  const gapMatrix: GapEntry[] = [];
+  const rankedLookup = new Map<string, typeof rankedKeywords[0]>();
+  for (const kw of rankedKeywords) {
+    rankedLookup.set(kw.keyword.toLowerCase(), kw);
+  }
+
+  const opportunityLookup = new Map<string, BulkVolumeResult>();
+  for (const opp of opportunityMap) {
+    opportunityLookup.set(opp.keyword.toLowerCase(), opp);
+  }
+
+  // Cross-reference: for each opportunity keyword, check ranking
+  for (const opp of opportunityMap) {
+    const kwLower = opp.keyword.toLowerCase();
+    const ranked = rankedLookup.get(kwLower);
+    const topicMatch = canonicalTopics.find((t) =>
+      kwLower.includes(t.key.replace(/-/g, ' ')) || kwLower.includes(t.label.toLowerCase())
+    );
+
+    let status: GapEntry['status'];
+    let position: number | null = null;
+
+    if (ranked) {
+      position = ranked.position;
+      if (ranked.position <= 10) status = 'defending';
+      else if (ranked.position <= 30) status = 'weak';
+      else status = 'gap';
+    } else {
+      status = 'gap';
+    }
+
+    gapMatrix.push({
+      keyword: opp.keyword,
+      topic: topicMatch?.label ?? 'Other',
+      status,
+      position,
+      volume: opp.volume,
+      cpc: opp.cpc,
+    });
+  }
+
+  // Add ranked keywords that weren't in opportunity map
+  for (const kw of topicRankings) {
+    const kwLower = kw.keyword.toLowerCase();
+    if (!opportunityLookup.has(kwLower)) {
+      const topicMatch = canonicalTopics.find((t) =>
+        kwLower.includes(t.key.replace(/-/g, ' ')) || kwLower.includes(t.label.toLowerCase())
+      );
+      gapMatrix.push({
+        keyword: kw.keyword,
+        topic: topicMatch?.label ?? 'Other',
+        status: kw.position <= 10 ? 'defending' : kw.position <= 30 ? 'weak' : 'gap',
+        position: kw.position,
+        volume: kw.volume,
+        cpc: kw.cpc,
+      });
+    }
+  }
+
+  // Sort by volume descending within each topic
+  gapMatrix.sort((a, b) => {
+    if (a.topic !== b.topic) return a.topic.localeCompare(b.topic);
+    return b.volume - a.volume;
+  });
+
+  const defending = gapMatrix.filter((g) => g.status === 'defending').length;
+  const weak = gapMatrix.filter((g) => g.status === 'weak').length;
+  const gaps = gapMatrix.filter((g) => g.status === 'gap').length;
+  console.log(`  Gap matrix: ${gapMatrix.length} entries (${defending} defending, ${weak} weak, ${gaps} gaps)`);
+
+  // ── Step 6: Markdown output + scope.json ──
+  console.log('\n--- Step 6: Scout Report + scope.json ---');
+
+  // Build data tables for the report prompt
+  const crawlSummaryText = hasCrawlData
+    ? `Crawled ${crawlData.split('\n').filter((l) => l.trim()).length - 1} internal pages via Screaming Frog.`
+    : 'No crawl data available (DataForSEO-only mode).';
+
+  const topicListText = canonicalTopics.map((t) => `- ${t.label} (\`${t.key}\`)`).join('\n');
+
+  const rankingTable = topicRankings
+    .sort((a, b) => b.volume - a.volume)
+    .slice(0, 50)
+    .map((k) => `| ${k.keyword} | ${k.position} | ${k.volume} | $${k.cpc.toFixed(2)} | ${k.intent ?? 'N/A'} | ${k.url || 'N/A'} |`)
+    .join('\n');
+
+  const opportunityTable = opportunityMap
+    .sort((a, b) => b.volume - a.volume)
+    .slice(0, 50)
+    .map((o) => `| ${o.keyword} | ${o.volume} | $${o.cpc.toFixed(2)} | ${o.competition_level ?? 'N/A'} |`)
+    .join('\n');
+
+  const gapTable = gapMatrix
+    .slice(0, 100)
+    .map((g) => `| ${g.keyword} | ${g.topic} | ${g.status} | ${g.position ?? 'N/R'} | ${g.volume} | $${g.cpc.toFixed(2)} |`)
+    .join('\n');
+
+  // Build scope.json (Jim-compatible seed matrix)
+  const scopeData = {
+    business_type: config.name,
+    domain: config.domain,
+    services: canonicalTopics.map((t) => t.label),
+    locales: config.target_geos.flatMap((g) => g.metros),
+    state: config.state,
+    topics: canonicalTopics,
+    gap_summary: {
+      total: gapMatrix.length,
+      defending,
+      weak,
+      gaps,
+      top_opportunities: gapMatrix
+        .filter((g) => g.status === 'gap')
+        .sort((a, b) => b.volume - a.volume)
+        .slice(0, 20)
+        .map((g) => ({ keyword: g.keyword, topic: g.topic, volume: g.volume, cpc: g.cpc })),
+    },
+    total_opportunity_volume: opportunityMap.reduce((sum, o) => sum + o.volume, 0),
+    dataforseo_cost: sessionCost,
+    generated_at: new Date().toISOString(),
+  };
+
+  const scopePath = path.join(scoutDir, 'scope.json');
+  fs.writeFileSync(scopePath, JSON.stringify(scopeData, null, 2), 'utf-8');
+  console.log(`  scope.json: ${(fs.statSync(scopePath).size / 1024).toFixed(1)}KB`);
+
+  // Generate the full scout report via Claude Sonnet
+  const geoDescription = config.target_geos
+    .map((g) => `${g.state}: ${g.metros.join(', ')}`)
+    .join('; ');
+
+  const reportPrompt = `You are Scout, a prospect discovery agent for Forge Growth. Generate a comprehensive scout report for a prospective client.
+
+YOUR ENTIRE RESPONSE IS THE REPORT. Output ONLY the markdown content — start with "# Scout Report". No preamble, no narration.
+
+## Data Provided
+
+**Prospect:** ${config.name} (${domain})
+**Geo Type:** ${config.geo_type}
+**Target Geos:** ${geoDescription}
+**Crawl Status:** ${crawlSummaryText}
+**DataForSEO Cost:** $${sessionCost.toFixed(2)}
+
+### Canonical Topics (${canonicalTopics.length})
+${topicListText}
+
+### Current Rankings (top 50 by volume)
+| Keyword | Position | Volume | CPC | Intent | URL |
+|---------|----------|--------|-----|--------|-----|
+${rankingTable || '| (no rankings found) | | | | | |'}
+
+### Opportunity Map (top 50 by volume)
+| Keyword | Volume | CPC | Competition |
+|---------|--------|-----|-------------|
+${opportunityTable || '| (no opportunities found) | | | |'}
+
+### Gap Matrix (${gapMatrix.length} entries)
+| Keyword | Topic | Status | Position | Volume | CPC |
+|---------|-------|--------|----------|--------|-----|
+${gapTable || '| (no gap data) | | | | | |'}
+
+### Gap Summary
+- Defending (pos 1–10): ${defending}
+- Weak (pos 11–30): ${weak}
+- Gaps (not ranking): ${gaps}
+- Total opportunity volume: ${opportunityMap.reduce((sum, o) => sum + o.volume, 0).toLocaleString()}
+
+## Report Format — Follow this structure exactly:
+
+# Scout Report: ${config.name}
+## ${domain}
+**Scout Date:** ${date}
+**Agent:** Scout (Forge Growth)
+**DataForSEO Budget Used:** $${sessionCost.toFixed(2)} / $${SCOUT_SESSION_BUDGET.toFixed(2)}
+
+---
+
+## 1. Prospect Overview
+[2-3 sentences about the prospect, their industry, and geographic scope]
+
+## 2. Crawl Summary
+[Brief summary of what was found in the crawl, or note DataForSEO-only mode]
+
+## 3. Canonical Topic Set
+[Table of canonical topics with key and label, brief description of each]
+
+## 4. Current Ranking Profile
+[Table of top ranked keywords with analysis of strengths/weaknesses]
+| Keyword | Position | Volume | CPC | Intent |
+|---------|----------|--------|-----|--------|
+
+## 5. Opportunity Map
+[Table of high-volume keyword opportunities sorted by volume]
+| Keyword | Volume | CPC | Competition |
+|---------|--------|-----|-------------|
+
+## 6. Gap Matrix
+[Table showing defending/weak/gap status per keyword-topic combination]
+| Keyword | Topic | Status | Position | Volume | CPC |
+|---------|-------|--------|----------|--------|-----|
+
+## 7. LP Opportunity Summary
+[Analysis of landing page opportunities — which topics need pages, which existing pages could be optimized]
+
+## 8. Recommended Scope for Jim
+[JSON block with recommended seed data for a full pipeline run]
+\`\`\`json
+{scope_json}
+\`\`\`
+
+REMINDER: Your response IS the report — start with "# Scout Report". No preamble, no narration.`;
+
+  const reportContent = await callClaudeAsync(reportPrompt, 'sonnet');
+
+  const reportPath = path.join(scoutDir, `scout-${domain}-${date}.md`);
+  fs.writeFileSync(reportPath, reportContent, 'utf-8');
+  console.log(`  Scout report: ${(fs.statSync(reportPath).size / 1024).toFixed(1)}KB`);
+
+  // Update prospect record
+  await sb
+    .from('prospects')
+    .update({
+      scout_run_at: new Date().toISOString(),
+      scout_output_path: path.relative(process.cwd(), scoutDir),
+      status: 'scouted',
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', prospect.id);
+
+  console.log(`\n=== Scout Complete ===`);
+  console.log(`  Report: ${path.relative(process.cwd(), reportPath)}`);
+  console.log(`  Scope:  ${path.relative(process.cwd(), scopePath)}`);
+  console.log(`  Cost:   $${sessionCost.toFixed(2)}`);
+  console.log(`  Status: prospects.${prospect.id} → scouted`);
+}
+
+// ============================================================
 // Main
 // ============================================================
 
@@ -3000,12 +3704,23 @@ async function main() {
     console.error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in .env');
     process.exit(1);
   }
+  const sb = createClient(supabaseUrl, serviceRoleKey);
+
+  // Scout skips audit resolution — uses prospects table instead
+  if (args.subcommand === 'scout') {
+    if (!args.prospectConfig) {
+      console.error('--prospect-config is required for scout');
+      process.exit(1);
+    }
+    await runScout(sb, args.domain, args.prospectConfig);
+    return;
+  }
+
   if (!args.userEmail) {
     console.error('--user-email is required');
     process.exit(1);
   }
 
-  const sb = createClient(supabaseUrl, serviceRoleKey);
   const { audit } = await resolveAudit(sb, args.domain, args.userEmail);
   console.log(`  Audit: ${audit.id} (${audit.status})`);
 

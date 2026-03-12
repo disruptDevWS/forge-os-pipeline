@@ -1,5 +1,6 @@
 import http from 'http';
 import { spawn } from 'child_process';
+import fs from 'fs';
 import path from 'path';
 
 import {
@@ -13,77 +14,189 @@ const inFlight = new Set<string>();
 
 const DOMAIN_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const AUDITS_BASE = path.resolve(process.cwd(), 'audits');
 
 function json(res: http.ServerResponse, status: number, body: Record<string, unknown>): void {
   res.writeHead(status, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(body));
 }
 
-function handleTrigger(req: http.IncomingMessage, res: http.ServerResponse): void {
-  // Auth check
+function readBody(req: http.IncomingMessage): Promise<string> {
+  return new Promise((resolve) => {
+    let body = '';
+    req.on('data', (chunk: Buffer) => { body += chunk.toString(); });
+    req.on('end', () => resolve(body));
+  });
+}
+
+function checkAuth(req: http.IncomingMessage, res: http.ServerResponse): boolean {
   const auth = req.headers.authorization || '';
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
   if (!PIPELINE_TRIGGER_SECRET || token !== PIPELINE_TRIGGER_SECRET) {
     json(res, 401, { error: 'Unauthorized' });
+    return false;
+  }
+  return true;
+}
+
+// ── POST /trigger-pipeline ──────────────────────────────────
+
+async function handleTrigger(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  if (!checkAuth(req, res)) return;
+
+  let payload: { domain?: string; email?: string; mode?: string; prospect_config?: string };
+  try {
+    payload = JSON.parse(await readBody(req));
+  } catch {
+    json(res, 400, { error: 'Invalid JSON' });
     return;
   }
 
-  // Read body
-  let body = '';
-  req.on('data', (chunk: Buffer) => {
-    body += chunk.toString();
+  const { domain, email } = payload;
+  const mode = payload.mode || 'full';
+  const prospectConfig = payload.prospect_config || '';
+
+  if (!domain || !email) {
+    json(res, 400, { error: 'domain and email are required' });
+    return;
+  }
+  if (!DOMAIN_RE.test(domain)) {
+    json(res, 400, { error: 'Invalid domain format' });
+    return;
+  }
+  if (!EMAIL_RE.test(email)) {
+    json(res, 400, { error: 'Invalid email format' });
+    return;
+  }
+
+  if (inFlight.has(domain)) {
+    json(res, 409, { error: `Pipeline already running for ${domain}` });
+    return;
+  }
+
+  inFlight.add(domain);
+  logger.info({ domain, email, mode }, 'Pipeline triggered');
+
+  const scriptPath = path.resolve(process.cwd(), 'scripts/run-pipeline.sh');
+  const args = [domain, email];
+  if (mode === 'prospect' && prospectConfig) {
+    args.push('--mode', 'prospect', '--prospect-config', prospectConfig);
+  } else if (mode !== 'full') {
+    args.push('--mode', mode);
+  }
+
+  const child = spawn(scriptPath, args, {
+    detached: true,
+    stdio: 'ignore',
   });
-  req.on('end', () => {
-    let payload: { domain?: string; email?: string };
+  child.unref();
+
+  child.on('close', (code) => {
+    inFlight.delete(domain);
+    logger.info({ domain, code }, 'Pipeline finished');
+  });
+
+  child.on('error', (err) => {
+    inFlight.delete(domain);
+    logger.error({ domain, err }, 'Pipeline spawn error');
+  });
+
+  json(res, 202, { status: 'accepted', domain, mode });
+}
+
+// ── POST /scout-config — write prospect-config.json to disk ──
+
+async function handleScoutConfig(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  if (!checkAuth(req, res)) return;
+
+  let payload: { domain?: string; config?: Record<string, unknown> };
+  try {
+    payload = JSON.parse(await readBody(req));
+  } catch {
+    json(res, 400, { error: 'Invalid JSON' });
+    return;
+  }
+
+  const { domain, config } = payload;
+  if (!domain || !config) {
+    json(res, 400, { error: 'domain and config are required' });
+    return;
+  }
+  if (!DOMAIN_RE.test(domain)) {
+    json(res, 400, { error: 'Invalid domain format' });
+    return;
+  }
+
+  const domainDir = path.join(AUDITS_BASE, domain);
+  fs.mkdirSync(domainDir, { recursive: true });
+
+  const configPath = path.join(domainDir, 'prospect-config.json');
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
+
+  const relativePath = path.relative(process.cwd(), configPath);
+  logger.info({ domain, path: relativePath }, 'Prospect config written');
+  json(res, 200, { status: 'written', path: relativePath });
+}
+
+// ── POST /scout-report — read scout markdown + scope.json ──
+
+async function handleScoutReport(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  if (!checkAuth(req, res)) return;
+
+  let payload: { domain?: string };
+  try {
+    payload = JSON.parse(await readBody(req));
+  } catch {
+    json(res, 400, { error: 'Invalid JSON' });
+    return;
+  }
+
+  const { domain } = payload;
+  if (!domain) {
+    json(res, 400, { error: 'domain is required' });
+    return;
+  }
+  if (!DOMAIN_RE.test(domain)) {
+    json(res, 400, { error: 'Invalid domain format' });
+    return;
+  }
+
+  // Find the latest scout date directory
+  const scoutBase = path.join(AUDITS_BASE, domain, 'scout');
+  if (!fs.existsSync(scoutBase)) {
+    json(res, 404, { error: 'No scout directory found' });
+    return;
+  }
+
+  const dateDirs = fs.readdirSync(scoutBase)
+    .filter((e) => /^\d{4}-\d{2}-\d{2}$/.test(e))
+    .sort();
+  if (dateDirs.length === 0) {
+    json(res, 404, { error: 'No scout runs found' });
+    return;
+  }
+
+  const latestDate = dateDirs[dateDirs.length - 1];
+  const latestDir = path.join(scoutBase, latestDate);
+
+  // Find scout markdown (scout-{domain}-{date}.md)
+  const mdFiles = fs.readdirSync(latestDir).filter((f) => f.startsWith('scout-') && f.endsWith('.md'));
+  let markdown = '';
+  if (mdFiles.length > 0) {
+    markdown = fs.readFileSync(path.join(latestDir, mdFiles[0]), 'utf-8');
+  }
+
+  // Read scope.json
+  let scope: Record<string, unknown> = {};
+  const scopePath = path.join(latestDir, 'scope.json');
+  if (fs.existsSync(scopePath)) {
     try {
-      payload = JSON.parse(body);
-    } catch {
-      json(res, 400, { error: 'Invalid JSON' });
-      return;
-    }
+      scope = JSON.parse(fs.readFileSync(scopePath, 'utf-8'));
+    } catch {}
+  }
 
-    const { domain, email } = payload;
-
-    if (!domain || !email) {
-      json(res, 400, { error: 'domain and email are required' });
-      return;
-    }
-    if (!DOMAIN_RE.test(domain)) {
-      json(res, 400, { error: 'Invalid domain format' });
-      return;
-    }
-    if (!EMAIL_RE.test(email)) {
-      json(res, 400, { error: 'Invalid email format' });
-      return;
-    }
-
-    if (inFlight.has(domain)) {
-      json(res, 409, { error: `Pipeline already running for ${domain}` });
-      return;
-    }
-
-    inFlight.add(domain);
-    logger.info({ domain, email }, 'Pipeline triggered');
-
-    const scriptPath = path.resolve(process.cwd(), 'scripts/run-pipeline.sh');
-    const child = spawn(scriptPath, [domain, email], {
-      detached: true,
-      stdio: 'ignore',
-    });
-    child.unref();
-
-    child.on('close', (code) => {
-      inFlight.delete(domain);
-      logger.info({ domain, code }, 'Pipeline finished');
-    });
-
-    child.on('error', (err) => {
-      inFlight.delete(domain);
-      logger.error({ domain, err }, 'Pipeline spawn error');
-    });
-
-    json(res, 202, { status: 'accepted', domain });
-  });
+  logger.info({ domain, date: latestDate }, 'Scout report served');
+  json(res, 200, { markdown, scope, date: latestDate });
 }
 
 export function startPipelineServer(): void {
@@ -95,6 +208,10 @@ export function startPipelineServer(): void {
   server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/trigger-pipeline') {
       handleTrigger(req, res);
+    } else if (req.method === 'POST' && req.url === '/scout-config') {
+      handleScoutConfig(req, res);
+    } else if (req.method === 'POST' && req.url === '/scout-report') {
+      handleScoutReport(req, res);
     } else {
       json(res, 404, { error: 'Not found' });
     }
