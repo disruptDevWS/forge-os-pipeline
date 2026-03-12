@@ -119,18 +119,16 @@ Phase 6c (sync dwight)
 **Prerequisites:** `prospect-config.json` file with `name`, `domain`, `target_geos`, `topic_patterns`, `state`. No audit record required — uses `prospects` table instead.
 
 **Steps:**
-1. **Lightweight SF crawl** — `Internal:All` only (no semantic config, no bulk exports). Falls back to DataForSEO-only mode if SF fails.
-2. **Topic extraction** — Haiku reads crawl data + topic patterns → 5–15 canonical topics. If no crawl, extracts from ranked keywords.
-3. **Current rankings** — DataForSEO `ranked_keywords/live` for the domain. Falls back to `buildSyntheticRankedKeywords()` if <50 results.
-4. **Opportunity map** — DataForSEO bulk volume for `topic × geo` candidates.
-5. **Gap matrix** — Cross-references rankings vs opportunity: defending (1–10), weak (11–30), gap (not ranking).
-6. **Report + scope.json** — Sonnet generates scout report; scope.json is Jim-compatible seed data.
+1. **Topic extraction** — Haiku extracts 5–15 canonical topics from ranked keywords + topic patterns. No crawl — Dwight handles comprehensive crawling in Phase 1 if the prospect converts.
+2. **Current rankings** — DataForSEO `ranked_keywords/live` for the domain. Falls back to `buildSyntheticRankedKeywords()` if <50 results.
+3. **Opportunity map** — DataForSEO bulk volume for `topic × geo` candidates.
+4. **Gap matrix** — Cross-references rankings vs opportunity: defending (1–10), weak (11–30), gap (not ranking).
+5. **Report + scope.json** — Sonnet generates scout report (7 sections); scope.json is Jim-compatible seed data.
 
 **External APIs:**
 
 | API | Endpoint | Purpose |
 |-----|----------|---------|
-| Screaming Frog CLI | `--crawl --headless --export-tabs Internal:All` | Lightweight page inventory |
 | DataForSEO Ranked Keywords | `/v3/dataforseo_labs/google/ranked_keywords/live` | Current organic rankings |
 | DataForSEO Bulk Volume | `/v3/keywords_data/google_ads/search_volume/live` | Opportunity map volume |
 | Claude CLI (haiku) | `callClaude()` sync | Topic extraction |
@@ -139,9 +137,8 @@ Phase 6c (sync dwight)
 **Budget:** `SCOUT_SESSION_BUDGET` env var (default $2.00). Each API call checks remaining budget before proceeding.
 
 **Output files** (relative to `audits/{domain}/`):
-- `scout/{date}/scout-{domain}-{date}.md` — Full scout report
+- `scout/{date}/scout-{domain}-{date}.md` — Full scout report (7 sections)
 - `scout/{date}/scope.json` — Jim-compatible seed matrix
-- `scout/{date}/internal_all.csv` — Crawl data (if SF succeeded)
 
 **Supabase writes:** `prospects` (INSERT or UPDATE status/scout_run_at/scout_output_path)
 
@@ -436,7 +433,7 @@ Cross-checks Gap's identified gaps against Michael's blueprint to verify coverag
 | DataForSEO SERP Organic | `https://api.dataforseo.com/v3/serp/google/organic/live/regular` | Competitors | Basic auth |
 | DataForSEO Credits | `https://api.dataforseo.com/v3/appendix/user_data` | foundational_scout.sh | Basic auth |
 | Claude CLI | `claude --print --model {model} --tools ''` | All generation phases | OAuth token |
-| Screaming Frog | `screamingfrogseospider --crawl --headless` | Dwight | License key |
+| Screaming Frog | `screamingfrogseospider --crawl --headless` | Dwight (Phase 1 only) | License key |
 
 ## Claude Model Usage
 

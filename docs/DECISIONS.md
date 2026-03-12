@@ -39,9 +39,9 @@ Scout takes a `prospect-config.json` file as input rather than CLI flags or YAML
 
 Scout runs before a client is onboarded, so no `audits` row exists. Instead of creating a throwaway audit record, Scout uses a separate `prospects` table with its own lifecycle (discovery → scouted → converted). The `converted_to_audit_id` FK links a prospect to its eventual audit after conversion. This keeps the `audits` table clean for actual paying clients.
 
-**2026-03-11: Lightweight SF crawl for Scout (Internal:All only)**
+**2026-03-12: Scout skips crawl entirely (DataForSEO-only)**
 
-Scout's Screaming Frog crawl exports only `Internal:All` — no semantic config, no bulk exports, no reports. This makes the crawl 5–10x faster than Dwight's comprehensive crawl (15 export tabs + 9 bulk exports). If SF fails entirely (e.g., domain is unreachable), Scout gracefully falls back to DataForSEO-only mode instead of aborting.
+Scout originally included a lightweight SF crawl (Internal:All only) for topic extraction. Removed because: (1) Dwight does a comprehensive crawl in Phase 1 if the prospect converts, making Scout's crawl redundant; (2) topic extraction from DataForSEO ranked keywords works just as well — the Idaho Medical Academy test proved this with 13 clean canonical topics and no crawl data; (3) removing the crawl saves 30–60s per scout run.
 
 **2026-03-11: Prospect mode exits after Scout — no full pipeline**
 
