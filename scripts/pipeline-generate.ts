@@ -3167,113 +3167,14 @@ async function runScout(sb: SupabaseClient, domain: string, prospectConfigPath: 
 
   let sessionCost = 0;
 
-  // ── Step 1: Lightweight Screaming Frog crawl ──
-  console.log('\n--- Step 1: Lightweight SF Crawl ---');
-  let crawlData = '';
-  let hasCrawlData = false;
-
-  const sfBin = process.env.SF_BIN || 'screamingfrogseospider';
-  const url = domain.startsWith('http') ? domain : `https://${domain}`;
-  const shellEscape = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
-
-  try {
-    const sfCmd = `${shellEscape(sfBin)} \\\n  --crawl ${shellEscape(url)} \\\n  --headless \\\n  --output-folder ${shellEscape(scoutDir)} \\\n  --overwrite \\\n  --export-tabs ${shellEscape('Internal:All')}`;
-
-    const tmpScript = path.join(scoutDir, '_sf_crawl.sh');
-    fs.writeFileSync(tmpScript, `#!/bin/bash\nset -x\n${sfCmd}\n`, { mode: 0o755 });
-
-    console.log(`  Crawling ${url} (Internal:All only)...`);
-    const sfResult = child_process.spawnSync('bash', [tmpScript], {
-      timeout: 300_000,
-      stdio: 'inherit',
-      cwd: process.cwd(),
-    });
-
-    try { fs.unlinkSync(tmpScript); } catch {}
-
-    const csvPath = path.join(scoutDir, 'internal_all.csv');
-    if (fs.existsSync(csvPath) && fs.statSync(csvPath).size > 100) {
-      crawlData = readCsvSafe(csvPath, false);
-      hasCrawlData = true;
-      const lineCount = crawlData.split('\n').filter((l) => l.trim()).length - 1;
-      console.log(`  Crawl complete: ${lineCount} pages`);
-    } else {
-      console.log('  Warning: internal_all.csv not produced — continuing with DataForSEO-only mode');
-    }
-  } catch (err: any) {
-    console.log(`  Warning: SF crawl failed (${err.message}) — continuing with DataForSEO-only mode`);
-  }
-
-  // ── Step 2: Topic extraction via Claude Haiku ──
-  console.log('\n--- Step 2: Topic Extraction ---');
+  // ── Step 1: Topic extraction (from rankings — no crawl needed) ──
+  // Scout skips Screaming Frog crawl — Dwight does a comprehensive crawl
+  // in Phase 1 if the prospect converts to a client.
+  console.log('\n--- Step 1: Topic Extraction ---');
   let canonicalTopics: Array<{ key: string; label: string }> = [];
 
-  if (hasCrawlData) {
-    // Parse crawl data — filter to 200-status pages, extract URL + title + H1
-    const csvLines = crawlData.split('\n');
-    const header = csvLines[0] ?? '';
-    const cols = header.split(',').map((c) => c.replace(/"/g, '').trim().toLowerCase());
-    const addrIdx = cols.indexOf('address');
-    const statusIdx = cols.findIndex((c) => c === 'status code');
-    const h1Idx = cols.findIndex((c) => c === 'h1-1');
-    const titleIdx = cols.findIndex((c) => c === 'title 1');
-
-    const parseLine = (line: string): string[] => {
-      const parts: string[] = [];
-      let cur = '';
-      let inQuote = false;
-      for (let i = 0; i < line.length; i++) {
-        const ch = line[i];
-        if (ch === '"') { inQuote = !inQuote; cur += ch; }
-        else if (ch === ',' && !inQuote) { parts.push(cur); cur = ''; }
-        else { cur += ch; }
-      }
-      parts.push(cur);
-      return parts;
-    };
-
-    const pageEntries: string[] = [];
-    for (const line of csvLines.slice(1)) {
-      if (!line.trim()) continue;
-      const parts = parseLine(line);
-      const status = (parts[statusIdx] ?? '').replace(/"/g, '').trim();
-      if (status !== '200') continue;
-      const addr = (parts[addrIdx] ?? '').replace(/"/g, '').trim();
-      const h1 = (parts[h1Idx] ?? '').replace(/"/g, '').trim();
-      const title = (parts[titleIdx] ?? '').replace(/"/g, '').trim();
-      if (addr) pageEntries.push(`${addr} | ${title} | ${h1}`);
-    }
-
-    const topicPrompt = `You are analyzing a crawl of ${domain} to identify canonical service/product topics.
-
-Here are the pages (URL | Title | H1):
-${pageEntries.slice(0, 200).join('\n')}
-
-Topic patterns to look for: ${config.topic_patterns.join(', ')}
-
-Return a JSON array of 5–15 canonical topics found on this site. Each topic should be:
-- key: lowercase slug (e.g., "emt-training")
-- label: Title Case display name (e.g., "EMT Training")
-
-Only include topics that appear in the site content. Group similar pages into a single topic.
-
-YOUR ENTIRE RESPONSE IS RAW JSON — no markdown, no code fences, no explanation.
-Output a JSON array starting with [`;
-
-    try {
-      const topicOutput = callClaude(topicPrompt, 'haiku');
-      const parsed = JSON.parse(stripCodeFences(topicOutput));
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        canonicalTopics = parsed.filter((t: any) => t.key && t.label);
-        console.log(`  Extracted ${canonicalTopics.length} topics: ${canonicalTopics.map((t) => t.label).join(', ')}`);
-      }
-    } catch (err: any) {
-      console.log(`  Warning: Topic extraction failed (${err.message}) — will extract from rankings`);
-    }
-  }
-
-  // ── Step 3: Current rankings from DataForSEO ──
-  console.log('\n--- Step 3: Current Rankings (DataForSEO) ---');
+  // ── Step 2: Current rankings from DataForSEO ──
+  console.log('\n--- Step 2: Current Rankings (DataForSEO) ---');
 
   const dfLogin = env.DATAFORSEO_LOGIN;
   const dfPassword = env.DATAFORSEO_PASSWORD;
@@ -3332,7 +3233,7 @@ Output a JSON array starting with [`;
 
   // If <50 rankings and no topics yet, build synthetic keywords
   if (rankedKeywords.length < 50 && canonicalTopics.length === 0) {
-    console.log('  Low rankings + no crawl topics — building synthetic keyword candidates');
+    console.log('  Low rankings + no topics yet — building synthetic keyword candidates');
     const candidates: string[] = [];
     for (const pattern of config.topic_patterns) {
       for (const geo of allGeos) {
@@ -3381,7 +3282,7 @@ Output a JSON array starting with [`;
   }
   console.log(`  Topic-relevant: ${topicRankings.length}, Other: ${otherRankings.length}`);
 
-  // If no topics were extracted from crawl, extract from ranked keywords
+  // Extract topics from ranked keywords via Haiku
   if (canonicalTopics.length === 0 && topicRankings.length > 0) {
     console.log('  Extracting topics from ranked keywords...');
     const kwList = topicRankings.slice(0, 100).map((k) => k.keyword).join('\n');
@@ -3413,8 +3314,8 @@ Group related keywords into single topics. YOUR ENTIRE RESPONSE IS RAW JSON — 
     }
   }
 
-  // ── Step 4: Opportunity map via DataForSEO bulk volume ──
-  console.log('\n--- Step 4: Opportunity Map (Bulk Volume) ---');
+  // ── Step 3: Opportunity map via DataForSEO bulk volume ──
+  console.log('\n--- Step 3: Opportunity Map (Bulk Volume) ---');
   let opportunityMap: BulkVolumeResult[] = [];
 
   const candidates: string[] = [];
@@ -3442,8 +3343,8 @@ Group related keywords into single topics. YOUR ENTIRE RESPONSE IS RAW JSON — 
     console.log(`  ${opportunityMap.length} keywords with volume > 0`);
   }
 
-  // ── Step 5: Gap matrix assembly ──
-  console.log('\n--- Step 5: Gap Matrix ---');
+  // ── Step 4: Gap matrix assembly ──
+  console.log('\n--- Step 4: Gap Matrix ---');
 
   interface GapEntry {
     keyword: string;
@@ -3524,14 +3425,10 @@ Group related keywords into single topics. YOUR ENTIRE RESPONSE IS RAW JSON — 
   const gaps = gapMatrix.filter((g) => g.status === 'gap').length;
   console.log(`  Gap matrix: ${gapMatrix.length} entries (${defending} defending, ${weak} weak, ${gaps} gaps)`);
 
-  // ── Step 6: Markdown output + scope.json ──
-  console.log('\n--- Step 6: Scout Report + scope.json ---');
+  // ── Step 5: Markdown output + scope.json ──
+  console.log('\n--- Step 5: Scout Report + scope.json ---');
 
   // Build data tables for the report prompt
-  const crawlSummaryText = hasCrawlData
-    ? `Crawled ${crawlData.split('\n').filter((l) => l.trim()).length - 1} internal pages via Screaming Frog.`
-    : 'No crawl data available (DataForSEO-only mode).';
-
   const topicListText = canonicalTopics.map((t) => `- ${t.label} (\`${t.key}\`)`).join('\n');
 
   const rankingTable = topicRankings
@@ -3593,7 +3490,6 @@ YOUR ENTIRE RESPONSE IS THE REPORT. Output ONLY the markdown content — start w
 **Prospect:** ${config.name} (${domain})
 **Geo Type:** ${config.geo_type}
 **Target Geos:** ${geoDescription}
-**Crawl Status:** ${crawlSummaryText}
 **DataForSEO Cost:** $${sessionCost.toFixed(2)}
 
 ### Canonical Topics (${canonicalTopics.length})
@@ -3633,31 +3529,28 @@ ${gapTable || '| (no gap data) | | | | | |'}
 ## 1. Prospect Overview
 [2-3 sentences about the prospect, their industry, and geographic scope]
 
-## 2. Crawl Summary
-[Brief summary of what was found in the crawl, or note DataForSEO-only mode]
-
-## 3. Canonical Topic Set
+## 2. Canonical Topic Set
 [Table of canonical topics with key and label, brief description of each]
 
-## 4. Current Ranking Profile
+## 3. Current Ranking Profile
 [Table of top ranked keywords with analysis of strengths/weaknesses]
 | Keyword | Position | Volume | CPC | Intent |
 |---------|----------|--------|-----|--------|
 
-## 5. Opportunity Map
+## 4. Opportunity Map
 [Table of high-volume keyword opportunities sorted by volume]
 | Keyword | Volume | CPC | Competition |
 |---------|--------|-----|-------------|
 
-## 6. Gap Matrix
+## 5. Gap Matrix
 [Table showing defending/weak/gap status per keyword-topic combination]
 | Keyword | Topic | Status | Position | Volume | CPC |
 |---------|-------|--------|----------|--------|-----|
 
-## 7. LP Opportunity Summary
+## 6. LP Opportunity Summary
 [Analysis of landing page opportunities — which topics need pages, which existing pages could be optimized]
 
-## 8. Recommended Scope for Jim
+## 7. Recommended Scope for Jim
 [JSON block with recommended seed data for a full pipeline run]
 \`\`\`json
 {scope_json}
