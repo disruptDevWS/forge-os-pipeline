@@ -40,7 +40,8 @@ Phase 1 (Dwight)
       │
       ▼
 Phase 2 (KeywordResearch)
-  READS:     AUDIT_REPORT.md (Dwight), Supabase ← audits metadata
+  READS:     AUDIT_REPORT.md (Dwight), Supabase ← audits metadata,
+             scope.json (Scout, optional — pre-seeds matrix with gap keywords)
   PRODUCES:  keyword_research_summary.md, keyword_research_raw.json
              Supabase → audit_keywords (source='keyword_research', is_near_me)
       │
@@ -175,8 +176,8 @@ Phase 6c (sync dwight)
 **Function:** `runKeywordResearch()` | **Model:** Claude Haiku (extraction, async) + Claude Sonnet (synthesis, async)
 
 **Steps:**
-1. **Extract** — Haiku reads Dwight's AUDIT_REPORT.md, extracts services, locations, and platform
-2. **Matrix build** — Generates `service × city × intent` keyword candidates, capped at `MAX_KEYWORD_MATRIX_SIZE = 200`
+1. **Extract** — Haiku reads Dwight's AUDIT_REPORT.md, extracts services, locations, and platform. If Scout's `scope.json` exists, scout priors are injected into the extraction prompt for validation against crawl data.
+2. **Matrix build** — Generates `service × city × intent` keyword candidates, capped at `MAX_KEYWORD_MATRIX_SIZE = 200`. If `scope.json` has gap keywords, they are pre-seeded at priority 0 (survive truncation).
 3. **Volume validation** — DataForSEO bulk volume API filters zero-volume/zero-CPC keywords
 4. **Synthesis** — Sonnet produces `keyword_research_summary.md` from validated matrix
 5. **Seed Supabase** — Inserts validated keywords into `audit_keywords` with `source: 'keyword_research'` and `is_near_me` flags
@@ -423,9 +424,8 @@ Pam (generate-brief.ts) — polls pam_requests
        │
        ▼
 Oscar (generate-content.ts) — polls oscar_requests
-  READS:  execution_pages (metadata, outline, schema),
-          content/{slug}/ (disk fallback), client_profiles,
-          audit_topic_competitors, configs/oscar/
+  READS:  execution_pages (metadata, outline, schema — DB only),
+          client_profiles, audit_topic_competitors, configs/oscar/
   WRITES: content/{date}/{slug}/page.html
           execution_pages → status='review', content_html
 ```
@@ -467,7 +467,7 @@ Oscar (generate-content.ts) — polls oscar_requests
 **What it does:** Takes Pam's completed brief (metadata + outline + schema) and produces production-ready semantic HTML (`<article>` structure).
 
 **Context gathered per page:**
-1. `execution_pages` — metadata_markdown, content_outline_markdown, schema_json (Supabase first, disk fallback)
+1. `execution_pages` — metadata_markdown, content_outline_markdown, schema_json (Supabase only, warns on null fields)
 2. `client_profiles` — brand voice, business details
 3. `audit_topic_competitors` + `audit_topic_dominance` — competitive context fallback if Pam's outline lacks it
 4. `configs/oscar/system-prompt.md` + `configs/oscar/seo-playbook.md` — Oscar's persona and SEO rules
@@ -606,7 +606,7 @@ All paths relative to `audits/{domain}/`. Cross-phase reads use `resolveArtifact
 | `research/{date}/coverage_validation.md` | Validator | — (review) |
 | `architecture/{date}/architecture_blueprint.md` | Michael | sync-michael, Validator |
 | `scout/{date}/scout-{domain}-{date}.md` | Scout | — (review) |
-| `scout/{date}/scope.json` | Scout | — (Jim seed input) |
+| `scout/{date}/scope.json` | Scout | KeywordResearch (optional priors) |
 | `content/{date}/{slug}/metadata.md` | Pam | Oscar, sync-pam |
 | `content/{date}/{slug}/schema.json` | Pam | Oscar, sync-pam |
 | `content/{date}/{slug}/content_outline.md` | Pam | Oscar, sync-pam |

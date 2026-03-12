@@ -2625,6 +2625,21 @@ async function runKeywordResearch(sb: SupabaseClient, auditId: string, domain: s
   const reportContent = fs.readFileSync(auditReportPath, 'utf-8');
   console.log(`  AUDIT_REPORT.md: ${reportContent.length} chars`);
 
+  // --- Optional: Load scope.json from prior Scout run ---
+  let scopeData: any = null;
+  const scoutDir = findLatestDatedDir(path.join(AUDITS_BASE, domain, 'scout'));
+  if (scoutDir) {
+    const scopePath = path.join(scoutDir, 'scope.json');
+    if (fs.existsSync(scopePath)) {
+      try {
+        scopeData = JSON.parse(fs.readFileSync(scopePath, 'utf-8'));
+        console.log(`  scope.json: loaded (${scopeData.topics?.length ?? 0} topics, ${scopeData.gap_summary?.top_opportunities?.length ?? 0} gap keywords)`);
+      } catch (err: any) {
+        console.log(`  Warning: scope.json parse failed — continuing without scout context`);
+      }
+    }
+  }
+
   // Get audit metadata (select * to avoid column-not-found errors on optional fields)
   const { data: auditRow, error: auditErr } = await sb
     .from('audits')
@@ -2639,6 +2654,18 @@ async function runKeywordResearch(sb: SupabaseClient, auditId: string, domain: s
   const industryLabel = customLabel || serviceKey.replace(/_/g, ' ') || 'local service';
 
   // --- Step 1: Extract services + locations via LLM ---
+  const scopeContext = scopeData ? `
+## Prior Scout Discovery (validate against crawl data)
+Scout services: ${(scopeData.services ?? []).join(', ')}
+Scout locales: ${(scopeData.locales ?? []).join(', ')}
+
+Rules for scout priors:
+- KEEP scout services confirmed by crawl data (service pages, H1s, schema)
+- ADD new services discovered in the crawl that the scout missed
+- REMOVE scout services with NO evidence in the crawl
+- For locations, prefer crawl-sourced; include scout locales if crawl has no location data
+` : '';
+
   const extractionPrompt = `You are analyzing a technical SEO audit report for a ${industryLabel} business${kwGeo.label ? ` in ${kwGeo.label}` : ''}.
 
 Extract two lists from the report below:
@@ -2660,7 +2687,7 @@ Rules:
 - Normalize locations to city names only (e.g., "St. Charles" not "St. Charles, IL")
 - Deduplicate (e.g., "kitchen remodel" and "kitchen remodeling" → "Kitchen Remodeling")
 - If no services or locations are found, return empty arrays — do NOT guess
-
+${scopeContext}
 YOUR ENTIRE RESPONSE IS RAW JSON. Output ONLY the JSON object starting with {. No markdown, no code fences, no narration.
 
 Respond with raw JSON only:
@@ -2715,6 +2742,21 @@ ${reportContent}`;
 
   const matrix: MatrixKeyword[] = [];
   let priorityCounter = 0;
+
+  // Pre-seed from scout gap keywords (priority 0+, survives truncation)
+  if (scopeData?.gap_summary?.top_opportunities?.length) {
+    for (const opp of scopeData.gap_summary.top_opportunities) {
+      const kwLower = opp.keyword.toLowerCase();
+      if (!matrix.some((m) => m.keyword === kwLower)) {
+        matrix.push({
+          keyword: kwLower, service: opp.topic || 'scout', city: '',
+          intent: 'commercial', is_near_me: kwLower.includes(' near me'),
+          priority: priorityCounter++,
+        });
+      }
+    }
+    console.log(`  Pre-seeded ${matrix.length} keywords from scout gap_summary`);
+  }
 
   // Primary city is the first (usually the business's main market)
   const primaryCity = locations[0];
@@ -2806,7 +2848,7 @@ ${reportContent}`;
     .map((v) => `${v.keyword} | ${v.service} | ${v.city || 'N/A'} | ${v.intent} | ${v.volume} | $${v.cpc} | ${v.is_near_me ? 'yes' : 'no'}`)
     .join('\n');
 
-  const synthesisPrompt = `You are a Keyword Research Analyst for a ${industryLabel} business in ${marketCity || 'unknown'}, ${marketState || ''}.
+  const synthesisPrompt = `You are a Keyword Research Analyst for a ${industryLabel} business in ${kwGeo.label || 'unknown'}.
 
 ## Site Inventory (from Dwight's Crawl)
 Services: ${services.join(', ')}

@@ -265,6 +265,9 @@ async function gatherContext(sb: SupabaseClient, req: PamRequest) {
   } catch {
     // Blueprint is optional context
   }
+  if (!blueprintExcerpt) {
+    console.log(`  WARNING: No architecture blueprint context for /${req.page_url} — brief generated without silo structure`);
+  }
 
   // 6. SERP enrichment (DataForSEO Advanced — optional)
   let serpEnrichment: SerpEnrichment | null = null;
@@ -310,6 +313,9 @@ async function gatherContext(sb: SupabaseClient, req: PamRequest) {
     }
   } catch {
     // Research summary is optional
+  }
+  if (!marketContext) {
+    console.log(`  WARNING: No market context for /${req.page_url} — brief generated without striking distance data`);
   }
 
   // 8. Content gap data from Phase 5 (Gap agent)

@@ -209,43 +209,15 @@ async function gatherBrief(
     .or(`url_slug.eq.${normalizedSlug},url_slug.eq./${normalizedSlug}`)
     .maybeSingle();
 
-  let metadataMarkdown = (page as any)?.metadata_markdown ?? null;
-  let contentOutlineMarkdown = (page as any)?.content_outline_markdown ?? null;
-  let schemaJson = (page as any)?.schema_json ?? null;
+  const metadataMarkdown = (page as any)?.metadata_markdown ?? null;
+  const contentOutlineMarkdown = (page as any)?.content_outline_markdown ?? null;
+  const schemaJson = (page as any)?.schema_json ?? null;
 
-  // Fallback to disk if DB fields are null
-  const contentBase = path.join(AUDITS_BASE, domain, 'content');
-  const latestDate = getLatestDateDir(contentBase);
-  if (latestDate) {
-    const slugDir = path.join(contentBase, latestDate, normalizedSlug);
-
-    if (!metadataMarkdown) {
-      const diskPath = path.join(slugDir, 'metadata.md');
-      if (fs.existsSync(diskPath)) {
-        metadataMarkdown = fs.readFileSync(diskPath, 'utf-8');
-        console.log(`  Loaded metadata.md from disk fallback`);
-      }
-    }
-
-    if (!contentOutlineMarkdown) {
-      const diskPath = path.join(slugDir, 'content_outline.md');
-      if (fs.existsSync(diskPath)) {
-        contentOutlineMarkdown = fs.readFileSync(diskPath, 'utf-8');
-        console.log(`  Loaded content_outline.md from disk fallback`);
-      }
-    }
-
-    if (!schemaJson) {
-      const diskPath = path.join(slugDir, 'schema.json');
-      if (fs.existsSync(diskPath)) {
-        try {
-          schemaJson = JSON.parse(fs.readFileSync(diskPath, 'utf-8'));
-          console.log(`  Loaded schema.json from disk fallback`);
-        } catch {
-          console.log(`  Warning: Could not parse disk schema.json`);
-        }
-      }
-    }
+  if (!metadataMarkdown) {
+    console.log(`  WARNING: metadata_markdown is null for /${normalizedSlug} — brief may be incomplete`);
+  }
+  if (!schemaJson) {
+    console.log(`  WARNING: schema_json is null for /${normalizedSlug} — HTML will lack JSON-LD`);
   }
 
   return { metadataMarkdown, contentOutlineMarkdown, schemaJson, slug: normalizedSlug, domain, auditId };

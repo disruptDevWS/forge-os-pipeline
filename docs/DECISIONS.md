@@ -62,3 +62,15 @@ If an audit row has `geo_mode=NULL` (should not happen after migration backfill,
 **2026-03-11: generateKeywordCandidates handles state/national modes**
 
 For state mode, `locales` are state names (e.g., "Idaho", "Washington") — the `{service} {locale} {state}` variant is skipped to avoid "phlebotomy training Idaho Idaho". For national mode, `locales` is empty — candidates are `{service}` without any geo modifier.
+
+**2026-03-12: KeywordResearch consumes scope.json as optional priors (soft dependency)**
+
+When a prospect converts to a client, Scout's `scope.json` contains topics and gap keywords already discovered. KeywordResearch now loads this file using `findLatestDatedDir()` + inline `fs.existsSync()` rather than extending `resolveArtifactPath()`. Rationale: scope.json is read in exactly one place (KeywordResearch), and extending the `'research' | 'architecture'` union type on `resolveArtifactPath()` would touch 6 call sites for no benefit. Scout priors are injected into the Haiku extraction prompt for validation against crawl data (not blindly trusted), and gap keywords are pre-seeded at priority 0 so they survive matrix truncation. The `marketCity`/`marketState` bug in the synthesis prompt was fixed in the same change — those variables were undeclared in `runKeywordResearch` scope; `kwGeo.label` is the correct source.
+
+**2026-03-12: Oscar disk fallback removed (DB-only source of truth)**
+
+Oscar's `gatherBrief()` had a dual-source pattern: query `execution_pages` from Supabase first, then fall back to disk files (`metadata.md`, `content_outline.md`, `schema.json`) if DB columns were null. This masked real failures — if Pam's upsert to `execution_pages` failed silently, Oscar would happily read stale disk data and produce content from outdated briefs. Removed the disk fallback entirely; Oscar now warns on null `metadata_markdown` and `schema_json` fields. The existing hard check (`if (!brief.contentOutlineMarkdown) throw`) enforces the critical requirement.
+
+**2026-03-12: Pam logs warnings for missing enrichment files**
+
+`generate-brief.ts` had empty catch blocks around `architecture_blueprint.md` and `research_summary.md` reads — when these files were absent, the brief was generated silently without silo structure or striking distance context. Added WARNING logs after each try-catch so operators can see which enrichments are missing. No behavior change — files remain optional.
