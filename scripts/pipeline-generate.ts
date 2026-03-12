@@ -2260,11 +2260,10 @@ async function runDwight(domain: string) {
   {
     const sfBin = process.env.SF_BIN || 'screamingfrogseospider';
 
-    // Check if semantic config exists — determines whether we include Content tabs
-    const semanticConfig = path.resolve(process.cwd(), 'configs/semantic_config.seospiderconfig');
-    const hasSemanticConfig = fs.existsSync(semanticConfig);
-
     // Build SF CLI command with comprehensive exports
+    // Note: Gemini embeddings (via --config semantic_config) were removed.
+    // They caused ETIMEDOUT on sites >500 pages, and the semantic similarity
+    // signal is already covered by Jim (canonicalization) and Michael (topic overlap).
     const exportTabsList = [
       'Internal:All', 'External:All',
       'Response Codes:Client Error (4xx)', 'Response Codes:Redirection (3xx)', 'Response Codes:Server Error (5xx)',
@@ -2273,8 +2272,6 @@ async function runDwight(domain: string) {
       'Images:All', 'Canonicals:All', 'Directives:All',
       'Sitemaps:All', 'Structured Data:All',
     ];
-    // Content:All requires content analysis enabled via --config; without it SF produces ZERO output
-    if (hasSemanticConfig) exportTabsList.push('Content:All');
 
     const bulkExportsList = [
       'Images:Images Missing Alt Text Inlinks',
@@ -2284,13 +2281,8 @@ async function runDwight(domain: string) {
       'Security:Unsafe Cross-Origin Links',
       'Links:Internal Outlinks With No Anchor Text',
     ];
-    if (hasSemanticConfig) bulkExportsList.push('Content:Semantically Similar', 'Content:Near Duplicates');
 
     const saveReportsList = ['Crawl Overview', 'Issues Overview'];
-
-    if (hasSemanticConfig) {
-      console.log('  Using semantic config — Content tabs + Gemini embeddings enabled');
-    }
 
     // Clean output dir so stale files don't mask failures
     if (fs.existsSync(outDir)) {
@@ -2310,10 +2302,7 @@ async function runDwight(domain: string) {
     const bulkExportsStr = bulkExportsList.join(',');
     const saveReportsStr = saveReportsList.join(',');
 
-    let sfCmd = `${shellEscape(sfBin)} \\\n  --crawl ${shellEscape(url)} \\\n  --headless \\\n  --output-folder ${shellEscape(outDir)} \\\n  --overwrite \\\n  --export-tabs ${shellEscape(exportTabsStr)} \\\n  --bulk-export ${shellEscape(bulkExportsStr)} \\\n  --save-report ${shellEscape(saveReportsStr)}`;
-    if (hasSemanticConfig) {
-      sfCmd += ` \\\n  --config ${shellEscape(semanticConfig)}`;
-    }
+    const sfCmd = `${shellEscape(sfBin)} \\\n  --crawl ${shellEscape(url)} \\\n  --headless \\\n  --output-folder ${shellEscape(outDir)} \\\n  --overwrite \\\n  --export-tabs ${shellEscape(exportTabsStr)} \\\n  --bulk-export ${shellEscape(bulkExportsStr)} \\\n  --save-report ${shellEscape(saveReportsStr)}`;
 
     const tmpScript = path.join(outDir, '_sf_crawl.sh');
     fs.writeFileSync(tmpScript, `#!/bin/bash\nset -x\n${sfCmd}\n`, { mode: 0o755 });
@@ -2322,21 +2311,22 @@ async function runDwight(domain: string) {
     console.log(`  Output directory: ${path.relative(process.cwd(), outDir)}/`);
     console.log(`  Script: ${tmpScript}`);
 
-    // Execute via bash — inherits stdio for SF's verbose Java logging
-    const sfResult = child_process.spawnSync('bash', [tmpScript], {
-      timeout: 600_000,
-      stdio: 'inherit',
-      cwd: process.cwd(),
+    // Execute via async spawn — avoids spawnSync's timeout cap which caused
+    // ETIMEDOUT on large sites. SF crawls can take 10+ minutes for 1000+ URLs.
+    const sfExitCode = await new Promise<number>((resolve, reject) => {
+      const child = child_process.spawn('bash', [tmpScript], {
+        stdio: 'inherit',
+        cwd: process.cwd(),
+      });
+      child.on('error', (err) => reject(new Error(`SF spawn failed: ${err.message}`)));
+      child.on('close', (code) => resolve(code ?? 1));
     });
 
     // Clean up temp script
     try { fs.unlinkSync(tmpScript); } catch {}
 
-    if (sfResult.error) {
-      throw new Error(`SF spawn failed: ${sfResult.error.message}`);
-    }
-    if (sfResult.status !== 0) {
-      console.log(`  Warning: SF exited ${sfResult.status}`);
+    if (sfExitCode !== 0) {
+      console.log(`  Warning: SF exited ${sfExitCode}`);
     }
   }
 

@@ -121,10 +121,11 @@ trap 'update_status failed' ERR
 update_status audit
 
 # ─── Phase 1: Dwight — Comprehensive SF Crawl ───────────────
-# Runs Screaming Frog CLI with 15 export tabs, 12 bulk exports,
-# 5 reports. Produces 20+ CSV files + AUDIT_REPORT.md.
-# Copies internal_all.csv + semantically_similar_report.csv to
-# architecture dir for Michael.
+# Runs Screaming Frog CLI with 14 export tabs, 7 bulk exports,
+# 2 reports. Produces ~20 CSV files + AUDIT_REPORT.md.
+# Copies internal_all.csv to architecture dir for Michael.
+# Note: Gemini embeddings removed — semantic similarity covered by
+# Jim (canonicalization) and Michael (topic overlap).
 echo ""
 echo "--- Phase 1: Dwight (Comprehensive SF Crawl) ---"
 npx tsx scripts/pipeline-generate.ts dwight --domain "$DOMAIN" --user-email "$EMAIL"

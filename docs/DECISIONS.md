@@ -86,3 +86,11 @@ Supabase Edge Functions need to reach the NanoClaw pipeline server running on a 
 **2026-03-12: Convert-to-client wired end-to-end (Scout → Pipeline)**
 
 Prospect conversion flow: Dashboard `useConvertProspect` creates an `audits` row (with `geo_mode` and `market_geos` from the prospect — required by `resolveGeoScope()`), creates `audit_assumptions`, updates prospect `status='converted'`, then invokes `run-audit` edge function. The edge function sets audit `status='running'` and POSTs to `/trigger-pipeline`. KeywordResearch (Phase 2) automatically finds Scout's `scope.json` on disk and pre-seeds the keyword matrix with gap keywords. No manual data migration needed between prospect and audit phases.
+
+**2026-03-12: Gemini embeddings removed from SF crawl (Dwight Phase 1)**
+
+SF's `--config semantic_config.seospiderconfig` enabled Gemini API embeddings for content similarity detection. Removed because: (1) the embedding API times out on sites >500 pages — exactly the sites where cannibalization matters; (2) Jim's canonicalization (Phase 3c) and Michael's topic overlap analysis (Phase 6) already cover the same cannibalization signal from keyword and architecture angles; (3) the semantic similarity report (`Content:Semantically Similar`, `Content:Near Duplicates`) was a nice-to-have but not critical-path for the audit. The `semanticReport` variable in the prompt and Michael's `resolveArtifactPath('semantically_similar_report.csv')` both gracefully handle the file not existing. If content-level similarity analysis is needed for a specific client, it can be a standalone tool.
+
+**2026-03-12: SF crawl uses async spawn instead of spawnSync**
+
+The SF CLI was invoked via `child_process.spawnSync('bash', [tmpScript], { timeout: 600_000 })`. For large sites, the 600s timeout caused `ETIMEDOUT` even when the crawl had completed — SF was still processing (API calls, report generation). Switched to async `child_process.spawn()` wrapped in a Promise, which has no timeout cap. SF's Java process manages its own timeouts internally.

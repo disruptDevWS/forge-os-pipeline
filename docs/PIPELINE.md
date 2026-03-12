@@ -48,8 +48,8 @@ Phase 0 (Scout) ← prospect mode only, exits after completion
   scope.json persists on disk for Phase 2 (KeywordResearch reads it as optional priors)
 
 Phase 1 (Dwight)
-  PRODUCES:  internal_all.csv, AUDIT_REPORT.md, 20+ CSVs
-             Copies internal_all.csv + semantically_similar_report.csv → architecture/
+  PRODUCES:  internal_all.csv, AUDIT_REPORT.md, ~20 CSVs
+             Copies internal_all.csv → architecture/
       │
       ▼
 Phase 2 (KeywordResearch)
@@ -99,7 +99,7 @@ Phase 5 (Gap)                            ← skipped in sales mode
 Phase 6 (Michael)
   READS:     research_summary.md (Jim), ranked_keywords.json (Jim),
              content_gap_analysis.md (Gap), internal_all.csv (Dwight),
-             semantically_similar_report.csv (Dwight), AUDIT_REPORT.md (Dwight, platform section),
+             AUDIT_REPORT.md (Dwight, platform section),
              Supabase ← audit_clusters
   PRODUCES:  architecture_blueprint.md
       │
@@ -116,7 +116,7 @@ Phase 6b (sync michael)
       │
       ▼
 Phase 6c (sync dwight)
-  READS:     internal_all.csv, AUDIT_REPORT.md, semantically_similar_report.csv
+  READS:     internal_all.csv, AUDIT_REPORT.md
   PRODUCES:  Supabase → agent_technical_pages, audit_snapshots
 ```
 
@@ -168,13 +168,13 @@ Phase 6c (sync dwight)
 
 | Tool | Details |
 |------|---------|
-| Screaming Frog CLI | `--crawl`, `--headless`, 15 export tabs, 9 bulk exports, 2 reports. Optional `--config` for Gemini embeddings. 600s timeout. |
+| Screaming Frog CLI | `--crawl`, `--headless`, 14 export tabs, 7 bulk exports, 2 reports. Async spawn (no timeout cap). |
 | Claude CLI (sonnet) | Generates AUDIT_REPORT.md from crawl CSVs. `internal_all.csv` filtered to 32 key columns before prompting. |
 
 **Output files** (relative to `audits/{domain}/`):
-- `auditor/{date}/internal_all.csv` + 20+ supplementary CSVs
-- `auditor/{date}/AUDIT_REPORT.md` (11-12 sections + prioritized fix list)
-- **Copies to `architecture/{date}/`:** `internal_all.csv`, `semantically_similar_report.csv`
+- `auditor/{date}/internal_all.csv` + ~20 supplementary CSVs
+- `auditor/{date}/AUDIT_REPORT.md` (11 sections + prioritized fix list)
+- **Copies to `architecture/{date}/`:** `internal_all.csv`
 
 **Key detail:** `internal_all.csv` is filtered from ~75 columns to 32 SEO-relevant columns (`INTERNAL_ALL_KEEP_COLUMNS`) before being included in the prompt. This reduces the file from ~1.3MB to ~20KB and prevents "Prompt too long" errors.
 
@@ -358,7 +358,7 @@ Reads ALL prior artifacts to produce a silo-based site architecture.
 **Input summary:**
 - Jim: `research_summary.md` + top 200 keywords from `ranked_keywords.json`
 - Gap: `content_gap_analysis.md`
-- Dwight: `internal_all.csv` (filtered, 100 rows), `semantically_similar_report.csv` (50 rows), Platform Observations from `AUDIT_REPORT.md`
+- Dwight: `internal_all.csv` (filtered, 100 rows), Platform Observations from `AUDIT_REPORT.md`
 - Supabase: `audit_clusters` (revenue estimates)
 
 All cross-phase reads use `resolveArtifactPath()` with date fallback for operational resilience.
@@ -415,7 +415,7 @@ Cross-checks Gap's identified gaps against Michael's blueprint to verify coverag
 
 | Table | Purpose |
 |-------|---------|
-| `agent_technical_pages` | Per-page technical data (status_code, word_count, title, h1, meta_desc, depth, indexability, inlinks, semantic flags) |
+| `agent_technical_pages` | Per-page technical data (status_code, word_count, title, h1, meta_desc, depth, indexability, inlinks) |
 | `audit_snapshots` | Parsed AUDIT_REPORT.md sections (executive_summary, prioritized_fixes, agentic_readiness, structured_data_issues, heading_issues, security_issues) |
 
 ---
@@ -659,9 +659,8 @@ All paths relative to `audits/{domain}/`. Cross-phase reads use `resolveArtifact
 |------|----------|-----------|
 | `auditor/{date}/internal_all.csv` | Dwight | Jim (service pages), sync-dwight |
 | `auditor/{date}/AUDIT_REPORT.md` | Dwight | KeywordResearch, Michael (platform section), sync-dwight |
-| `auditor/{date}/*.csv` (20+ files) | Dwight | Dwight (prompt context) |
+| `auditor/{date}/*.csv` (~20 files) | Dwight | Dwight (prompt context) |
 | `architecture/{date}/internal_all.csv` | Dwight (copy) | Michael |
-| `architecture/{date}/semantically_similar_report.csv` | Dwight (copy) | Michael |
 | `research/{date}/keyword_research_raw.json` | KeywordResearch | — (debug) |
 | `research/{date}/keyword_research_summary.md` | KeywordResearch | Jim |
 | `research/{date}/ranked_keywords.json` | Jim | sync-jim, Michael |
