@@ -406,6 +406,110 @@ Cross-checks Gap's identified gaps against Michael's blueprint to verify coverag
 
 ---
 
+## Post-Pipeline: On-Demand Content Agents
+
+These agents run **outside** `run-pipeline.sh` — they are triggered per-page via Supabase request tables, not as pipeline phases. They operate on pages created by sync-michael in `execution_pages`.
+
+```
+sync-michael → execution_pages (page_brief, status='not_started')
+       │
+       ▼
+Pam (generate-brief.ts) — polls pam_requests
+  READS:  execution_pages, audit_keywords, audit_snapshots (gap),
+          architecture_blueprint.md, research_summary.md,
+          client_profiles, DataForSEO SERP Advanced
+  WRITES: content/{date}/{slug}/metadata.md, schema.json, content_outline.md
+          execution_pages → status='brief_ready'
+       │
+       ▼
+Oscar (generate-content.ts) — polls oscar_requests
+  READS:  execution_pages (metadata, outline, schema),
+          content/{slug}/ (disk fallback), client_profiles,
+          audit_topic_competitors, configs/oscar/
+  WRITES: content/{date}/{slug}/page.html
+          execution_pages → status='review', content_html
+```
+
+### Pam — Content Brief Generation
+
+**Script:** `scripts/generate-brief.ts` | **Model:** Claude Sonnet (async)
+
+**Trigger:** `pam_requests` table (status='pending'). Polled by running `npx tsx scripts/generate-brief.ts [--domain <d>]`.
+
+**What it does:** For each `execution_pages` row created by sync-michael, generates a complete content brief: metadata (meta title, description, H1, intent), JSON-LD schema, and a detailed content outline with per-section word counts, keyword targets, and internal linking maps.
+
+**Context gathered per page:**
+1. `execution_pages` — page_brief, silo, url_slug (from sync-michael)
+2. `audit_keywords` — keywords in the same cluster/silo
+3. `architecture_blueprint.md` — silo excerpt from disk
+4. `research_summary.md` — striking distance + key takeaways from Jim
+5. `audit_snapshots` (agent='gap') — authority gaps and format gaps
+6. `client_profiles` — brand voice, USPs, differentiators (optional)
+7. DataForSEO SERP Advanced — PAA questions, People Also Search, top organic competitors (optional, per primary keyword)
+
+**Output (3 files per page):**
+- `content/{date}/{slug}/metadata.md` — meta title, description, H1, intent, keyword-element mapping
+- `content/{date}/{slug}/schema.json` — JSON-LD @graph (Organization, WebSite, WebPage, Service, FAQPage)
+- `content/{date}/{slug}/content_outline.md` — section-by-section outline, word counts, keyword placement, internal linking map
+
+**Supabase writes:** `execution_pages` UPDATE (metadata_markdown, schema_json, content_outline_markdown, meta_title, meta_description, h1_recommendation, intent_classification, target_word_count, status → 'brief_ready')
+
+**Prompt structure:** Uses sentinel markers (`---METADATA_START---`/`---METADATA_END---`, `---SCHEMA_START---`/`---SCHEMA_END---`, `---OUTLINE_START---`/`---OUTLINE_END---`) to parse three output sections from a single Claude call.
+
+---
+
+### Oscar — Content Production (HTML Generation)
+
+**Script:** `scripts/generate-content.ts` | **Model:** Claude Sonnet (async)
+
+**Trigger:** `oscar_requests` table (status='pending') or direct CLI: `npx tsx scripts/generate-content.ts --domain <d> --slug <s>`.
+
+**What it does:** Takes Pam's completed brief (metadata + outline + schema) and produces production-ready semantic HTML (`<article>` structure).
+
+**Context gathered per page:**
+1. `execution_pages` — metadata_markdown, content_outline_markdown, schema_json (Supabase first, disk fallback)
+2. `client_profiles` — brand voice, business details
+3. `audit_topic_competitors` + `audit_topic_dominance` — competitive context fallback if Pam's outline lacks it
+4. `configs/oscar/system-prompt.md` + `configs/oscar/seo-playbook.md` — Oscar's persona and SEO rules
+
+**Output:**
+- `content/{date}/{slug}/page.html` — production-ready semantic HTML
+- `content/_debug/{slug}-oscar-raw.html` — raw Claude output (debug)
+
+**Supabase writes:** `execution_pages` UPDATE (content_html, status → 'review')
+
+**HTML extraction:** `extractHtmlContent()` strips Claude preamble/postamble — looks for first `<!--` through last `-->`, falls back to code fence stripping.
+
+---
+
+### sync-pam — Batch Re-sync (Disk → Supabase)
+
+**Function:** `syncPam()` in `scripts/sync-to-dashboard.ts` | **No external APIs**
+
+**Purpose:** Batch re-sync of Pam's disk output back to Supabase. This is a recovery/re-sync mechanism — `generate-brief.ts` already writes to `execution_pages` directly. Use this to re-populate Supabase from disk if data is lost or to sync briefs generated outside the normal flow.
+
+**Invocation:** `npx tsx scripts/sync-to-dashboard.ts --domain <d> --user-email <e> --agents pam`
+
+**Reads:** `content/{date}/{slug}/metadata.md`, `schema.json`, `content_outline.md` from disk
+
+**Supabase writes:**
+- `agent_implementation_pages` — legacy table (backward compat, DELETE+INSERT)
+- `execution_pages` — UPSERT (matches by slug, preserves page_brief/status from Michael, promotes `not_started` → `brief_ready`)
+- `agent_runs`, `audit_snapshots` (agent='pam')
+
+---
+
+### Page Status Lifecycle
+
+```
+not_started  → sync-michael creates execution_pages row with page_brief
+brief_ready  → Pam generates metadata + schema + outline
+review       → Oscar generates page.html
+published    → (manual, via dashboard)
+```
+
+---
+
 ## Operational Resilience
 
 **Date fallback:** Pipeline phases may span midnight. `resolveArtifactPath()` tries today's date first, then falls back to the most recent dated directory containing the requested file. This means a failed Phase 5 re-run at 12:01 AM still finds Phase 3's artifacts from 11:58 PM.
@@ -431,6 +535,7 @@ Cross-checks Gap's identified gaps against Michael's blueprint to verify coverag
 | DataForSEO Competitors | `https://api.dataforseo.com/v3/dataforseo_labs/google/competitors_domain/live` | Jim | Basic auth |
 | DataForSEO Bulk Volume | `https://api.dataforseo.com/v3/keywords_data/google_ads/search_volume/live` | Jim, KeywordResearch | Basic auth |
 | DataForSEO SERP Organic | `https://api.dataforseo.com/v3/serp/google/organic/live/regular` | Competitors | Basic auth |
+| DataForSEO SERP Advanced | `https://api.dataforseo.com/v3/serp/google/organic/live/advanced` | Pam | Basic auth |
 | DataForSEO Credits | `https://api.dataforseo.com/v3/appendix/user_data` | foundational_scout.sh | Basic auth |
 | Claude CLI | `claude --print --model {model} --tools ''` | All generation phases | OAuth token |
 | Screaming Frog | `screamingfrogseospider --crawl --headless` | Dwight (Phase 1 only) | License key |
@@ -448,6 +553,8 @@ Cross-checks Gap's identified gaps against Michael's blueprint to verify coverag
 | 5 | Gap | **sonnet** | `callClaudeAsync()` | Gap analysis JSON |
 | 6 | Michael | **sonnet** | `callClaudeAsync()` | architecture_blueprint.md |
 | 6.5 | Validator | **haiku** | `callClaudeAsync()` | Coverage validation JSON |
+| — | Pam | **sonnet** | `callClaudeAsync()` | Content brief (metadata + schema + outline) |
+| — | Oscar | **sonnet** | `callClaudeAsync()` | Production HTML from brief |
 
 **Sync vs Async:** `callClaude()` uses `spawnSync` — suitable for small Haiku batches. `callClaudeAsync()` uses async `spawn` — required for large prompts (>50K chars) to avoid ETIMEDOUT errors.
 
@@ -470,10 +577,14 @@ Cross-checks Gap's identified gaps against Michael's blueprint to verify coverag
 | `agent_technical_pages` | — | sync-dwight (DELETE+INSERT) |
 | `agent_architecture_pages` | Gap | sync-michael (DELETE+INSERT) |
 | `agent_architecture_blueprint` | — | sync-michael (DELETE+INSERT) |
-| `execution_pages` | sync-michael | sync-michael (UPSERT) |
+| `execution_pages` | sync-michael, Pam, Oscar | sync-michael (UPSERT), Pam (UPDATE → brief_ready), Oscar (UPDATE → review), sync-pam (UPSERT) |
 | `baseline_snapshots` | sync-jim | sync-jim (UPSERT, first run only) |
 | `audit_coverage_validation` | — | Validator (DELETE+INSERT) |
 | `prospects` | Scout | Scout (INSERT/UPDATE) |
+| `pam_requests` | Pam | Dashboard (INSERT, status='pending') |
+| `oscar_requests` | Oscar | Dashboard (INSERT, status='pending') |
+| `client_profiles` | Pam, Oscar | Dashboard (manual) |
+| `agent_implementation_pages` | — | sync-pam (DELETE+INSERT, legacy compat) |
 
 ## Disk Artifact Reference
 
@@ -496,3 +607,10 @@ All paths relative to `audits/{domain}/`. Cross-phase reads use `resolveArtifact
 | `architecture/{date}/architecture_blueprint.md` | Michael | sync-michael, Validator |
 | `scout/{date}/scout-{domain}-{date}.md` | Scout | — (review) |
 | `scout/{date}/scope.json` | Scout | — (Jim seed input) |
+| `content/{date}/{slug}/metadata.md` | Pam | Oscar, sync-pam |
+| `content/{date}/{slug}/schema.json` | Pam | Oscar, sync-pam |
+| `content/{date}/{slug}/content_outline.md` | Pam | Oscar, sync-pam |
+| `content/{date}/{slug}/page.html` | Oscar | — (review/publish) |
+| `content/_debug/{slug}-oscar-raw.html` | Oscar | — (debug) |
+| `configs/oscar/system-prompt.md` | Manual | Oscar |
+| `configs/oscar/seo-playbook.md` | Manual | Oscar |

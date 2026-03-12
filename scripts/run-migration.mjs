@@ -86,40 +86,61 @@ async function main() {
   }
 
   // Read and execute migration SQL
-  const sqlPath = path.join(__dirname, 'forge-os-migration.sql');
+  const sqlFile = process.argv[2] || 'forge-os-migration.sql';
+  const sqlPath = path.resolve(__dirname, sqlFile);
+  console.log(`\nMigration file: ${path.basename(sqlPath)}`);
   const sql = fs.readFileSync(sqlPath, 'utf8');
 
-  // Split into individual statements (on semicolons not inside strings)
-  const statements = sql
-    .split(/;\s*$/m)
-    .map(s => s.trim())
-    .filter(s => s && !s.startsWith('--'));
-
-  console.log(`\nExecuting ${statements.length} statements...\n`);
-
-  let success = 0;
-  let failed = 0;
-
-  for (const stmt of statements) {
-    const preview = stmt.split('\n').find(l => l.trim() && !l.trim().startsWith('--'))?.trim().substring(0, 80) || stmt.substring(0, 80);
+  // If SQL contains $$ blocks (PL/pgSQL), execute as single query to avoid
+  // the semicolon splitter breaking inside DO/FUNCTION bodies.
+  if (sql.includes('$$')) {
+    console.log('Detected $$ blocks — executing as single query...\n');
     try {
-      await client.query(stmt);
-      console.log(`  ✓ ${preview}`);
-      success++;
+      await client.query(sql);
+      console.log('  ✓ Migration executed successfully');
     } catch (err) {
-      // Some errors are expected (e.g., "already exists")
       if (err.message.includes('already exists') || err.message.includes('duplicate')) {
-        console.log(`  ~ ${preview} (already exists, skipping)`);
-        success++;
+        console.log(`  ~ Migration completed (some objects already exist)`);
       } else {
-        console.error(`  ✗ ${preview}`);
-        console.error(`    Error: ${err.message}`);
-        failed++;
+        console.error(`  ✗ Migration failed: ${err.message}`);
+        await client.end();
+        process.exit(1);
       }
     }
-  }
+    console.log('\nDone');
+  } else {
+    // Split into individual statements (on semicolons at end of line)
+    const statements = sql
+      .split(/;\s*$/m)
+      .map(s => s.trim())
+      .filter(s => s && !s.startsWith('--'));
 
-  console.log(`\nDone: ${success} succeeded, ${failed} failed`);
+    console.log(`Executing ${statements.length} statements...\n`);
+
+    let success = 0;
+    let failed = 0;
+
+    for (const stmt of statements) {
+      const preview = stmt.split('\n').find(l => l.trim() && !l.trim().startsWith('--'))?.trim().substring(0, 80) || stmt.substring(0, 80);
+      try {
+        await client.query(stmt);
+        console.log(`  ✓ ${preview}`);
+        success++;
+      } catch (err) {
+        // Some errors are expected (e.g., "already exists")
+        if (err.message.includes('already exists') || err.message.includes('duplicate')) {
+          console.log(`  ~ ${preview} (already exists, skipping)`);
+          success++;
+        } else {
+          console.error(`  ✗ ${preview}`);
+          console.error(`    Error: ${err.message}`);
+          failed++;
+        }
+      }
+    }
+
+    console.log(`\nDone: ${success} succeeded, ${failed} failed`);
+  }
   await client.end();
   process.exit(failed > 0 ? 1 : 0);
 }
