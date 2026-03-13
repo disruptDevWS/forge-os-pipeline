@@ -1065,7 +1065,7 @@ function parseAuditReport(filePath: string): ParsedAuditReport {
   if (agenticMatch) {
     const tableBlock = agenticMatch[1];
     const rows = tableBlock.matchAll(
-      /\|\s*(.+?)\s*\|\s*\*{0,2}(PASS|FAIL)\*{0,2}\s*\|\s*(.+?)\s*\|/gi
+      /\|\s*(.+?)\s*\|\s*\*{0,2}(PASS|FAIL)\*{0,2}[^|]*\|\s*(.+?)\s*\|/gi
     );
     for (const row of rows) {
       result.agenticReadiness.push({

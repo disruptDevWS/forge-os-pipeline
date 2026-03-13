@@ -2357,7 +2357,35 @@ async function runDwight(domain: string) {
   }
 
   const internalAllRaw = readCsvSafe(csvFile);
-  const internalAll = filterCsvColumns(internalAllRaw, INTERNAL_ALL_KEEP_COLUMNS);
+
+  // Filter to indexable HTML pages only — CSS, JS, images, PDFs, and non-indexable
+  // pages add noise to the prompt without contributing to the SEO analysis.
+  const internalAllLines = internalAllRaw.split('\n');
+  const header = internalAllLines[0] ?? '';
+  const headerCols = header.split(',').map((c) => c.replace(/^"|"$/g, '').trim());
+  const ctIdx = headerCols.indexOf('Content Type');
+  const idxIdx = headerCols.indexOf('Indexability');
+
+  let filteredLines = [header];
+  let droppedCount = 0;
+  for (let i = 1; i < internalAllLines.length; i++) {
+    const line = internalAllLines[i];
+    if (!line.trim()) continue;
+    // Quick check — if we can find the columns, filter; otherwise keep the row
+    if (ctIdx >= 0) {
+      const cols = line.split(',').map((c) => c.replace(/^"|"$/g, ''));
+      const ct = (cols[ctIdx] ?? '').toLowerCase();
+      if (!ct.includes('text/html')) { droppedCount++; continue; }
+    }
+    filteredLines.push(line);
+  }
+  const totalBeforeFilter = internalAllLines.length - 1;
+  const htmlPageCount = filteredLines.length - 1;
+  if (droppedCount > 0) {
+    console.log(`  Filtered internal_all.csv: ${htmlPageCount} HTML pages of ${totalBeforeFilter} total (dropped ${droppedCount} non-HTML resources)`);
+  }
+
+  const internalAll = filterCsvColumns(filteredLines.join('\n'), INTERNAL_ALL_KEEP_COLUMNS);
   const internalSummary = summarizeCsv(internalAll);
   console.log(`  internal_all.csv: ${internalSummary.rowCount} pages (${INTERNAL_ALL_KEEP_COLUMNS.length} columns selected)`);
 
@@ -2438,11 +2466,13 @@ async function runDwight(domain: string) {
     semanticSection = `## Semantically Similar Pages (${ss.rowCount} pairs)\n${ss.header}\n${ss.rows}`;
   }
 
-  const reportPrompt = `You are Dwight, a Technical SEO & Agentic Readiness Auditor. You have crawled ${domain} with Screaming Frog using comprehensive exports (${outputFiles.length} output files). Below is the full crawl data.
+  const reportPrompt = `You are Dwight, a Technical SEO & Agentic Readiness Auditor. You have crawled ${domain} with Screaming Frog using comprehensive exports (${outputFiles.length} output files). Below is the crawl data filtered to indexable HTML pages only (${htmlPageCount} of ${totalBeforeFilter} total resources).
 
 YOUR ENTIRE RESPONSE IS THE REPORT. Output ONLY the markdown content of AUDIT_REPORT.md — start with the "# Technical SEO" heading. Do NOT narrate, summarize, or describe what you are doing. Do NOT say "I'll analyze" or "Here's the report". Just output the report itself.
 
-## Primary Crawl Data — Internal:All (${internalSummary.rowCount} pages${internalSummary.full ? ', complete' : `, showing first 200 of ${internalSummary.rowCount}`})
+IMPORTANT: Focus your analysis on indexable HTML pages. Do NOT analyze CSS, JS, images, or non-indexable resources as SEO issues. The data below has been pre-filtered to HTML pages.
+
+## Primary Crawl Data — Internal:All (${internalSummary.rowCount} HTML pages${internalSummary.full ? ', complete' : `, showing first 200 of ${internalSummary.rowCount}`})
 ### CSV Header
 ${internalSummary.header}
 
@@ -2463,7 +2493,7 @@ ${semanticSection}
 **Audit Date:** ${date}
 **Auditor:** Dwight (Forge Growth)
 **Tool:** Screaming Frog SEO Spider
-**Crawl Scope:** ${internalSummary.rowCount} internal pages (${outputFiles.length} export files)
+**Crawl Scope:** ${htmlPageCount} HTML pages (${totalBeforeFilter} total resources, ${outputFiles.length} export files)
 **Output Directory:** \`audits/${domain}/auditor/${date}/\`
 
 ---
@@ -2536,13 +2566,14 @@ ${semanticSection}
 ### 10.4 Agentic Readiness Scorecard
 | Signal | Status | Weight |
 |--------|--------|--------|
-| @graph entity graph | PASS/FAIL | High |
-| LocalBusiness @id IRI | PASS/FAIL | High |
-| Service-level schema | PASS/FAIL | High |
-| .well-known/mcp.json | PASS/FAIL | Medium |
-| areaServed markup | PASS/FAIL | Medium |
-| sameAs to business profiles | PASS/FAIL | Medium |
-| Consistent URL identity | PASS/FAIL | Medium |
+| @graph entity graph | PASS or FAIL | High |
+| LocalBusiness @id IRI | PASS or FAIL | High |
+| Service-level schema | PASS or FAIL | High |
+| .well-known/mcp.json | PASS or FAIL | Medium |
+| areaServed markup | PASS or FAIL | Medium |
+| sameAs to business profiles | PASS or FAIL | Medium |
+| Consistent URL identity | PASS or FAIL | Medium |
+Add industry-specific signals as needed (e.g., FAQPage, Event, BreadcrumbList, Review schema). Status MUST be exactly PASS or FAIL — put explanations after a dash (e.g., "FAIL — not present").
 
 ---
 
