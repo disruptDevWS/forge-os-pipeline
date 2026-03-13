@@ -870,12 +870,12 @@ async function runJim(sb: SupabaseClient, auditId: string, domain: string, audit
   const totalKeywords = rawKeywords.length;
   console.log(`  Parsed ${totalKeywords} keywords from ranked_keywords.json`);
 
-  // Top 200 keywords by volume for prompt
-  const top200 = rawKeywords
+  // Top 100 keywords by volume for prompt (200 caused output truncation on large datasets)
+  const top100 = rawKeywords
     .sort((a, b) => (b.keyword_data?.keyword_info?.search_volume ?? 0) - (a.keyword_data?.keyword_info?.search_volume ?? 0))
-    .slice(0, 200);
+    .slice(0, 100);
 
-  const keywordTable = top200
+  const keywordTable = top100
     .map((item) => {
       const kd = item.keyword_data ?? {};
       const ki = kd.keyword_info ?? {};
@@ -894,11 +894,11 @@ async function runJim(sb: SupabaseClient, auditId: string, domain: string, audit
     }
   }
 
-  const top50Competitors = rawCompetitors
+  const top20Competitors = rawCompetitors
     .sort((a, b) => (b.avg_position ? 1 / b.avg_position : 0) - (a.avg_position ? 1 / a.avg_position : 0))
-    .slice(0, 50);
+    .slice(0, 20);
 
-  const competitorTable = top50Competitors
+  const competitorTable = top20Competitors
     .map((c) => `${c.domain ?? ''} | ${c.avg_position?.toFixed(1) ?? ''} | ${c.sum_position ?? ''} | ${c.intersections ?? ''} | ${c.full_domain_metrics?.organic?.count ?? ''} | ${c.full_domain_metrics?.organic?.etv ?? ''}`)
     .join('\n');
 
@@ -943,11 +943,11 @@ All other formatting rules still apply.\n`
 
 YOUR ENTIRE RESPONSE IS THE REPORT. Output ONLY the markdown content of research_summary.md — start with "# Research Summary" heading. Do NOT narrate, summarize what you did, or describe the file. Do NOT say "I'll write" or "Here's the report" or use backtick file paths. Just output the formatted report that Michael (The Architect) will use to plan the site's information architecture.
 ${seedModeNote}${autoSupplementNote}${salesModeNote}${upstreamNote}${fallbackNote}
-${siteInventory ? `${siteInventory}\n` : ''}${kwResearchSection ? `## Keyword Opportunities (from KeywordResearch)\n${kwResearchSection}\n\n` : ''}## Raw Keyword Data (top 200 of ${totalKeywords} by volume)
+${siteInventory ? `${siteInventory}\n` : ''}${kwResearchSection ? `## Keyword Opportunities (from KeywordResearch)\n${kwResearchSection}\n\n` : ''}## Raw Keyword Data (top 100 of ${totalKeywords} by volume)
 Keyword | Position | Volume | CPC | Difficulty | Competition | Ranking URL
 ${keywordTable}
 
-## Competitor Landscape (top 50 of ${rawCompetitors.length})
+## Competitor Landscape (top 20 of ${rawCompetitors.length})
 Domain | Avg Position | Sum Position | Shared Keywords | Total Organic Keywords | ETV
 ${competitorTable}
 
@@ -1067,8 +1067,23 @@ You MUST use these exact section headings and table column orders. The downstrea
 - Add analysis commentary BELOW tables, not inside them.
 - This is a professional deliverable, not a summary of summaries.`;
 
-  const summaryMd = await callClaudeAsync(narrativePrompt, 'sonnet');
+  let summaryMd = await callClaudeAsync(narrativePrompt, 'sonnet');
   const summaryPath = path.join(researchDir, 'research_summary.md');
+
+  // Detect output truncation — claude --print can hit output token limits on large datasets.
+  // A valid research_summary.md must start with "# Research Summary" and contain section 8.
+  const hasHeader = summaryMd.trimStart().startsWith('# Research Summary');
+  const hasSection8 = /## 8\./m.test(summaryMd);
+  if (!hasHeader || !hasSection8) {
+    console.log(`  Warning: research_summary.md appears truncated (header=${hasHeader}, section8=${hasSection8}) — retrying...`);
+    summaryMd = await callClaudeAsync(narrativePrompt, 'sonnet');
+    const retryHasHeader = summaryMd.trimStart().startsWith('# Research Summary');
+    const retryHasSection8 = /## 8\./m.test(summaryMd);
+    if (!retryHasHeader || !retryHasSection8) {
+      console.log(`  Warning: research_summary.md still truncated after retry (header=${retryHasHeader}, section8=${retryHasSection8})`);
+    }
+  }
+
   fs.writeFileSync(summaryPath, summaryMd, 'utf-8');
   validateArtifact(summaryPath, 'research_summary.md', 3000);
   console.log(`  Written research_summary.md (${summaryMd.length} chars) to ${path.relative(process.cwd(), researchDir)}/`);
