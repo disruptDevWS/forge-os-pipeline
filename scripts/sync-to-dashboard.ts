@@ -927,6 +927,28 @@ async function syncJim(
 
   const agentRunId = run?.id ?? null;
 
+  // Compute top_10_non_branded from keyword records.
+  // is_brand is set by Canonicalize later, so use domain-name heuristic here.
+  // Split domain into words: "idahomedicalacademy.com" → "idaho medical academy"
+  // Handles both hyphenated (talon-construction) and concatenated (idahomedicalacademy) domains.
+  const domainBase = domain.replace(/\.(com|net|org|io|co)$/i, '').replace(/-/g, ' ').toLowerCase();
+  // For concatenated domains, also create a spaceless version for substring matching
+  const domainNoSpaces = domainBase.replace(/\s+/g, '');
+  const top10NonBranded = allKeywordRecords.filter((r) => {
+    if (!r.is_top_10) return false;
+    const kwLower = r.keyword.toLowerCase();
+    const kwNoSpaces = kwLower.replace(/\s+/g, '');
+    // Brand if keyword contains the domain name (with or without spaces)
+    if (kwNoSpaces.includes(domainNoSpaces)) return false;
+    return true;
+  }).length;
+
+  // Merge top_10_non_branded into keyword_overview
+  const keywordOverview = {
+    ...(parsedSummary?.keywordOverview ?? {}),
+    top_10_non_branded: top10NonBranded,
+  };
+
   // Record snapshot with site-level findings (direct insert, same pattern as Dwight)
   await sb.from('audit_snapshots').insert({
     audit_id: auditId,
@@ -936,7 +958,7 @@ async function syncJim(
     row_count: allKeywordRecords.length,
     // Site-level findings from research_summary.md
     research_summary_markdown: parsedSummary ? fs.readFileSync(summaryFile, 'utf-8') : null,
-    keyword_overview: parsedSummary?.keywordOverview ?? {},
+    keyword_overview: keywordOverview,
     position_distribution: parsedSummary?.positionDistribution ?? [],
     branded_split: parsedSummary?.brandedSplit ?? {},
     intent_breakdown: parsedSummary?.intentBreakdown ?? [],
