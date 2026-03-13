@@ -551,15 +551,21 @@ interface RankedKeywordItem {
 
 function parseRankedKeywords(filePath: string) {
   const raw = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-  const items: RankedKeywordItem[] = raw?.tasks?.[0]?.result?.[0]?.items ?? [];
-  return items.map((item) => ({
-    keyword: item.keyword_data?.keyword ?? '',
-    rank_pos: item.ranked_serp_element?.serp_item?.rank_group ?? 0,
-    search_volume: item.keyword_data?.keyword_info?.search_volume ?? 0,
-    cpc: item.keyword_data?.keyword_info?.cpc ?? null,
-    ranking_url: item.ranked_serp_element?.serp_item?.url ?? null,
-    intent: item.keyword_data?.search_intent_info?.main_intent ?? null,
-  }));
+  const result = raw?.tasks?.[0]?.result?.[0];
+  const items: RankedKeywordItem[] = result?.items ?? [];
+  // total_count is the full number of ranked keywords in DataForSEO (may exceed the 1000 limit)
+  const totalCount: number = result?.total_count ?? items.length;
+  return {
+    keywords: items.map((item) => ({
+      keyword: item.keyword_data?.keyword ?? '',
+      rank_pos: item.ranked_serp_element?.serp_item?.rank_group ?? 0,
+      search_volume: item.keyword_data?.keyword_info?.search_volume ?? 0,
+      cpc: item.keyword_data?.keyword_info?.cpc ?? null,
+      ranking_url: item.ranked_serp_element?.serp_item?.url ?? null,
+      intent: item.keyword_data?.search_intent_info?.main_intent ?? null,
+    })),
+    totalCount,
+  };
 }
 
 function extractTopic(keyword: string): string {
@@ -778,8 +784,8 @@ async function syncJim(
   }
 
   console.log(`  [jim] Parsing ${kwFile}`);
-  const keywords = parseRankedKeywords(kwFile);
-  console.log(`  [jim] Found ${keywords.length} total keywords`);
+  const { keywords, totalCount: dataforseoTotalCount } = parseRankedKeywords(kwFile);
+  console.log(`  [jim] Found ${keywords.length} total keywords (DataForSEO total: ${dataforseoTotalCount})`);
 
   // Load assumptions for this audit
   const { data: assumptions } = await sb
@@ -943,10 +949,15 @@ async function syncJim(
     return true;
   }).length;
 
-  // Merge top_10_non_branded into keyword_overview
+  // Merge computed fields into keyword_overview.
+  // keywords_capped: true when DataForSEO returned more keywords than the API limit (1000).
+  // Dashboard should render "1,000+" / "400+" when capped.
+  const keywordsCapped = dataforseoTotalCount > keywords.length;
   const keywordOverview = {
     ...(parsedSummary?.keywordOverview ?? {}),
     top_10_non_branded: top10NonBranded,
+    keywords_capped: keywordsCapped,
+    dataforseo_total: dataforseoTotalCount,
   };
 
   // Record snapshot with site-level findings (direct insert, same pattern as Dwight)
