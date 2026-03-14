@@ -1,20 +1,22 @@
+/**
+ * pipeline-server-standalone.ts — Standalone pipeline server for Railway deployment.
+ *
+ * Runs only the pipeline HTTP server (no WhatsApp, no container runner).
+ * Env vars loaded from process.env (set in Railway dashboard).
+ */
+
 import http from 'http';
 import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
-import {
-  PIPELINE_SERVER_PORT,
-  PIPELINE_TRIGGER_SECRET,
-} from './config.js';
-import { logger } from './logger.js';
+const PORT = parseInt(process.env.PIPELINE_SERVER_PORT || '3847', 10);
+const TRIGGER_SECRET = process.env.PIPELINE_TRIGGER_SECRET || '';
+const AUDITS_BASE = path.resolve(process.cwd(), 'audits');
 
-let server: http.Server | null = null;
 const inFlight = new Set<string>();
-
 const DOMAIN_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const AUDITS_BASE = path.resolve(process.cwd(), 'audits');
 
 function json(res: http.ServerResponse, status: number, body: Record<string, unknown>): void {
   res.writeHead(status, { 'Content-Type': 'application/json' });
@@ -32,14 +34,12 @@ function readBody(req: http.IncomingMessage): Promise<string> {
 function checkAuth(req: http.IncomingMessage, res: http.ServerResponse): boolean {
   const auth = req.headers.authorization || '';
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
-  if (!PIPELINE_TRIGGER_SECRET || token !== PIPELINE_TRIGGER_SECRET) {
+  if (!TRIGGER_SECRET || token !== TRIGGER_SECRET) {
     json(res, 401, { error: 'Unauthorized' });
     return false;
   }
   return true;
 }
-
-// ── POST /trigger-pipeline ──────────────────────────────────
 
 async function handleTrigger(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   if (!checkAuth(req, res)) return;
@@ -75,7 +75,7 @@ async function handleTrigger(req: http.IncomingMessage, res: http.ServerResponse
   }
 
   inFlight.add(domain);
-  logger.info({ domain, email, mode }, 'Pipeline triggered');
+  console.log(`Pipeline triggered: ${domain} (${email}) [mode=${mode}]`);
 
   const scriptPath = path.resolve(process.cwd(), 'scripts/run-pipeline.sh');
   const args = [domain, email];
@@ -93,18 +93,16 @@ async function handleTrigger(req: http.IncomingMessage, res: http.ServerResponse
 
   child.on('close', (code) => {
     inFlight.delete(domain);
-    logger.info({ domain, code }, 'Pipeline finished');
+    console.log(`Pipeline finished: ${domain} (exit ${code})`);
   });
 
   child.on('error', (err) => {
     inFlight.delete(domain);
-    logger.error({ domain, err }, 'Pipeline spawn error');
+    console.error(`Pipeline spawn error: ${domain}`, err);
   });
 
   json(res, 202, { status: 'accepted', domain, mode });
 }
-
-// ── POST /scout-config — write prospect-config.json to disk ──
 
 async function handleScoutConfig(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   if (!checkAuth(req, res)) return;
@@ -133,12 +131,9 @@ async function handleScoutConfig(req: http.IncomingMessage, res: http.ServerResp
   const configPath = path.join(domainDir, 'prospect-config.json');
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
 
-  const relativePath = path.relative(process.cwd(), configPath);
-  logger.info({ domain, path: relativePath }, 'Prospect config written');
-  json(res, 200, { status: 'written', path: relativePath });
+  console.log(`Prospect config written: ${domain}`);
+  json(res, 200, { status: 'written', path: path.relative(process.cwd(), configPath) });
 }
-
-// ── POST /scout-report — read scout markdown + scope.json ──
 
 async function handleScoutReport(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   if (!checkAuth(req, res)) return;
@@ -161,7 +156,6 @@ async function handleScoutReport(req: http.IncomingMessage, res: http.ServerResp
     return;
   }
 
-  // Find the latest scout date directory
   const scoutBase = path.join(AUDITS_BASE, domain, 'scout');
   if (!fs.existsSync(scoutBase)) {
     json(res, 404, { error: 'No scout directory found' });
@@ -179,14 +173,12 @@ async function handleScoutReport(req: http.IncomingMessage, res: http.ServerResp
   const latestDate = dateDirs[dateDirs.length - 1];
   const latestDir = path.join(scoutBase, latestDate);
 
-  // Find scout markdown (scout-{domain}-{date}.md)
   const mdFiles = fs.readdirSync(latestDir).filter((f) => f.startsWith('scout-') && f.endsWith('.md'));
   let markdown = '';
   if (mdFiles.length > 0) {
     markdown = fs.readFileSync(path.join(latestDir, mdFiles[0]), 'utf-8');
   }
 
-  // Read scope.json
   let scope: Record<string, unknown> = {};
   const scopePath = path.join(latestDir, 'scope.json');
   if (fs.existsSync(scopePath)) {
@@ -195,48 +187,25 @@ async function handleScoutReport(req: http.IncomingMessage, res: http.ServerResp
     } catch {}
   }
 
-  logger.info({ domain, date: latestDate }, 'Scout report served');
+  console.log(`Scout report served: ${domain} (${latestDate})`);
   json(res, 200, { markdown, scope, date: latestDate });
 }
 
-export function startPipelineServer(): void {
-  if (!PIPELINE_TRIGGER_SECRET) {
-    logger.warn('PIPELINE_TRIGGER_SECRET not set, pipeline server disabled');
-    return;
+const server = http.createServer((req, res) => {
+  if (req.method === 'GET' && req.url === '/health') {
+    json(res, 200, { status: 'ok', uptime: process.uptime(), inFlight: [...inFlight] });
+  } else if (req.method === 'POST' && req.url === '/trigger-pipeline') {
+    handleTrigger(req, res);
+  } else if (req.method === 'POST' && req.url === '/scout-config') {
+    handleScoutConfig(req, res);
+  } else if (req.method === 'POST' && req.url === '/scout-report') {
+    handleScoutReport(req, res);
+  } else {
+    json(res, 404, { error: 'Not found' });
   }
+});
 
-  server = http.createServer((req, res) => {
-    if (req.method === 'POST' && req.url === '/trigger-pipeline') {
-      handleTrigger(req, res);
-    } else if (req.method === 'POST' && req.url === '/scout-config') {
-      handleScoutConfig(req, res);
-    } else if (req.method === 'POST' && req.url === '/scout-report') {
-      handleScoutReport(req, res);
-    } else if (req.method === 'GET' && req.url === '/health') {
-      json(res, 200, { status: 'ok', uptime: process.uptime(), inFlight: [...inFlight] });
-    } else {
-      json(res, 404, { error: 'Not found' });
-    }
-  });
-
-  server.listen(PIPELINE_SERVER_PORT, '0.0.0.0', () => {
-    logger.info(
-      { port: PIPELINE_SERVER_PORT },
-      'Pipeline trigger server listening',
-    );
-  });
-}
-
-export function stopPipelineServer(): Promise<void> {
-  return new Promise((resolve) => {
-    if (!server) {
-      resolve();
-      return;
-    }
-    server.close(() => {
-      logger.info('Pipeline trigger server stopped');
-      server = null;
-      resolve();
-    });
-  });
-}
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`Pipeline server listening on port ${PORT}`);
+  console.log(`Health: http://0.0.0.0:${PORT}/health`);
+});

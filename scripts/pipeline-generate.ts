@@ -3,7 +3,7 @@
  * pipeline-generate.ts — Generate agent artifacts for the post-audit pipeline.
  *
  * Subcommands:
- *   dwight           — Comprehensive Screaming Frog CLI crawl + Anthropic API → AUDIT_REPORT.md
+ *   dwight           — DataForSEO OnPage API crawl + Anthropic API → AUDIT_REPORT.md
  *   keyword-research — Service × city × intent matrix from Dwight's crawl → DataForSEO validation → audit_keywords (seeded)
  *   jim              — Call DataForSEO (ranked-keywords + competitors) → disk artifacts → Anthropic API narrative → audit_snapshots
  *   competitors      — Fetch SERP data via DataForSEO, populate audit_topic_competitors + audit_topic_dominance
@@ -23,6 +23,12 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import * as child_process from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import {
+  callClaude,
+  callClaudeAsync,
+  initAnthropicClient,
+  PHASE_MAX_TOKENS,
+} from './anthropic-client.js';
 
 // ============================================================
 // .env loader (same pattern as sync-to-dashboard)
@@ -30,20 +36,28 @@ import * as path from 'node:path';
 
 function loadEnv(): Record<string, string> {
   const envPath = path.resolve(process.cwd(), '.env');
-  if (!fs.existsSync(envPath)) return {};
-  const content = fs.readFileSync(envPath, 'utf-8');
-  const env: Record<string, string> = {};
-  for (const line of content.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    const eqIdx = trimmed.indexOf('=');
-    if (eqIdx < 0) continue;
-    const key = trimmed.slice(0, eqIdx).trim();
-    let val = trimmed.slice(eqIdx + 1).trim();
-    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
-      val = val.slice(1, -1);
+  if (fs.existsSync(envPath)) {
+    // Local dev: parse .env file
+    const content = fs.readFileSync(envPath, 'utf-8');
+    const env: Record<string, string> = {};
+    for (const line of content.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const eqIdx = trimmed.indexOf('=');
+      if (eqIdx < 0) continue;
+      const key = trimmed.slice(0, eqIdx).trim();
+      let val = trimmed.slice(eqIdx + 1).trim();
+      if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+        val = val.slice(1, -1);
+      }
+      env[key] = val;
     }
-    env[key] = val;
+    return env;
+  }
+  // Railway / cloud: fall through to process.env
+  const env: Record<string, string> = {};
+  for (const [key, val] of Object.entries(process.env)) {
+    if (val !== undefined) env[key] = val;
   }
   return env;
 }
@@ -53,21 +67,22 @@ function loadEnv(): Record<string, string> {
 // ============================================================
 
 interface CliArgs {
-  subcommand: 'jim' | 'competitors' | 'michael' | 'dwight' | 'gap' | 'canonicalize' | 'validator' | 'keyword-research' | 'scout';
+  subcommand: 'jim' | 'competitors' | 'michael' | 'dwight' | 'gap' | 'canonicalize' | 'validator' | 'keyword-research' | 'scout' | 'qa';
   domain: string;
   userEmail?: string;
   date?: string;
   seedMatrix?: string;
   competitorUrls?: string;
   prospectConfig?: string;
+  phase?: string;
   mode: 'sales' | 'full';
 }
 
 function parseArgs(): CliArgs {
   const args = process.argv.slice(2);
   const subcommand = args[0] as CliArgs['subcommand'];
-  if (!['jim', 'competitors', 'michael', 'dwight', 'gap', 'canonicalize', 'validator', 'keyword-research', 'scout'].includes(subcommand)) {
-    console.error('Usage: npx tsx scripts/pipeline-generate.ts <jim|competitors|gap|michael|dwight|canonicalize|validator|keyword-research|scout> --domain <domain> --user-email <email> [--date YYYY-MM-DD] [--mode sales|full] [--prospect-config <path>]');
+  if (!['jim', 'competitors', 'michael', 'dwight', 'gap', 'canonicalize', 'validator', 'keyword-research', 'scout', 'qa'].includes(subcommand)) {
+    console.error('Usage: npx tsx scripts/pipeline-generate.ts <jim|competitors|gap|michael|dwight|canonicalize|validator|keyword-research|scout|qa> --domain <domain> --user-email <email> [--date YYYY-MM-DD] [--mode sales|full] [--prospect-config <path>]');
     process.exit(1);
   }
 
@@ -98,6 +113,7 @@ function parseArgs(): CliArgs {
     seedMatrix: flags['seed-matrix'],
     competitorUrls: flags['competitor-urls'],
     prospectConfig: flags['prospect-config'],
+    phase: flags.phase,
     mode,
   };
 }
@@ -113,94 +129,8 @@ function todayStr(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-/**
- * Strip Claude preamble/postamble from output. Claude sometimes prepends
- * XML-like tool-call artifacts (from leaked conversation transcripts).
- * Conservative: only strips obvious XML artifacts, not conversational text.
- */
-function stripClaudePreamble(output: string): string {
-  // Strip leading XML artifacts (e.g., <function_calls>...) that occasionally leak through
-  let cleaned = output.replace(/^<function_calls>[\s\S]*?<\/function_calls>\s*/gm, '');
-  // Strip trailing XML artifacts
-  cleaned = cleaned.replace(/<function_calls>[\s\S]*?<\/function_calls>\s*$/gm, '');
-  return cleaned.trim();
-}
-
-function callClaude(prompt: string, model = 'sonnet', timeoutMs = 600_000): string {
-  const claudeBin = process.env.CLAUDE_BIN || '/home/forgegrowth/.local/bin/claude';
-  const childEnv = { ...process.env };
-  for (const key of Object.keys(childEnv)) {
-    if (key.startsWith('CLAUDE') || key === 'CLAUDECODE') delete childEnv[key];
-  }
-  const result = child_process.spawnSync(claudeBin, ['--print', '--model', model, '--tools', ''], {
-    input: prompt,
-    encoding: 'utf-8',
-    timeout: timeoutMs,
-    maxBuffer: 10 * 1024 * 1024,
-    env: childEnv,
-  });
-  if (result.error) {
-    throw new Error(`claude spawn failed: ${result.error.message}`);
-  }
-  if (result.status !== 0) {
-    const stderr = (result.stderr ?? '').trim();
-    const stdout = (result.stdout ?? '').trim();
-    const detail = stderr.slice(0, 300) || stdout.slice(0, 300) || '(no output)';
-    throw new Error(`claude exited ${result.status}: ${detail}`);
-  }
-  const output = stripClaudePreamble((result.stdout ?? '').trim());
-  if (!output || output.startsWith('Error:')) {
-    throw new Error(`claude returned error: ${output.slice(0, 200) || '(empty output)'}`);
-  }
-  return output;
-}
-
-/**
- * Async variant of callClaude using spawn (streaming) instead of spawnSync.
- * Avoids ETIMEDOUT on large prompts by reading stdout as it streams in.
- */
-function callClaudeAsync(prompt: string, model = 'sonnet'): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const claudeBin = process.env.CLAUDE_BIN || '/home/forgegrowth/.local/bin/claude';
-    const childEnv = { ...process.env };
-    // Strip all Claude session vars so the child doesn't inherit the parent conversation
-    for (const key of Object.keys(childEnv)) {
-      if (key.startsWith('CLAUDE') || key === 'CLAUDECODE') delete childEnv[key];
-    }
-    const proc = child_process.spawn(claudeBin, ['--print', '--model', model, '--tools', ''], {
-      env: childEnv,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-
-    const stdoutChunks: string[] = [];
-    const stderrChunks: string[] = [];
-
-    proc.stdout!.setEncoding('utf-8');
-    proc.stderr!.setEncoding('utf-8');
-    proc.stdout!.on('data', (chunk: string) => stdoutChunks.push(chunk));
-    proc.stderr!.on('data', (chunk: string) => stderrChunks.push(chunk));
-
-    proc.on('error', (err) => reject(new Error(`claude spawn failed: ${err.message}`)));
-    proc.on('close', (code) => {
-      const stdout = stdoutChunks.join('').trim();
-      const stderr = stderrChunks.join('').trim();
-      if (code !== 0) {
-        const detail = stderr.slice(0, 300) || stdout.slice(0, 300) || '(no output)';
-        reject(new Error(`claude exited ${code}: ${detail}`));
-        return;
-      }
-      const cleaned = stripClaudePreamble(stdout);
-      if (!cleaned || cleaned.startsWith('Error:')) {
-        reject(new Error(`claude returned error: ${cleaned.slice(0, 200) || '(empty output)'}`));
-        return;
-      }
-      resolve(cleaned);
-    });
-
-    proc.stdin!.write(prompt);
-    proc.stdin!.end();
-  });
-}
+// callClaude, callClaudeAsync, stripClaudePreamble — replaced by anthropic-client.ts
+// Imported at top of file: import { callClaude, callClaudeAsync, initAnthropicClient } from './anthropic-client.js';
 
 function stripCodeFences(text: string): string {
   const fenced = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/);
@@ -1067,16 +997,16 @@ You MUST use these exact section headings and table column orders. The downstrea
 - Add analysis commentary BELOW tables, not inside them.
 - This is a professional deliverable, not a summary of summaries.`;
 
-  let summaryMd = await callClaudeAsync(narrativePrompt, 'sonnet');
+  let summaryMd = await callClaude(narrativePrompt, { model: 'sonnet', phase: 'jim' });
   const summaryPath = path.join(researchDir, 'research_summary.md');
 
-  // Detect output truncation — claude --print can hit output token limits on large datasets.
+  // Detect output truncation — verify required sections present.
   // A valid research_summary.md must start with "# Research Summary" and contain section 8.
   const hasHeader = summaryMd.trimStart().startsWith('# Research Summary');
   const hasSection8 = /## 8\./m.test(summaryMd);
   if (!hasHeader || !hasSection8) {
     console.log(`  Warning: research_summary.md appears truncated (header=${hasHeader}, section8=${hasSection8}) — retrying...`);
-    summaryMd = await callClaudeAsync(narrativePrompt, 'sonnet');
+    summaryMd = await callClaude(narrativePrompt, { model: 'sonnet', phase: 'jim' });
     const retryHasHeader = summaryMd.trimStart().startsWith('# Research Summary');
     const retryHasSection8 = /## 8\./m.test(summaryMd);
     if (!retryHasHeader || !retryHasSection8) {
@@ -1272,7 +1202,7 @@ ${allUrls.join('\n')}`;
     const crawlContentRaw = readCsvSafe(internalAllResolved);
     const crawlContent = filterCsvColumns(crawlContentRaw, INTERNAL_ALL_KEEP_COLUMNS);
     const crawlSummary = summarizeCsv(crawlContent, 100);
-    crawlSection = `## Crawl Data Summary (${crawlSummary.rowCount} pages from Screaming Frog)
+    crawlSection = `## Crawl Data Summary (${crawlSummary.rowCount} pages from site crawl)
 ${crawlSummary.header}
 ${crawlSummary.rows}`;
     console.log(`  internal_all.csv: ${crawlSummary.rowCount} pages`);
@@ -1394,7 +1324,7 @@ You MUST produce output in this EXACT format. The parser depends on these headin
 REMINDER: Your response IS the blueprint content — start with "## Executive Summary" and output the full architecture. No preamble, no narration, no summary of what you did.`;
 
   console.log('  Generating architecture blueprint via Anthropic API (sonnet)...');
-  let result = await callClaudeAsync(prompt, 'sonnet');
+  let result = await callClaude(prompt, { model: 'sonnet', phase: 'michael' });
   console.log(`  Blueprint: ${result.length} chars`);
 
   // Structural validation — blueprint must have Executive Summary + at least one Silo table
@@ -1402,7 +1332,7 @@ REMINDER: Your response IS the blueprint content — start with "## Executive Su
   const hasSiloTable = /###\s*Silo\s+\d+/i.test(result);
   if (!hasExecSummary || !hasSiloTable) {
     console.log(`  WARNING: Blueprint incomplete (Executive Summary: ${hasExecSummary}, Silo tables: ${hasSiloTable}) — retrying...`);
-    result = await callClaudeAsync(prompt, 'sonnet');
+    result = await callClaude(prompt, { model: 'sonnet', phase: 'michael' });
     console.log(`  Retry blueprint: ${result.length} chars`);
     const retryHasExec = /##\s*Executive Summary/i.test(result);
     const retryHasSilo = /###\s*Silo\s+\d+/i.test(result);
@@ -1587,7 +1517,7 @@ JSON schema:
 }`;
 
     try {
-      const result = callClaude(prompt, 'haiku', 120_000);
+      const result = await callClaude(prompt, { model: 'haiku', phase: 'canonicalize' });
       const parsed = JSON.parse(stripCodeFences(result));
       const groups: GroupResult[] = parsed.groups ?? [];
 
@@ -1850,7 +1780,7 @@ Respond with ONLY a JSON object mapping each domain to its category. Example:
 {"example-hvac.com": "industry_competitor", "yelp.com": "aggregator", "foxservice.com": "brand_confusion"}`;
 
     try {
-      const result = callClaude(classifyPrompt, 'haiku', 120_000);
+      const result = await callClaude(classifyPrompt, { model: 'haiku', phase: 'competitors' });
       const parsed = JSON.parse(stripCodeFences(result));
       for (const [dom, type] of Object.entries(parsed)) {
         if (typeof type === 'string') {
@@ -2027,7 +1957,7 @@ REMINDER: Your response IS the JSON object — start with { and end with }. No p
   console.log('  Generating content gap analysis via Anthropic API...');
   let gapAnalysis: any;
   try {
-    const result = await callClaudeAsync(prompt, 'sonnet');
+    const result = await callClaude(prompt, { model: 'sonnet', phase: 'gap' });
     gapAnalysis = JSON.parse(stripCodeFences(result));
     console.log(`  Gap analysis: ${gapAnalysis.authority_gaps?.length ?? 0} authority gaps, ${gapAnalysis.format_gaps?.length ?? 0} format gaps, ${gapAnalysis.unaddressed_gaps?.length ?? 0} unaddressed, ${gapAnalysis.priority_recommendations?.length ?? 0} recommendations`);
   } catch (err: any) {
@@ -2266,38 +2196,17 @@ function summarizeCsv(content: string, maxRows = 200): { header: string; rows: s
 }
 
 async function runDwight(domain: string) {
+  const env = loadEnv();
   const date = todayStr();
   const outDir = path.join(AUDITS_BASE, domain, 'auditor', date);
   fs.mkdirSync(outDir, { recursive: true });
 
   const url = domain.startsWith('http') ? domain : `https://${domain}`;
 
+  // DataForSEO OnPage API crawl (replaces Screaming Frog CLI)
   {
-    const sfBin = process.env.SF_BIN || 'screamingfrogseospider';
-
-    // Build SF CLI command with comprehensive exports
-    // Note: Gemini embeddings (via --config semantic_config) were removed.
-    // They caused ETIMEDOUT on sites >500 pages, and the semantic similarity
-    // signal is already covered by Jim (canonicalization) and Michael (topic overlap).
-    const exportTabsList = [
-      'Internal:All', 'External:All',
-      'Response Codes:Client Error (4xx)', 'Response Codes:Redirection (3xx)', 'Response Codes:Server Error (5xx)',
-      'Page Titles:All', 'Meta Description:All',
-      'H1:All', 'H2:All',
-      'Images:All', 'Canonicals:All', 'Directives:All',
-      'Sitemaps:All', 'Structured Data:All',
-    ];
-
-    const bulkExportsList = [
-      'Images:Images Missing Alt Text Inlinks',
-      'Canonicals:Self Referencing Inlinks', 'Canonicals:Canonicalised Inlinks',
-      'Response Codes:Internal:Internal Client Error (4xx) Inlinks',
-      'Response Codes:Internal:Internal Redirection (3xx) Inlinks',
-      'Security:Unsafe Cross-Origin Links',
-      'Links:Internal Outlinks With No Anchor Text',
-    ];
-
-    const saveReportsList = ['Crawl Overview', 'Issues Overview'];
+    const { runFullCrawl } = await import('./dataforseo-onpage.js');
+    const { transformPagesToInternalAll, transformToSupplementaryCsvs } = await import('./onpage-to-csv.js');
 
     // Clean output dir so stale files don't mask failures
     if (fs.existsSync(outDir)) {
@@ -2308,41 +2217,28 @@ async function runDwight(domain: string) {
       console.log('  Cleaned stale output directory');
     }
 
-    // Write SF command to a temp bash script — SF (Java) behaves differently when called
-    // via Node.js spawnSync vs a real shell (process group, tty, env quirks).
-    // Writing to a script and executing via bash guarantees identical behavior to manual runs.
-    const shellEscape = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
-
-    const exportTabsStr = exportTabsList.join(',');
-    const bulkExportsStr = bulkExportsList.join(',');
-    const saveReportsStr = saveReportsList.join(',');
-
-    const sfCmd = `${shellEscape(sfBin)} \\\n  --crawl ${shellEscape(url)} \\\n  --headless \\\n  --output-folder ${shellEscape(outDir)} \\\n  --overwrite \\\n  --export-tabs ${shellEscape(exportTabsStr)} \\\n  --bulk-export ${shellEscape(bulkExportsStr)} \\\n  --save-report ${shellEscape(saveReportsStr)}`;
-
-    const tmpScript = path.join(outDir, '_sf_crawl.sh');
-    fs.writeFileSync(tmpScript, `#!/bin/bash\nset -x\n${sfCmd}\n`, { mode: 0o755 });
-
-    console.log(`  Crawling ${url} with Screaming Frog CLI (comprehensive)...`);
+    console.log(`  Crawling ${domain} with DataForSEO OnPage API...`);
     console.log(`  Output directory: ${path.relative(process.cwd(), outDir)}/`);
-    console.log(`  Script: ${tmpScript}`);
 
-    // Execute via async spawn — avoids spawnSync's timeout cap which caused
-    // ETIMEDOUT on large sites. SF crawls can take 10+ minutes for 1000+ URLs.
-    const sfExitCode = await new Promise<number>((resolve, reject) => {
-      const child = child_process.spawn('bash', [tmpScript], {
-        stdio: 'inherit',
-        cwd: process.cwd(),
-      });
-      child.on('error', (err) => reject(new Error(`SF spawn failed: ${err.message}`)));
-      child.on('close', (code) => resolve(code ?? 1));
-    });
+    const crawlResult = await runFullCrawl(env, domain);
+    console.log(`  Crawl complete: ${crawlResult.pages.length} pages, ${crawlResult.imageResources.length} images`);
 
-    // Clean up temp script
-    try { fs.unlinkSync(tmpScript); } catch {}
+    // Write internal_all.csv
+    const internalAllCsv = transformPagesToInternalAll(crawlResult.pages);
+    fs.writeFileSync(path.join(outDir, 'internal_all.csv'), internalAllCsv, 'utf-8');
 
-    if (sfExitCode !== 0) {
-      console.log(`  Warning: SF exited ${sfExitCode}`);
+    // Write supplementary CSVs
+    const supplementaryCsvs = transformToSupplementaryCsvs(
+      crawlResult.pages,
+      crawlResult.summary,
+      crawlResult.microdata,
+      crawlResult.imageResources,
+    );
+    for (const [filename, content] of supplementaryCsvs) {
+      fs.writeFileSync(path.join(outDir, filename), content, 'utf-8');
     }
+
+    console.log(`  Written ${supplementaryCsvs.size + 1} CSV files`);
   }
 
   // Count output files
@@ -2466,7 +2362,7 @@ async function runDwight(domain: string) {
     semanticSection = `## Semantically Similar Pages (${ss.rowCount} pairs)\n${ss.header}\n${ss.rows}`;
   }
 
-  const reportPrompt = `You are Dwight, a Technical SEO & Agentic Readiness Auditor. You have crawled ${domain} with Screaming Frog using comprehensive exports (${outputFiles.length} output files). Below is the crawl data filtered to indexable HTML pages only (${htmlPageCount} of ${totalBeforeFilter} total resources).
+  const reportPrompt = `You are Dwight, a Technical SEO & Agentic Readiness Auditor. You have crawled ${domain} with the DataForSEO OnPage API (${outputFiles.length} output files). Below is the crawl data filtered to indexable HTML pages only (${htmlPageCount} of ${totalBeforeFilter} total resources).
 
 YOUR ENTIRE RESPONSE IS THE REPORT. Output ONLY the markdown content of AUDIT_REPORT.md — start with the "# Technical SEO" heading. Do NOT narrate, summarize, or describe what you are doing. Do NOT say "I'll analyze" or "Here's the report". Just output the report itself.
 
@@ -2492,7 +2388,7 @@ ${semanticSection}
 ## ${domain}
 **Audit Date:** ${date}
 **Auditor:** Dwight (Forge Growth)
-**Tool:** Screaming Frog SEO Spider
+**Tool:** DataForSEO OnPage API
 **Crawl Scope:** ${htmlPageCount} HTML pages (${totalBeforeFilter} total resources, ${outputFiles.length} export files)
 **Output Directory:** \`audits/${domain}/auditor/${date}/\`
 
@@ -2599,7 +2495,7 @@ ${semanticReport ? `\n---\n\n## Section 12: Content Similarity & Cannibalization
 \`\`\`
 
 IMPORTANT:
-- Base ALL findings on the actual crawl CSV data provided above — you have ${outputFiles.length} export files worth of data
+- Base ALL findings on the actual crawl data provided above — you have ${outputFiles.length} export files worth of data
 - Every issue must reference specific URLs from the crawl data
 - The Agentic Readiness Scorecard (Section 10.4) is mandatory
 - Priority tables must use numbered rows (| 1 |, | 2 |, etc.)
@@ -2607,7 +2503,7 @@ IMPORTANT:
 - Your response IS the file content — start with "# Technical SEO & Agentic Readiness Audit" and output the full report. No preamble, no narration, no summary of what you did.`;
 
   console.log(`  Prompt size: ${reportPrompt.length} chars`);
-  const report = await callClaudeAsync(reportPrompt, 'sonnet');
+  const report = await callClaude(reportPrompt, { model: 'sonnet', phase: 'dwight' });
   const reportPath = path.join(outDir, 'AUDIT_REPORT.md');
   fs.writeFileSync(reportPath, report, 'utf-8');
   validateArtifact(reportPath, 'AUDIT_REPORT.md', 5000);
@@ -2741,7 +2637,7 @@ ${reportContent}`;
   console.log('  Extracting services + locations from AUDIT_REPORT.md via Haiku...');
   let extraction: { services: string[]; locations: string[]; platform: string };
   try {
-    const extractResult = await callClaudeAsync(extractionPrompt, 'haiku');
+    const extractResult = await callClaude(extractionPrompt, { model: 'haiku', phase: 'keyword-research-extract' });
     extraction = JSON.parse(stripCodeFences(extractResult));
   } catch (err: any) {
     throw new Error(`Service/location extraction failed: ${err.message}`);
@@ -2933,7 +2829,7 @@ REMINDER: Your response IS the JSON — start with { and end with }. No preamble
   console.log('  Generating keyword research synthesis via Anthropic API (sonnet)...');
   let synthesis: any;
   try {
-    const synthResult = await callClaudeAsync(synthesisPrompt, 'sonnet');
+    const synthResult = await callClaude(synthesisPrompt, { model: 'sonnet', phase: 'keyword-research-synth' });
     synthesis = JSON.parse(stripCodeFences(synthResult));
   } catch (err: any) {
     throw new Error(`Keyword research synthesis failed: ${err.message}`);
@@ -3076,7 +2972,7 @@ Respond with raw JSON only. Schema:
 REMINDER: Your response IS the JSON — start with { and end with }. No preamble.`;
 
   console.log('  Running coverage validation via Anthropic API (haiku)...');
-  const result = await callClaudeAsync(prompt, 'haiku');
+  const result = await callClaude(prompt, { model: 'haiku', phase: 'validator' });
   let validation: { coverage: any[]; summary: string };
   try {
     validation = JSON.parse(stripCodeFences(result));
@@ -3246,7 +3142,7 @@ async function runScout(sb: SupabaseClient, domain: string, prospectConfigPath: 
   let sessionCost = 0;
 
   // ── Step 1: Topic extraction (from rankings — no crawl needed) ──
-  // Scout skips Screaming Frog crawl — Dwight does a comprehensive crawl
+  // Scout skips crawl — Dwight does a comprehensive crawl
   // in Phase 1 if the prospect converts to a client.
   console.log('\n--- Step 1: Topic Extraction ---');
   let canonicalTopics: Array<{ key: string; label: string }> = [];
@@ -3376,7 +3272,7 @@ Return a JSON array of 5–15 canonical topics. Each topic:
 Group related keywords into single topics. YOUR ENTIRE RESPONSE IS RAW JSON — no markdown, no code fences. Start with [`;
 
     try {
-      const topicOutput = callClaude(topicPrompt, 'haiku');
+      const topicOutput = await callClaude(topicPrompt, { model: 'haiku', phase: 'scout_topic' });
       const parsed = JSON.parse(stripCodeFences(topicOutput));
       if (Array.isArray(parsed) && parsed.length > 0) {
         canonicalTopics = parsed.filter((t: any) => t.key && t.label);
@@ -3636,7 +3532,7 @@ ${gapTable || '| (no gap data) | | | | | |'}
 
 REMINDER: Your response IS the report — start with "# Scout Report". No preamble, no narration.`;
 
-  const reportContent = await callClaudeAsync(reportPrompt, 'sonnet');
+  const reportContent = await callClaude(reportPrompt, { model: 'sonnet', phase: 'scout_report' });
 
   const reportPath = path.join(scoutDir, `scout-${domain}-${date}.md`);
   fs.writeFileSync(reportPath, reportContent, 'utf-8');
@@ -3661,12 +3557,194 @@ REMINDER: Your response IS the report — start with "# Scout Report". No preamb
 }
 
 // ============================================================
+// QA Agent — Phase-specific rubric evaluation
+// ============================================================
+
+interface QACheck {
+  name: string;
+  weight: 'critical' | 'high' | 'medium';
+  description: string;
+}
+
+interface QARubric {
+  phase: string;
+  artifactFilename: string;
+  artifactSubdir: 'auditor' | 'research' | 'architecture';
+  checks: QACheck[];
+}
+
+const QA_RUBRICS: Record<string, QARubric> = {
+  dwight: {
+    phase: 'dwight',
+    artifactFilename: 'AUDIT_REPORT.md',
+    artifactSubdir: 'auditor',
+    checks: [
+      { name: 'all_sections_present', weight: 'critical', description: 'All 11 sections present (Section 1 through Section 11)' },
+      { name: 'urls_from_crawl', weight: 'critical', description: 'Findings cite specific URLs from crawl data (no hallucinated URLs)' },
+      { name: 'agentic_scorecard', weight: 'high', description: 'Agentic Readiness Scorecard (Section 10.4) has PASS/FAIL for 7+ signals' },
+      { name: 'priority_tables', weight: 'high', description: 'Prioritized fix tables have 3+ rows with specific issues' },
+      { name: 'executive_summary', weight: 'medium', description: 'Executive summary is 2-3 paragraphs with specific counts' },
+    ],
+  },
+  jim: {
+    phase: 'jim',
+    artifactFilename: 'research_summary.md',
+    artifactSubdir: 'research',
+    checks: [
+      { name: 'sections_present', weight: 'critical', description: 'Sections 2-10 present with correct table schemas' },
+      { name: 'not_truncated', weight: 'critical', description: 'Output not truncated — Section 10 present with 3+ takeaways' },
+      { name: 'keyword_table', weight: 'high', description: 'Keyword table has 20+ keywords with non-zero volumes' },
+      { name: 'competitor_table', weight: 'high', description: 'Competitor table has 3+ competitors' },
+      { name: 'striking_distance', weight: 'medium', description: 'Striking distance (Section 8) has 5+ keywords in position 4-20' },
+    ],
+  },
+  gap: {
+    phase: 'gap',
+    artifactFilename: 'content_gap_analysis.md',
+    artifactSubdir: 'architecture',
+    checks: [
+      { name: 'specific_gaps', weight: 'critical', description: '5+ specific content gaps identified (not generic)' },
+      { name: 'competitor_refs', weight: 'high', description: 'Gaps reference competitor domains' },
+      { name: 'volume_estimates', weight: 'high', description: 'Volume/traffic estimates included' },
+      { name: 'parseable_structure', weight: 'medium', description: 'Document follows expected markdown structure' },
+    ],
+  },
+  michael: {
+    phase: 'michael',
+    artifactFilename: 'architecture_blueprint.md',
+    artifactSubdir: 'architecture',
+    checks: [
+      { name: 'silo_structure', weight: 'critical', description: '3-7 silos with page tables containing required columns' },
+      { name: 'keyword_coverage', weight: 'high', description: '60%+ of top-20 Jim keywords appear as primary keywords' },
+      { name: 'gap_coverage', weight: 'high', description: 'If gap analysis exists, 80%+ of gaps have corresponding pages' },
+      { name: 'page_actions', weight: 'medium', description: 'Each page has clear action: create, optimize, or merge' },
+    ],
+  },
+};
+
+interface QAResult {
+  verdict: 'pass' | 'enhance' | 'fail';
+  checks: Array<{ name: string; passed: boolean; feedback: string }>;
+  feedback: string;
+}
+
+async function runQA(
+  sb: SupabaseClient,
+  auditId: string,
+  domain: string,
+  phase: string,
+  attemptNumber = 1,
+): Promise<QAResult> {
+  const rubric = QA_RUBRICS[phase];
+  if (!rubric) throw new Error(`No QA rubric defined for phase: ${phase}`);
+
+  // Resolve artifact path
+  const baseDir = path.join(AUDITS_BASE, domain, rubric.artifactSubdir);
+  let artifactPath: string | null = null;
+
+  if (fs.existsSync(baseDir)) {
+    const dateDirs = fs.readdirSync(baseDir)
+      .filter((e) => /^\d{4}-\d{2}-\d{2}$/.test(e))
+      .sort();
+    if (dateDirs.length > 0) {
+      const latestDir = path.join(baseDir, dateDirs[dateDirs.length - 1]);
+      const candidate = path.join(latestDir, rubric.artifactFilename);
+      if (fs.existsSync(candidate)) artifactPath = candidate;
+    }
+  }
+
+  if (!artifactPath) {
+    return {
+      verdict: 'fail',
+      checks: [{ name: 'artifact_exists', passed: false, feedback: `Artifact not found: ${rubric.artifactFilename}` }],
+      feedback: `Artifact not found at ${baseDir}/*/${rubric.artifactFilename}`,
+    };
+  }
+
+  const artifactContent = fs.readFileSync(artifactPath, 'utf-8');
+
+  // Truncate artifact to 50K chars for prompt
+  const truncated = artifactContent.slice(0, 50_000);
+  const wasTruncated = artifactContent.length > 50_000;
+
+  const checksDescription = rubric.checks
+    .map((c) => `- [${c.weight}] ${c.name}: ${c.description}`)
+    .join('\n');
+
+  const qaPrompt = `You are a QA evaluator for an SEO audit pipeline. Evaluate the following ${phase} artifact against the quality rubric below.
+
+## Rubric Checks
+${checksDescription}
+
+## Artifact Content${wasTruncated ? ' (truncated to 50K chars)' : ''}
+
+${truncated}
+
+## Instructions
+
+Evaluate each check. For each check, determine if it PASSES or FAILS, and provide brief feedback.
+
+Then determine the overall verdict:
+- **PASS**: All critical checks pass AND at most 1 high-weight check fails
+- **ENHANCE**: Any critical check fails OR 2+ high-weight checks fail, but the artifact has meaningful content worth improving
+- **FAIL**: Artifact is missing, empty, contains narration instead of the requested format, or is fundamentally broken
+
+YOUR ENTIRE RESPONSE IS RAW JSON — no markdown, no code fences. Output exactly:
+{"verdict": "pass|enhance|fail", "checks": [{"name": "check_name", "passed": true|false, "feedback": "brief reason"}], "feedback": "overall feedback for improvement (empty string if pass)"}`;
+
+  console.log(`  QA evaluating ${phase} (attempt ${attemptNumber})...`);
+
+  const result = await callClaude(qaPrompt, { model: 'haiku', phase: 'qa' });
+  let qaResult: QAResult;
+
+  try {
+    qaResult = JSON.parse(stripCodeFences(result));
+  } catch (err: any) {
+    console.log(`  QA parse error: ${err.message}`);
+    qaResult = {
+      verdict: 'fail',
+      checks: [],
+      feedback: `QA evaluation failed to parse: ${err.message}. Raw output: ${result.slice(0, 200)}`,
+    };
+  }
+
+  // Log to Supabase
+  try {
+    await sb.from('audit_qa_results').insert({
+      audit_id: auditId,
+      phase,
+      verdict: qaResult.verdict,
+      checks: qaResult.checks,
+      feedback: qaResult.feedback,
+      attempt_number: attemptNumber,
+    });
+  } catch (err: any) {
+    console.log(`  Warning: Failed to log QA result to Supabase: ${err.message}`);
+  }
+
+  console.log(`  QA verdict: ${qaResult.verdict.toUpperCase()}`);
+  if (qaResult.feedback) {
+    console.log(`  QA feedback: ${qaResult.feedback.slice(0, 200)}`);
+  }
+
+  return qaResult;
+}
+
+// ============================================================
 // Main
 // ============================================================
 
 async function main() {
   const args = parseArgs();
   const env = loadEnv();
+
+  // Initialize Anthropic SDK with API key from .env or environment
+  const anthropicKey = env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY;
+  if (!anthropicKey) {
+    console.error('Missing ANTHROPIC_API_KEY in .env or environment');
+    process.exit(1);
+  }
+  initAnthropicClient(anthropicKey);
 
   // All subcommands need Supabase now (dwight needs it for --user-email to resolve audit for sync)
   const supabaseUrl = env.SUPABASE_URL;
@@ -3725,6 +3803,18 @@ async function main() {
     case 'keyword-research':
       await runKeywordResearch(sb, audit.id, args.domain, args.date);
       break;
+    case 'qa': {
+      if (!args.phase) {
+        console.error('--phase is required for qa subcommand (dwight|jim|gap|michael)');
+        process.exit(1);
+      }
+      const qaResult = await runQA(sb, audit.id, args.domain, args.phase);
+      if (qaResult.verdict === 'fail') {
+        console.error(`QA FAILED for ${args.phase}: ${qaResult.feedback}`);
+        process.exit(1);
+      }
+      break;
+    }
   }
 }
 

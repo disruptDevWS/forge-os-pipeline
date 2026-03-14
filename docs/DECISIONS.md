@@ -94,3 +94,47 @@ SF's `--config semantic_config.seospiderconfig` enabled Gemini API embeddings fo
 **2026-03-12: SF crawl uses async spawn instead of spawnSync**
 
 The SF CLI was invoked via `child_process.spawnSync('bash', [tmpScript], { timeout: 600_000 })`. For large sites, the 600s timeout caused `ETIMEDOUT` even when the crawl had completed — SF was still processing (API calls, report generation). Switched to async `child_process.spawn()` wrapped in a Promise, which has no timeout cap. SF's Java process manages its own timeouts internally.
+
+**2026-03-12: Jim research_summary.md truncation guard**
+
+Claude Sonnet can hit output token limits on large prompts. When this happens, `callClaudeAsync()` captures only the continuation fragment (e.g., "Continuing Section 10 from the cut-off point:") instead of the full report. This caused `keyword_overview` to be all zeros (no Section 2 to parse). Fix: (1) reduced prompt size — keyword table from 200→100 rows, competitor table from 50→20; (2) added structural validation checking for `# Research Summary` header and `## 8.` section; (3) auto-retries once if validation fails. The retry is cheap (same prompt, no new API calls) and catches truncation before it propagates to sync.
+
+**2026-03-12: Dwight filters internal_all.csv to HTML pages before analysis**
+
+Dwight's prompt was receiving all resources from `internal_all.csv` — CSS, JS, images, fonts — inflating the page count and diluting the analysis. Added a `Content Type` column filter that keeps only `text/html` rows. The filter uses simple comma-split (not a full CSV parser) which works because MIME type values never contain commas. Non-HTML resources are counted but excluded from the prompt: `Filtered internal_all.csv: {n} HTML pages ({dropped} non-HTML resources excluded)`.
+
+**2026-03-12: Agentic readiness scorecard regex allows explanatory text**
+
+The sync-dwight parser extracts PASS/FAIL signals from Section 10.4 of AUDIT_REPORT.md. The original regex `(PASS|FAIL)\s*\|` failed on rows like `FAIL — zero structured data site-wide |` because text appeared between the status and the pipe delimiter. Fixed to `(PASS|FAIL)[^|]*\|` which matches any text after PASS/FAIL up to the next pipe. The scorecard template was also updated to instruct "PASS or FAIL — explanation" format.
+
+**2026-03-12: top_10_non_branded uses domain-name heuristic (not is_brand flag)**
+
+`keyword_overview.top_10_non_branded` is needed at Jim sync time, but `is_brand` is null until Canonicalize runs (Phase 3c). Rather than defer the computation, sync-jim uses a domain-name heuristic: strip TLD from domain, remove hyphens, compare spaceless versions against each keyword. E.g., `idahomedicalacademy` matches `idaho medical academy`. This catches the most common branded keywords without waiting for Canonicalize. The count is re-synced with canonical `is_brand` data if sync-jim runs again after Phase 3c.
+
+**2026-03-12: keyword_overview exposes DataForSEO cap metadata**
+
+DataForSEO's `ranked_keywords/live` endpoint returns max 1000 results but the response's `total_count` field reports the true total (e.g., 3735 for idahomedicalacademy.com). Added `keywords_capped: true` and `dataforseo_total: 3735` to `keyword_overview` in the Jim snapshot so the dashboard can render "1,000+" / "400+" instead of presenting capped numbers as absolutes.
+
+**2026-03-13: Screaming Frog replaced with DataForSEO OnPage API (Dwight Phase 1)**
+
+SF CLI was a Java desktop app that couldn't run on cloud, had site-unreachable failures, and cost $209/yr. Replaced with DataForSEO's OnPage API (`scripts/dataforseo-onpage.ts`) which: (1) runs anywhere (pure HTTP), (2) handles JS rendering, (3) costs ~$0.025/crawl for 200-page sites. The new `scripts/onpage-to-csv.ts` transformer produces CSV files with identical headers to SF output (`INTERNAL_ALL_KEEP_COLUMNS`) so all downstream consumers (Dwight prompt, Michael prompt, sync-dwight) work unchanged. `Spelling Errors` and `Grammar Errors` columns are empty (never consumed meaningfully). `Link Score` maps to `onpage_score` (0-100 vs SF's proprietary metric). Polling uses 15s intervals with 30-min timeout for large sites.
+
+**2026-03-13: Claude CLI replaced with Anthropic SDK (@anthropic-ai/sdk)**
+
+The pipeline spawned the `claude` CLI binary (`/home/forgegrowth/.local/bin/claude`) via `child_process.spawn`/`spawnSync`. This had multiple problems: (1) binary dependency that can't deploy to Railway, (2) `spawnSync` has a 120s timeout cap regardless of the `timeout` parameter, (3) required stripping all `CLAUDE*` env vars to prevent conversation transcript leaking into output, (4) `stripClaudePreamble()` was needed to clean XML artifacts. New `scripts/anthropic-client.ts` uses `@anthropic-ai/sdk` directly with per-phase `max_tokens` config. Model mapping: `sonnet` → `claude-sonnet-4-5-20250514`, `haiku` → `claude-haiku-3-5-20241022`. All 15 call sites in `pipeline-generate.ts` plus `generate-brief.ts` and `generate-content.ts` migrated.
+
+**2026-03-13: loadEnv() falls through to process.env for cloud deployment**
+
+Local dev reads from `.env` file. When no `.env` exists (Railway, Docker), `loadEnv()` now falls through to `process.env`. This lets the same code run on both home server and Railway without code changes. Applied to all four files: `pipeline-generate.ts`, `sync-to-dashboard.ts`, `generate-brief.ts`, `generate-content.ts`.
+
+**2026-03-13: QA Agent evaluates generation phases via Haiku**
+
+New `runQA()` function in `pipeline-generate.ts` evaluates LLM output after each generation phase (Dwight, Jim, Gap, Michael) using phase-specific rubrics. Each rubric has critical/high/medium weighted checks. Verdict logic: PASS (all critical pass, ≤1 high fail), ENHANCE (critical fail or 2+ high fails, but meaningful content), FAIL (broken/empty). On ENHANCE, the phase re-runs and QA evaluates again. On persistent FAIL, pipeline halts. Results logged to `audit_qa_results` Supabase table. Cost: ~$0.005 per QA eval (Haiku).
+
+**2026-03-13: Pipeline server health endpoint for Railway**
+
+Added `GET /health` to `pipeline-server.ts` returning `{ status: 'ok', uptime, inFlight }`. Railway uses this for health checks and zero-downtime deploys. Also created `pipeline-server-standalone.ts` as a standalone entry point that runs without WhatsApp/container dependencies.
+
+**2026-03-13: Dockerfile.railway for cloud deployment**
+
+`Dockerfile.railway` uses `node:22-slim` + curl + jq (for `foundational_scout.sh`). Railway volume mounts at `/app/audits` for inter-phase artifact persistence. No Claude binary, no Screaming Frog, no Java — pure Node.js + HTTP APIs.

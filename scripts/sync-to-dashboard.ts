@@ -67,20 +67,27 @@ function parseArgs(): CliArgs {
 
 function loadEnv(): Record<string, string> {
   const envPath = path.resolve(process.cwd(), '.env');
-  if (!fs.existsSync(envPath)) return {};
-  const content = fs.readFileSync(envPath, 'utf-8');
-  const env: Record<string, string> = {};
-  for (const line of content.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    const eqIdx = trimmed.indexOf('=');
-    if (eqIdx < 0) continue;
-    const key = trimmed.slice(0, eqIdx).trim();
-    let val = trimmed.slice(eqIdx + 1).trim();
-    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
-      val = val.slice(1, -1);
+  if (fs.existsSync(envPath)) {
+    const content = fs.readFileSync(envPath, 'utf-8');
+    const env: Record<string, string> = {};
+    for (const line of content.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const eqIdx = trimmed.indexOf('=');
+      if (eqIdx < 0) continue;
+      const key = trimmed.slice(0, eqIdx).trim();
+      let val = trimmed.slice(eqIdx + 1).trim();
+      if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+        val = val.slice(1, -1);
+      }
+      env[key] = val;
     }
-    env[key] = val;
+    return env;
+  }
+  // Fall through to process.env (Railway)
+  const env: Record<string, string> = {};
+  for (const [key, val] of Object.entries(process.env)) {
+    if (val !== undefined) env[key] = val;
   }
   return env;
 }

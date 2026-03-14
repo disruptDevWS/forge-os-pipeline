@@ -145,8 +145,8 @@ Phase 6c (sync dwight)
 |-----|----------|---------|
 | DataForSEO Ranked Keywords | `/v3/dataforseo_labs/google/ranked_keywords/live` | Current organic rankings |
 | DataForSEO Bulk Volume | `/v3/keywords_data/google_ads/search_volume/live` | Opportunity map volume |
-| Claude CLI (haiku) | `callClaude()` sync | Topic extraction |
-| Claude CLI (sonnet) | `callClaudeAsync()` async | Scout report generation |
+| Anthropic API (haiku) | `callClaude()` | Topic extraction |
+| Anthropic API (sonnet) | `callClaude()` | Scout report generation |
 
 **Budget:** `SCOUT_SESSION_BUDGET` env var (default $2.00). Each API call checks remaining budget before proceeding.
 
@@ -162,17 +162,19 @@ Phase 6c (sync dwight)
 
 ### Phase 1: Dwight — Technical Crawl + Audit Report
 
-**Function:** `runDwight()` | **Model:** Claude Sonnet (async)
+**Function:** `runDwight()` | **Model:** Anthropic API Sonnet
 
 **External APIs:**
 
 | Tool | Details |
 |------|---------|
-| Screaming Frog CLI | `--crawl`, `--headless`, 14 export tabs, 7 bulk exports, 2 reports. Async spawn (no timeout cap). |
-| Claude CLI (sonnet) | Generates AUDIT_REPORT.md from crawl CSVs. `internal_all.csv` filtered to 32 key columns before prompting. |
+| DataForSEO OnPage API | `scripts/dataforseo-onpage.ts`: createOnPageTask → pollTaskReady → getPages/getSummary/getMicrodata/getResources. JS rendering enabled. |
+| Anthropic API (sonnet) | Generates AUDIT_REPORT.md from crawl CSVs. `internal_all.csv` filtered to 32 key columns before prompting. |
+
+**QA Gate:** After Dwight completes, `runQA(phase='dwight')` evaluates AUDIT_REPORT.md. On ENHANCE, re-runs Dwight. On persistent FAIL, pipeline halts.
 
 **Output files** (relative to `audits/{domain}/`):
-- `auditor/{date}/internal_all.csv` + ~20 supplementary CSVs
+- `auditor/{date}/internal_all.csv` + supplementary CSVs (from `onpage-to-csv.ts`)
 - `auditor/{date}/AUDIT_REPORT.md` (11 sections + prioritized fix list)
 - **Copies to `architecture/{date}/`:** `internal_all.csv`
 
@@ -200,8 +202,8 @@ Phase 6c (sync dwight)
 | API | Endpoint | Purpose |
 |-----|----------|---------|
 | DataForSEO Bulk Volume | `/v3/keywords_data/google_ads/search_volume/live` | Volume/CPC for keyword matrix |
-| Claude CLI (haiku) | `claude --print --model haiku` | Extract services + locations from AUDIT_REPORT.md |
-| Claude CLI (sonnet) | `claude --print --model sonnet` | Synthesize keyword_research_summary.md |
+| Anthropic API (haiku) | `callClaude()` | Extract services + locations from AUDIT_REPORT.md |
+| Anthropic API (sonnet) | `callClaude()` | Synthesize keyword_research_summary.md |
 
 **Output files:**
 - `research/{date}/keyword_research_raw.json`
@@ -229,7 +231,7 @@ Phase 6c (sync dwight)
 | DataForSEO Ranked Keywords | `/v3/dataforseo_labs/google/ranked_keywords/live` | Current organic rankings for domain |
 | DataForSEO Competitors | `/v3/dataforseo_labs/google/competitors_domain/live` | Competitor domain landscape |
 | DataForSEO Bulk Volume | `/v3/keywords_data/google_ads/search_volume/live` | Volume for seed/supplementary keywords |
-| Claude CLI (sonnet) | `claude --print --model sonnet` | Generate research_summary.md narrative |
+| Anthropic API (sonnet) | `callClaude()` | Generate research_summary.md narrative |
 
 **Modes:**
 - **Mode A (default):** Calls ranked-keywords + competitors for the domain. If <50 keywords returned, auto-supplements from `SERVICE_KEYWORD_SEEDS[service_key] × market_city locales` via bulk volume API.
@@ -318,7 +320,7 @@ Batches all `audit_keywords` (up to 250 per call) through Haiku for semantic gro
 | API | Endpoint | Purpose |
 |-----|----------|---------|
 | DataForSEO SERP Organic | `/v3/serp/google/organic/live/regular` | Top 10 organic results per keyword |
-| Claude CLI (haiku) | Domain classification: industry_competitor, aggregator, brand_confusion, unrelated |
+| Anthropic API (haiku) | Domain classification: industry_competitor, aggregator, brand_confusion, unrelated |
 
 **Logic:** Selects top ~20 canonical topics by volume, fetches SERP for top 5 keywords per topic (up to 100 SERP calls). Aggregates which competitor domains appear most frequently per topic.
 
@@ -602,26 +604,27 @@ The pipeline server currently runs on a residential ISP connection. Supabase Edg
 | DataForSEO SERP Organic | `https://api.dataforseo.com/v3/serp/google/organic/live/regular` | Competitors | Basic auth |
 | DataForSEO SERP Advanced | `https://api.dataforseo.com/v3/serp/google/organic/live/advanced` | Pam | Basic auth |
 | DataForSEO Credits | `https://api.dataforseo.com/v3/appendix/user_data` | foundational_scout.sh | Basic auth |
-| Claude CLI | `claude --print --model {model} --tools ''` | All generation phases | OAuth token |
-| Screaming Frog | `screamingfrogseospider --crawl --headless` | Dwight (Phase 1 only) | License key |
+| Anthropic API | `@anthropic-ai/sdk` via `scripts/anthropic-client.ts` | All generation phases | ANTHROPIC_API_KEY |
+| DataForSEO OnPage | `scripts/dataforseo-onpage.ts` | Dwight (Phase 1 only) | DATAFORSEO_LOGIN/PASSWORD |
 
 ## Claude Model Usage
 
 | Phase | Agent | Model | Method | Purpose |
 |-------|-------|-------|--------|---------|
-| 0 | Scout | **haiku** + **sonnet** | `callClaude()` + `callClaudeAsync()` | Topic extraction (haiku) + scout report (sonnet) |
-| 1 | Dwight | **sonnet** | `callClaudeAsync()` | AUDIT_REPORT.md |
-| 2 | KeywordResearch | **haiku** + **sonnet** | `callClaudeAsync()` | Service extraction (haiku) + synthesis (sonnet) |
-| 3 | Jim | **sonnet** | `callClaudeAsync()` | research_summary.md |
-| 3c | Canonicalize | **haiku** | `callClaude()` sync | Topic grouping JSON (small batches) |
-| 4 | Competitors | **haiku** | `callClaude()` sync | Domain classification (small batches) |
-| 5 | Gap | **sonnet** | `callClaudeAsync()` | Gap analysis JSON |
-| 6 | Michael | **sonnet** | `callClaudeAsync()` | architecture_blueprint.md |
-| 6.5 | Validator | **haiku** | `callClaudeAsync()` | Coverage validation JSON |
-| — | Pam | **sonnet** | `callClaudeAsync()` | Content brief (metadata + schema + outline) |
-| — | Oscar | **sonnet** | `callClaudeAsync()` | Production HTML from brief |
+| 0 | Scout | **haiku** + **sonnet** | `callClaude()` | Topic extraction (haiku) + scout report (sonnet) |
+| 1 | Dwight | **sonnet** | `callClaude()` | AUDIT_REPORT.md [QA gated] |
+| 2 | KeywordResearch | **haiku** + **sonnet** | `callClaude()` | Service extraction (haiku) + synthesis (sonnet) |
+| 3 | Jim | **sonnet** | `callClaude()` | research_summary.md [QA gated] |
+| 3c | Canonicalize | **haiku** | `callClaude()` | Topic grouping JSON (small batches) |
+| 4 | Competitors | **haiku** | `callClaude()` | Domain classification (small batches) |
+| 5 | Gap | **sonnet** | `callClaude()` | Gap analysis JSON [QA gated] |
+| 6 | Michael | **sonnet** | `callClaude()` | architecture_blueprint.md [QA gated] |
+| 6.5 | Validator | **haiku** | `callClaude()` | Coverage validation JSON |
+| QA | QA Agent | **haiku** | `callClaude()` | Phase evaluation against rubrics |
+| — | Pam | **sonnet** | `callClaude()` | Content brief (metadata + schema + outline) |
+| — | Oscar | **sonnet** | `callClaude()` | Production HTML from brief |
 
-**Sync vs Async:** `callClaude()` uses `spawnSync` — suitable for small Haiku batches. `callClaudeAsync()` uses async `spawn` — required for large prompts (>50K chars) to avoid ETIMEDOUT errors.
+**SDK migration:** All phases use `@anthropic-ai/sdk` via `scripts/anthropic-client.ts`. Per-phase `max_tokens` configured in `PHASE_MAX_TOKENS` (e.g., sonnet phases: 16384, haiku phases: 4096). No more Claude CLI binary, env var stripping, or `stripClaudePreamble()`.
 
 ## Supabase Tables
 

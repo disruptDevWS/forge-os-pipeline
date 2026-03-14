@@ -13,8 +13,8 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import * as child_process from 'node:child_process';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { callClaude as callClaudeAsync, initAnthropicClient } from './anthropic-client.js';
 
 // ============================================================
 // .env loader (same as sync-to-dashboard — never touch process.env)
@@ -22,20 +22,27 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
 function loadEnv(): Record<string, string> {
   const envPath = path.resolve(process.cwd(), '.env');
-  if (!fs.existsSync(envPath)) return {};
-  const content = fs.readFileSync(envPath, 'utf-8');
-  const env: Record<string, string> = {};
-  for (const line of content.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    const eqIdx = trimmed.indexOf('=');
-    if (eqIdx < 0) continue;
-    const key = trimmed.slice(0, eqIdx).trim();
-    let val = trimmed.slice(eqIdx + 1).trim();
-    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
-      val = val.slice(1, -1);
+  if (fs.existsSync(envPath)) {
+    const content = fs.readFileSync(envPath, 'utf-8');
+    const env: Record<string, string> = {};
+    for (const line of content.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const eqIdx = trimmed.indexOf('=');
+      if (eqIdx < 0) continue;
+      const key = trimmed.slice(0, eqIdx).trim();
+      let val = trimmed.slice(eqIdx + 1).trim();
+      if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+        val = val.slice(1, -1);
+      }
+      env[key] = val;
     }
-    env[key] = val;
+    return env;
+  }
+  // Fall through to process.env (Railway)
+  const env: Record<string, string> = {};
+  for (const [key, val] of Object.entries(process.env)) {
+    if (val !== undefined) env[key] = val;
   }
   return env;
 }
@@ -56,46 +63,7 @@ function todayStr(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-function callClaudeAsync(prompt: string, model = 'sonnet'): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const claudeBin = process.env.CLAUDE_BIN || '/home/forgegrowth/.local/bin/claude';
-    const childEnv = { ...process.env };
-    for (const key of Object.keys(childEnv)) {
-      if (key.startsWith('CLAUDE') || key === 'CLAUDECODE') delete childEnv[key];
-    }
-    const proc = child_process.spawn(claudeBin, ['--print', '--model', model, '--tools', ''], {
-      env: childEnv,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-
-    const stdoutChunks: string[] = [];
-    const stderrChunks: string[] = [];
-
-    proc.stdout!.setEncoding('utf-8');
-    proc.stderr!.setEncoding('utf-8');
-    proc.stdout!.on('data', (chunk: string) => stdoutChunks.push(chunk));
-    proc.stderr!.on('data', (chunk: string) => stderrChunks.push(chunk));
-
-    proc.on('error', (err) => reject(new Error(`claude spawn failed: ${err.message}`)));
-    proc.on('close', (code) => {
-      const stdout = stdoutChunks.join('').trim();
-      const stderr = stderrChunks.join('').trim();
-      if (code !== 0) {
-        const detail = stderr.slice(0, 300) || stdout.slice(0, 300) || '(no output)';
-        reject(new Error(`claude exited ${code}: ${detail}`));
-        return;
-      }
-      if (!stdout || stdout.startsWith('Error:')) {
-        reject(new Error(`claude returned error: ${stdout.slice(0, 200) || '(empty output)'}`));
-        return;
-      }
-      resolve(stdout);
-    });
-
-    proc.stdin!.write(prompt);
-    proc.stdin!.end();
-  });
-}
+// callClaudeAsync replaced by import from anthropic-client.ts
 
 // ============================================================
 // Field extraction (duplicated from sync-to-dashboard — no import)
@@ -886,6 +854,15 @@ async function processRequest(sb: SupabaseClient, req: PamRequest) {
 
 async function main() {
   const env = loadEnv();
+
+  // Initialize Anthropic SDK
+  const anthropicKey = env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY;
+  if (!anthropicKey) {
+    console.error('Missing ANTHROPIC_API_KEY in .env or environment');
+    process.exit(1);
+  }
+  initAnthropicClient(anthropicKey);
+
   const supabaseUrl = env.SUPABASE_URL;
   const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY;
   if (!supabaseUrl || !serviceRoleKey) {

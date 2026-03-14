@@ -106,6 +106,13 @@ Mount security: additional mounts are validated against `~/.config/nanoclaw/moun
 | `container/agent-runner/src/index.ts` | In-container SDK query loop, MessageStream, IPC polling |
 | `container/agent-runner/src/ipc-mcp-stdio.ts` | MCP server exposing IPC tools to the agent |
 | `container/Dockerfile` | node:22-slim + Chromium + claude-code |
+| `scripts/pipeline-generate.ts` | Audit pipeline: all agent generation phases (Dwight, Jim, etc.) |
+| `scripts/anthropic-client.ts` | Anthropic SDK wrapper — drop-in for all Claude calls |
+| `scripts/dataforseo-onpage.ts` | DataForSEO OnPage API client (replaces Screaming Frog) |
+| `scripts/onpage-to-csv.ts` | Transforms OnPage API data to SF-compatible CSVs |
+| `scripts/run-pipeline.sh` | Sequential pipeline orchestrator with QA gates |
+| `src/pipeline-server.ts` | HTTP trigger server for pipeline runs |
+| `Dockerfile.railway` | Railway deployment (pipeline server only) |
 | `groups/global/CLAUDE.md` | Global persona injected into all agents (read-only) |
 | `groups/main/CLAUDE.md` | Main group persona with admin/group management context |
 | `groups/{name}/CLAUDE.md` | Per-group memory (isolated) |

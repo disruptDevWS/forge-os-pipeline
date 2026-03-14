@@ -29,7 +29,7 @@
 # It only sets audits.status='running' + agent_pipeline_status='queued'.
 # ─────────────────────────────────────────────────────────────
 #
-# Phase 1:  Dwight — Comprehensive SF crawl + analysis → AUDIT_REPORT.md + CSVs
+# Phase 1:  Dwight — DataForSEO OnPage crawl + analysis → AUDIT_REPORT.md + CSVs
 # Phase 2:  KeywordResearch — Service × city × intent matrix → keyword_research_summary.md + audit_keywords (seeded)
 # Phase 3:  Jim — DataForSEO ranked-keywords + competitors → research_summary.md
 # Phase 3b: sync jim — ranked_keywords.json → Supabase (audit_keywords, clusters, rollups)
@@ -120,15 +120,25 @@ trap 'update_status failed' ERR
 
 update_status audit
 
-# ─── Phase 1: Dwight — Comprehensive SF Crawl ───────────────
-# Runs Screaming Frog CLI with 14 export tabs, 7 bulk exports,
-# 2 reports. Produces ~20 CSV files + AUDIT_REPORT.md.
+# ─── Phase 1: Dwight — DataForSEO OnPage Crawl ───────────────
+# Runs DataForSEO OnPage API crawl. Produces CSV files + AUDIT_REPORT.md.
 # Copies internal_all.csv to architecture dir for Michael.
-# Note: Gemini embeddings removed — semantic similarity covered by
-# Jim (canonicalization) and Michael (topic overlap).
 echo ""
-echo "--- Phase 1: Dwight (Comprehensive SF Crawl) ---"
+echo "--- Phase 1: Dwight (DataForSEO OnPage Crawl) ---"
 npx tsx scripts/pipeline-generate.ts dwight --domain "$DOMAIN" --user-email "$EMAIL"
+
+# QA gate: Dwight
+echo "--- QA: Dwight ---"
+QA_RESULT=$(npx tsx scripts/pipeline-generate.ts qa --domain "$DOMAIN" --user-email "$EMAIL" --phase dwight 2>&1) || {
+  echo "  QA ENHANCE for Dwight — re-running with feedback..."
+  npx tsx scripts/pipeline-generate.ts dwight --domain "$DOMAIN" --user-email "$EMAIL"
+  npx tsx scripts/pipeline-generate.ts qa --domain "$DOMAIN" --user-email "$EMAIL" --phase dwight || {
+    echo "  QA FAILED for Dwight after retry"
+    update_status failed
+    exit 1
+  }
+}
+echo "  QA PASSED: Dwight"
 
 # ─── Phase 2: Keyword Research ───────────────────────────────
 # Reads Dwight's AUDIT_REPORT.md to extract services + locations.
@@ -142,9 +152,7 @@ update_status research
 
 # ─── Phase 3: Jim — DataForSEO → disk artifacts ─────────────
 # Calls foundational_scout.sh for ranked-keywords + competitors,
-# then claude --print (sonnet) for research_summary.md.
-# Now receives site inventory from Dwight and keyword opportunities
-# from KeywordResearch as primary research foundation.
+# then Anthropic API (sonnet) for research_summary.md.
 # Produces: audits/{domain}/research/{date}/ranked_keywords.json,
 #           competitors.json, research_summary.md
 echo ""
@@ -153,6 +161,19 @@ SEED_ARGS=""
 [[ -n "$SEED_MATRIX" ]] && SEED_ARGS="--seed-matrix $SEED_MATRIX"
 [[ -n "$COMPETITOR_URLS" ]] && SEED_ARGS="$SEED_ARGS --competitor-urls $COMPETITOR_URLS"
 npx tsx scripts/pipeline-generate.ts jim --domain "$DOMAIN" --user-email "$EMAIL" $SEED_ARGS $MODE_ARGS
+
+# QA gate: Jim
+echo "--- QA: Jim ---"
+QA_RESULT=$(npx tsx scripts/pipeline-generate.ts qa --domain "$DOMAIN" --user-email "$EMAIL" --phase jim 2>&1) || {
+  echo "  QA ENHANCE for Jim — re-running with feedback..."
+  npx tsx scripts/pipeline-generate.ts jim --domain "$DOMAIN" --user-email "$EMAIL" $SEED_ARGS $MODE_ARGS
+  npx tsx scripts/pipeline-generate.ts qa --domain "$DOMAIN" --user-email "$EMAIL" --phase jim || {
+    echo "  QA FAILED for Jim after retry"
+    update_status failed
+    exit 1
+  }
+}
+echo "  QA PASSED: Jim"
 
 # ─── Phase 3b: sync jim → Supabase ──────────────────────────
 # Parses ranked_keywords.json → populates audit_keywords (~1000 rows),
@@ -188,25 +209,47 @@ if [[ "$MODE" != "sales" ]]; then
   npx tsx scripts/pipeline-generate.ts competitors --domain "$DOMAIN" --user-email "$EMAIL"
 
   # ─── Phase 5: Content Gap Analysis ──────────────────────────
-  # Queries competitive data from Supabase (needs audit_topic_competitors
-  # + audit_topic_dominance from Phase 4), synthesizes via claude --print.
+  # Queries competitive data from Supabase, synthesizes via Anthropic API.
   # Writes content_gap_analysis.md to disk + inserts audit_snapshots.
   echo ""
   echo "--- Phase 5: Content Gap Analysis ---"
   npx tsx scripts/pipeline-generate.ts gap --domain "$DOMAIN" --user-email "$EMAIL"
+
+  # QA gate: Gap
+  echo "--- QA: Gap ---"
+  QA_RESULT=$(npx tsx scripts/pipeline-generate.ts qa --domain "$DOMAIN" --user-email "$EMAIL" --phase gap 2>&1) || {
+    echo "  QA ENHANCE for Gap — re-running with feedback..."
+    npx tsx scripts/pipeline-generate.ts gap --domain "$DOMAIN" --user-email "$EMAIL"
+    npx tsx scripts/pipeline-generate.ts qa --domain "$DOMAIN" --user-email "$EMAIL" --phase gap || {
+      echo "  QA FAILED for Gap after retry"
+      update_status failed
+      exit 1
+    }
+  }
+  echo "  QA PASSED: Gap"
 else
   echo ""
   echo "--- [SALES MODE] Skipping Phases 4-5 (Competitors + Gap) ---"
 fi
 
 # ─── Phase 6: Michael Architecture ────────────────────────────
-# Reads ALL disk artifacts: Jim's research_summary.md + ranked_keywords.json,
-# Dwight's internal_all.csv + semantically_similar_report.csv,
-# Gap's content_gap_analysis.md. Plus Supabase clusters (revenue data).
-# Generates architecture_blueprint.md.
+# Reads ALL disk artifacts + Supabase clusters → architecture_blueprint.md.
 echo ""
 echo "--- Phase 6: Michael Architecture ---"
 npx tsx scripts/pipeline-generate.ts michael --domain "$DOMAIN" --user-email "$EMAIL" $MODE_ARGS
+
+# QA gate: Michael
+echo "--- QA: Michael ---"
+QA_RESULT=$(npx tsx scripts/pipeline-generate.ts qa --domain "$DOMAIN" --user-email "$EMAIL" --phase michael 2>&1) || {
+  echo "  QA ENHANCE for Michael — re-running with feedback..."
+  npx tsx scripts/pipeline-generate.ts michael --domain "$DOMAIN" --user-email "$EMAIL" $MODE_ARGS
+  npx tsx scripts/pipeline-generate.ts qa --domain "$DOMAIN" --user-email "$EMAIL" --phase michael || {
+    echo "  QA FAILED for Michael after retry"
+    update_status failed
+    exit 1
+  }
+}
+echo "  QA PASSED: Michael"
 
 # ─── Phase 6.5: Coverage Validation ──────────────────────────
 # Cross-checks Gap's identified gaps against Michael's blueprint.
@@ -231,20 +274,20 @@ update_status complete
 # ─── Summary ──────────────────────────────────────────────────
 echo ""
 echo "=== Pipeline Complete [mode=$MODE] ==="
-echo "  Phase 1:  Dwight   — Comprehensive SF crawl (20+ CSVs) → AUDIT_REPORT.md"
+echo "  Phase 1:  Dwight   — DataForSEO OnPage crawl → AUDIT_REPORT.md [QA ✓]"
 echo "  Phase 2:  KWRes.   — Service × city × intent matrix → keyword_research_summary.md"
-echo "  Phase 3:  Jim      — DataForSEO ranked-keywords + competitors → research_summary.md"
+echo "  Phase 3:  Jim      — DataForSEO ranked-keywords + competitors → research_summary.md [QA ✓]"
 echo "  Phase 3b: sync     — ranked_keywords.json → audit_keywords (preliminary clusters)"
 echo "  Phase 3c: canon.   — Claude Haiku semantic topic grouping → canonical_key/topic"
 echo "  Phase 3d: rebuild  — Re-aggregate clusters using canonical groupings"
 if [[ "$MODE" != "sales" ]]; then
   echo "  Phase 4:  Compet.  — SERP analysis → audit_topic_competitors/dominance"
-  echo "  Phase 5:  Gap      — Competitive gap synthesis → content_gap_analysis.md"
+  echo "  Phase 5:  Gap      — Competitive gap synthesis → content_gap_analysis.md [QA ✓]"
 else
   echo "  Phase 4:  SKIPPED  (sales mode)"
   echo "  Phase 5:  SKIPPED  (sales mode)"
 fi
-echo "  Phase 6:  Michael  — All artifacts → architecture_blueprint.md"
+echo "  Phase 6:  Michael  — All artifacts → architecture_blueprint.md [QA ✓]"
 if [[ "$MODE" != "sales" ]]; then
   echo "  Phase 6.5: Valid.  — Coverage validation (gap vs blueprint cross-check)"
 fi

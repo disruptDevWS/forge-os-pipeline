@@ -17,6 +17,7 @@
     "sync": "tsx scripts/sync-to-dashboard.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.78.0",
     "@supabase/supabase-js": "^2.97.0",
     "@whiskeysockets/baileys": "^7.0.0-rc.9",
     "better-sqlite3": "^11.8.1",
