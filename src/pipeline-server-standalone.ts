@@ -87,13 +87,39 @@ async function handleTrigger(req: http.IncomingMessage, res: http.ServerResponse
 
   const child = spawn(scriptPath, args, {
     detached: true,
-    stdio: 'ignore',
+    stdio: ['ignore', 'pipe', 'pipe'],
   });
   child.unref();
+
+  const logLines: string[] = [];
+  const collect = (stream: NodeJS.ReadableStream | null, prefix: string) => {
+    if (!stream) return;
+    let buf = '';
+    stream.on('data', (chunk: Buffer) => {
+      buf += chunk.toString();
+      const lines = buf.split('\n');
+      buf = lines.pop() || '';
+      for (const line of lines) {
+        console.log(`[${domain}] ${prefix}: ${line}`);
+        logLines.push(`${prefix}: ${line}`);
+      }
+    });
+    stream.on('end', () => {
+      if (buf) {
+        console.log(`[${domain}] ${prefix}: ${buf}`);
+        logLines.push(`${prefix}: ${buf}`);
+      }
+    });
+  };
+  collect(child.stdout, 'OUT');
+  collect(child.stderr, 'ERR');
 
   child.on('close', (code) => {
     inFlight.delete(domain);
     console.log(`Pipeline finished: ${domain} (exit ${code})`);
+    if (code !== 0) {
+      console.error(`Pipeline failed: ${domain} — last 20 lines:\n${logLines.slice(-20).join('\n')}`);
+    }
   });
 
   child.on('error', (err) => {
