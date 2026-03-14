@@ -10,7 +10,7 @@ import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
-const PORT = parseInt(process.env.PIPELINE_SERVER_PORT || '3847', 10);
+const PORT = parseInt(process.env.PORT || process.env.PIPELINE_SERVER_PORT || '3847', 10);
 const TRIGGER_SECRET = process.env.PIPELINE_TRIGGER_SECRET || '';
 const AUDITS_BASE = path.resolve(process.cwd(), 'audits');
 
