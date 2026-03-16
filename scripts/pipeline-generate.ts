@@ -183,7 +183,25 @@ async function resolveAudit(sb: SupabaseClient, domain: string, userEmail: strin
     .limit(1)
     .maybeSingle();
 
-  if (!audit) throw new Error(`No audit found for ${domain} / ${userEmail}`);
+  if (!audit) {
+    // Auto-create audit for sales mode (no dashboard involvement)
+    const { data: newAudit, error: insertErr } = await sb
+      .from('audits')
+      .insert({
+        domain,
+        user_id: user.id,
+        status: 'running',
+        mode: 'sales',
+        service_key: 'other',
+        geo_mode: 'city',
+        market_geos: { cities: [], state: '' },
+      })
+      .select('*')
+      .single();
+    if (insertErr || !newAudit) throw new Error(`Failed to auto-create audit for ${domain}: ${insertErr?.message}`);
+    console.log(`  Auto-created sales audit: ${newAudit.id}`);
+    return { audit: newAudit, userId: user.id };
+  }
   return { audit, userId: user.id };
 }
 
