@@ -223,6 +223,70 @@ async function handleScoutReport(req: http.IncomingMessage, res: http.ServerResp
   json(res, 200, { markdown, scope, date: latestDate });
 }
 
+async function handleArtifact(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  if (!checkAuth(req, res)) return;
+
+  let payload: { domain?: string; file?: string };
+  try {
+    payload = JSON.parse(await readBody(req));
+  } catch {
+    json(res, 400, { error: 'Invalid JSON' });
+    return;
+  }
+
+  const { domain, file: filename } = payload;
+  if (!domain || !filename) {
+    json(res, 400, { error: 'domain and file are required' });
+    return;
+  }
+  if (!DOMAIN_RE.test(domain)) {
+    json(res, 400, { error: 'Invalid domain format' });
+    return;
+  }
+
+  // Prevent path traversal
+  if (filename.includes('..') || filename.startsWith('/')) {
+    json(res, 400, { error: 'Invalid file path' });
+    return;
+  }
+
+  const domainDir = path.join(AUDITS_BASE, domain);
+  if (!fs.existsSync(domainDir)) {
+    json(res, 404, { error: 'Domain directory not found' });
+    return;
+  }
+
+  // If filename is '*', list all .md files
+  if (filename === '*') {
+    const files: string[] = [];
+    const walk = (dir: string, prefix: string) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+        if (entry.isDirectory()) walk(path.join(dir, entry.name), rel);
+        else if (entry.name.endsWith('.md') || entry.name.endsWith('.json') || entry.name.endsWith('.csv')) {
+          files.push(rel);
+        }
+      }
+    };
+    walk(domainDir, '');
+    json(res, 200, { domain, files });
+    return;
+  }
+
+  const filePath = path.join(domainDir, filename);
+  if (!filePath.startsWith(domainDir)) {
+    json(res, 400, { error: 'Invalid file path' });
+    return;
+  }
+  if (!fs.existsSync(filePath)) {
+    json(res, 404, { error: `File not found: ${filename}` });
+    return;
+  }
+
+  const content = fs.readFileSync(filePath, 'utf-8');
+  json(res, 200, { domain, file: filename, content });
+}
+
 const server = http.createServer((req, res) => {
   if (req.method === 'GET' && req.url === '/health') {
     json(res, 200, {
@@ -243,6 +307,8 @@ const server = http.createServer((req, res) => {
     handleScoutConfig(req, res);
   } else if (req.method === 'POST' && req.url === '/scout-report') {
     handleScoutReport(req, res);
+  } else if (req.method === 'POST' && req.url === '/artifact') {
+    handleArtifact(req, res);
   } else {
     json(res, 404, { error: 'Not found' });
   }
