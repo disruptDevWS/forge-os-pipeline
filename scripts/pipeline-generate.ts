@@ -3601,7 +3601,7 @@ const QA_RUBRICS: Record<string, QARubric> = {
   gap: {
     phase: 'gap',
     artifactFilename: 'content_gap_analysis.md',
-    artifactSubdir: 'architecture',
+    artifactSubdir: 'research',
     checks: [
       { name: 'specific_gaps', weight: 'critical', description: '5+ specific content gaps identified (not generic)' },
       { name: 'competitor_refs', weight: 'high', description: 'Gaps reference competitor domains' },
