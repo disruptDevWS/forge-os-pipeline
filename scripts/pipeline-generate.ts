@@ -193,6 +193,8 @@ async function resolveAudit(sb: SupabaseClient, domain: string, userEmail: strin
         status: 'running',
         mode: 'sales',
         service_key: 'other',
+        market_city: '',
+        market_state: '',
         geo_mode: 'city',
         market_geos: { cities: [], state: '' },
       })
