@@ -225,6 +225,7 @@ const server = http.createServer((req, res) => {
       inFlight: [...inFlight],
       envCheck: {
         ANTHROPIC_API_KEY: !!process.env.ANTHROPIC_API_KEY,
+        ANTHROPIC_KEY: !!process.env.ANTHROPIC_KEY,
         DATAFORSEO_LOGIN: !!process.env.DATAFORSEO_LOGIN,
         SUPABASE_URL: !!process.env.SUPABASE_URL,
         PIPELINE_TRIGGER_SECRET: !!process.env.PIPELINE_TRIGGER_SECRET,
