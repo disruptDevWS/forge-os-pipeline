@@ -3739,9 +3739,10 @@ async function main() {
   const env = loadEnv();
 
   // Initialize Anthropic SDK with API key from .env or environment
-  const anthropicKey = env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY;
+  // Note: Railway filters ANTHROPIC_API_KEY, so also check ANTHROPIC_KEY
+  const anthropicKey = env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY || env.ANTHROPIC_KEY || process.env.ANTHROPIC_KEY;
   if (!anthropicKey) {
-    console.error('Missing ANTHROPIC_API_KEY in .env or environment');
+    console.error('Missing ANTHROPIC_API_KEY (or ANTHROPIC_KEY) in .env or environment');
     process.exit(1);
   }
   initAnthropicClient(anthropicKey);

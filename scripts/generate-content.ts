@@ -445,9 +445,9 @@ async function main() {
   const env = loadEnv();
 
   // Initialize Anthropic SDK
-  const anthropicKey = env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY;
+  const anthropicKey = env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY || env.ANTHROPIC_KEY || process.env.ANTHROPIC_KEY;
   if (!anthropicKey) {
-    console.error('Missing ANTHROPIC_API_KEY in .env or environment');
+    console.error('Missing ANTHROPIC_API_KEY (or ANTHROPIC_KEY) in .env or environment');
     process.exit(1);
   }
   initAnthropicClient(anthropicKey);

@@ -47,7 +47,7 @@ let _client: Anthropic | null = null;
 function getClient(apiKey?: string): Anthropic {
   if (!_client) {
     _client = new Anthropic({
-      apiKey: apiKey || process.env.ANTHROPIC_API_KEY,
+      apiKey: apiKey || process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_KEY,
     });
   }
   return _client;
