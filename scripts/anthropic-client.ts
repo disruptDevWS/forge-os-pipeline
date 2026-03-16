@@ -11,9 +11,9 @@ import Anthropic from '@anthropic-ai/sdk';
 // ── Model mapping ─────────────────────────────────────────────
 
 const MODEL_MAP: Record<string, string> = {
-  sonnet: 'claude-sonnet-4-5-20250514',
-  haiku: 'claude-haiku-3-5-20241022',
-  opus: 'claude-opus-4-20250514',
+  sonnet: 'claude-sonnet-4-6',
+  haiku: 'claude-haiku-4-5',
+  opus: 'claude-opus-4-6',
 };
 
 function resolveModel(shortName: string): string {
