@@ -219,7 +219,17 @@ async function handleScoutReport(req: http.IncomingMessage, res: http.ServerResp
 
 const server = http.createServer((req, res) => {
   if (req.method === 'GET' && req.url === '/health') {
-    json(res, 200, { status: 'ok', uptime: process.uptime(), inFlight: [...inFlight] });
+    json(res, 200, {
+      status: 'ok',
+      uptime: process.uptime(),
+      inFlight: [...inFlight],
+      envCheck: {
+        ANTHROPIC_API_KEY: !!process.env.ANTHROPIC_API_KEY,
+        DATAFORSEO_LOGIN: !!process.env.DATAFORSEO_LOGIN,
+        SUPABASE_URL: !!process.env.SUPABASE_URL,
+        PIPELINE_TRIGGER_SECRET: !!process.env.PIPELINE_TRIGGER_SECRET,
+      },
+    });
   } else if (req.method === 'POST' && req.url === '/trigger-pipeline') {
     handleTrigger(req, res);
   } else if (req.method === 'POST' && req.url === '/scout-config') {
