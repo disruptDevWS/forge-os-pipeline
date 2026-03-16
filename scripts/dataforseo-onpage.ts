@@ -382,7 +382,7 @@ export async function runFullCrawl(
   options: OnPageTaskOptions = {},
 ): Promise<CrawlResult> {
   // Check budget
-  const budgetCap = options.budgetCap ?? parseFloat(env.ONPAGE_CRAWL_BUDGET || '') || DEFAULT_CRAWL_BUDGET;
+  const budgetCap = options.budgetCap ?? (parseFloat(env.ONPAGE_CRAWL_BUDGET || '') || DEFAULT_CRAWL_BUDGET);
   console.log(`  Budget cap: $${budgetCap.toFixed(2)}`);
 
   // Step 1: Create task
