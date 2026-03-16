@@ -44,7 +44,7 @@ function checkAuth(req: http.IncomingMessage, res: http.ServerResponse): boolean
 async function handleTrigger(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   if (!checkAuth(req, res)) return;
 
-  let payload: { domain?: string; email?: string; mode?: string; prospect_config?: string };
+  let payload: { domain?: string; email?: string; mode?: string; prospect_config?: string; start_from?: string };
   try {
     payload = JSON.parse(await readBody(req));
   } catch {
@@ -83,6 +83,12 @@ async function handleTrigger(req: http.IncomingMessage, res: http.ServerResponse
     args.push('--mode', 'prospect', '--prospect-config', prospectConfig);
   } else if (mode !== 'full') {
     args.push('--mode', mode);
+  }
+
+  const startFrom = payload.start_from || '';
+  if (startFrom) {
+    args.push('--start-from', startFrom);
+    console.log(`  Resuming from Phase ${startFrom}`);
   }
 
   const child = spawn(scriptPath, args, {

@@ -59,9 +59,10 @@ SEED_MATRIX="${3:-}"
 COMPETITOR_URLS="${4:-}"
 DATE=$(date +%Y-%m-%d)
 
-# Parse --mode and --prospect-config flags from any position
+# Parse --mode, --prospect-config, and --start-from flags from any position
 MODE="full"
 PROSPECT_CONFIG=""
+START_FROM=""
 NEXT_FLAG=""
 for i in "$@"; do
   if [[ "$i" == "--mode" ]]; then
@@ -72,14 +73,34 @@ for i in "$@"; do
     NEXT_FLAG="prospect-config"
     continue
   fi
+  if [[ "$i" == "--start-from" ]]; then
+    NEXT_FLAG="start-from"
+    continue
+  fi
   if [[ "$NEXT_FLAG" == "mode" ]]; then
     MODE="$i"
     NEXT_FLAG=""
   elif [[ "$NEXT_FLAG" == "prospect-config" ]]; then
     PROSPECT_CONFIG="$i"
     NEXT_FLAG=""
+  elif [[ "$NEXT_FLAG" == "start-from" ]]; then
+    START_FROM="$i"
+    NEXT_FLAG=""
   fi
 done
+
+# Phase ordering for --start-from
+PHASE_ORDER=(1 2 3 3b 3c 3d 4 5 6 6.5 6b)
+should_run_phase() {
+  local phase="$1"
+  [[ -z "$START_FROM" ]] && return 0
+  local started=false
+  for p in "${PHASE_ORDER[@]}"; do
+    [[ "$p" == "$START_FROM" ]] && started=true
+    [[ "$p" == "$phase" ]] && { $started && return 0 || return 1; }
+  done
+  return 0
+}
 
 # Clear positional args that were actually flags
 [[ "$SEED_MATRIX" == "--mode" || "$SEED_MATRIX" == "--prospect-config" ]] && SEED_MATRIX=""
@@ -120,9 +141,10 @@ trap 'update_status failed' ERR
 
 update_status audit
 
+[[ -n "$START_FROM" ]] && echo "  Resuming from Phase $START_FROM (skipping earlier phases)"
+
 # ─── Phase 1: Dwight — DataForSEO OnPage Crawl ───────────────
-# Runs DataForSEO OnPage API crawl. Produces CSV files + AUDIT_REPORT.md.
-# Copies internal_all.csv to architecture dir for Michael.
+if should_run_phase 1; then
 echo ""
 echo "--- Phase 1: Dwight (DataForSEO OnPage Crawl) ---"
 npx tsx scripts/pipeline-generate.ts dwight --domain "$DOMAIN" --user-email "$EMAIL"
@@ -139,22 +161,19 @@ QA_RESULT=$(npx tsx scripts/pipeline-generate.ts qa --domain "$DOMAIN" --user-em
   }
 }
 echo "  QA PASSED: Dwight"
+else echo "  [SKIP] Phase 1: Dwight"; fi
 
 # ─── Phase 2: Keyword Research ───────────────────────────────
-# Reads Dwight's AUDIT_REPORT.md to extract services + locations.
-# Builds service × city × intent matrix, validates with DataForSEO,
-# seeds audit_keywords with is_near_me set from the start.
+if should_run_phase 2; then
 echo ""
 echo "--- Phase 2: Keyword Research (Service × City Matrix) ---"
 npx tsx scripts/pipeline-generate.ts keyword-research --domain "$DOMAIN" --user-email "$EMAIL"
 
 update_status research
+else echo "  [SKIP] Phase 2: Keyword Research"; fi
 
 # ─── Phase 3: Jim — DataForSEO → disk artifacts ─────────────
-# Calls foundational_scout.sh for ranked-keywords + competitors,
-# then Anthropic API (sonnet) for research_summary.md.
-# Produces: audits/{domain}/research/{date}/ranked_keywords.json,
-#           competitors.json, research_summary.md
+if should_run_phase 3; then
 echo ""
 echo "--- Phase 3: Jim (DataForSEO + Research Summary) ---"
 SEED_ARGS=""
@@ -174,43 +193,41 @@ QA_RESULT=$(npx tsx scripts/pipeline-generate.ts qa --domain "$DOMAIN" --user-em
   }
 }
 echo "  QA PASSED: Jim"
+else echo "  [SKIP] Phase 3: Jim"; fi
 
 # ─── Phase 3b: sync jim → Supabase ──────────────────────────
-# Parses ranked_keywords.json → populates audit_keywords (~1000 rows),
-# audit_clusters, audit_rollups. Needed before competitors step.
+if should_run_phase 3b; then
 echo ""
 echo "--- Phase 3b: Sync Jim → Supabase ---"
 npx tsx scripts/sync-to-dashboard.ts --domain "$DOMAIN" --user-email "$EMAIL" --agents jim
+else echo "  [SKIP] Phase 3b: Sync Jim"; fi
 
 # ─── Phase 3c: Canonicalize Topics ───────────────────────────
-# Claude Haiku semantic grouping of keywords into clean topic labels.
-# Populates canonical_key, canonical_topic, cluster for all audit_keywords.
-# Must run before competitors (clean keys eliminate duplicate SERP calls).
+if should_run_phase 3c; then
 echo ""
 echo "--- Phase 3c: Canonicalize Topics (Claude Haiku) ---"
 npx tsx scripts/pipeline-generate.ts canonicalize --domain "$DOMAIN" --user-email "$EMAIL"
+else echo "  [SKIP] Phase 3c: Canonicalize"; fi
 
 # ─── Phase 3d: Rebuild Clusters ──────────────────────────────
-# Canonicalize updates canonical_key/topic on keywords but doesn't
-# rebuild clusters. Re-aggregate using canonical groupings.
+if should_run_phase 3d; then
 echo ""
 echo "--- Phase 3d: Rebuild Clusters (post-canonicalize) ---"
 npx tsx scripts/sync-to-dashboard.ts --domain "$DOMAIN" --user-email "$EMAIL" --rebuild-clusters
 
 update_status architecture
+else echo "  [SKIP] Phase 3d: Rebuild Clusters"; fi
 
 if [[ "$MODE" != "sales" ]]; then
   # ─── Phase 4: Competitor SERP Analysis ──────────────────────
-  # Fetches live SERP data from DataForSEO for top keyword topics
-  # (needs audit_keywords populated by sync jim in Phase 3b).
-  # Populates audit_topic_competitors + audit_topic_dominance.
+  if should_run_phase 4; then
   echo ""
   echo "--- Phase 4: Competitor SERP Analysis ---"
   npx tsx scripts/pipeline-generate.ts competitors --domain "$DOMAIN" --user-email "$EMAIL"
+  else echo "  [SKIP] Phase 4: Competitors"; fi
 
   # ─── Phase 5: Content Gap Analysis ──────────────────────────
-  # Queries competitive data from Supabase, synthesizes via Anthropic API.
-  # Writes content_gap_analysis.md to disk + inserts audit_snapshots.
+  if should_run_phase 5; then
   echo ""
   echo "--- Phase 5: Content Gap Analysis ---"
   npx tsx scripts/pipeline-generate.ts gap --domain "$DOMAIN" --user-email "$EMAIL"
@@ -227,13 +244,14 @@ if [[ "$MODE" != "sales" ]]; then
     }
   }
   echo "  QA PASSED: Gap"
+  else echo "  [SKIP] Phase 5: Gap"; fi
 else
   echo ""
   echo "--- [SALES MODE] Skipping Phases 4-5 (Competitors + Gap) ---"
 fi
 
 # ─── Phase 6: Michael Architecture ────────────────────────────
-# Reads ALL disk artifacts + Supabase clusters → architecture_blueprint.md.
+if should_run_phase 6; then
 echo ""
 echo "--- Phase 6: Michael Architecture ---"
 npx tsx scripts/pipeline-generate.ts michael --domain "$DOMAIN" --user-email "$EMAIL" $MODE_ARGS
@@ -250,17 +268,19 @@ QA_RESULT=$(npx tsx scripts/pipeline-generate.ts qa --domain "$DOMAIN" --user-em
   }
 }
 echo "  QA PASSED: Michael"
+else echo "  [SKIP] Phase 6: Michael"; fi
 
 # ─── Phase 6.5: Coverage Validation ──────────────────────────
-# Cross-checks Gap's identified gaps against Michael's blueprint.
-# Writes coverage_validation.md + audit_coverage_validation rows.
 if [[ "$MODE" != "sales" ]]; then
+  if should_run_phase 6.5; then
   echo ""
   echo "--- Phase 6.5: Coverage Validation ---"
   npx tsx scripts/pipeline-generate.ts validator --domain "$DOMAIN" --user-email "$EMAIL"
+  else echo "  [SKIP] Phase 6.5: Validator"; fi
 fi
 
 # ─── Phase 6b+c: Sync remaining agents → Supabase ───────────
+if should_run_phase 6b; then
 echo ""
 echo "--- Phase 6b: Sync Michael → Supabase ---"
 npx tsx scripts/sync-to-dashboard.ts --domain "$DOMAIN" --user-email "$EMAIL" --agents michael
@@ -268,6 +288,7 @@ npx tsx scripts/sync-to-dashboard.ts --domain "$DOMAIN" --user-email "$EMAIL" --
 echo ""
 echo "--- Phase 6c: Sync Dwight → Supabase ---"
 npx tsx scripts/sync-to-dashboard.ts --domain "$DOMAIN" --user-email "$EMAIL" --agents dwight
+else echo "  [SKIP] Phase 6b+c: Sync"; fi
 
 update_status complete
 
