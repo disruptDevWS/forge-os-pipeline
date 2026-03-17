@@ -542,6 +542,65 @@ published    → (manual, via dashboard)
 
 ---
 
+## Performance Tracking (Post-Pipeline, Scheduled)
+
+Ranking performance tracking runs independently of the audit pipeline — weekly via cron, or on-demand via the `/track-rankings` endpoint.
+
+### track-rankings.ts — Per-Domain Tracker
+
+**Script:** `scripts/track-rankings.ts` | **No LLM calls**
+
+**Invocation:** `npx tsx scripts/track-rankings.ts --domain <d> --user-email <e> [--force]`
+
+**Steps:**
+1. Resolve audit from Supabase (domain + email)
+2. Recency check: skip if latest `ranking_snapshots` < 6 days old (bypass with `--force`)
+3. Load `audit_keywords` from Supabase (keyword → metadata map: canonical_key, cluster, intent_type, volume)
+4. Fetch DataForSEO `ranked_keywords/live` (max 1000 keywords, ~$0.05/call)
+5. Build + upsert `ranking_snapshots` (500-record batches). Keywords not in DataForSEO results get `rank_position=null`
+6. Aggregate `cluster_performance_snapshots` (avg position, keyword distribution, revenue estimates)
+7. Track published pages in `page_performance` (match ranking URLs against published `execution_pages`)
+8. Log to `agent_runs` (agent_name='performance_tracker')
+
+**External APIs:**
+
+| API | Endpoint | Purpose |
+|-----|----------|---------|
+| DataForSEO Ranked Keywords | `/v3/dataforseo_labs/google/ranked_keywords/live` | Current organic rankings |
+
+### cron-track-all.ts — Batch Runner
+
+**Script:** `scripts/cron-track-all.ts`
+
+**Invocation:** `npx tsx scripts/cron-track-all.ts [--force]`
+
+**Logic:** Queries all audits where `status='completed'`, resolves user emails, runs `track-rankings.ts` sequentially with 30-second delays between domains (DataForSEO rate limits). The 6-day recency check in `track-rankings.ts` prevents double-runs.
+
+**Scheduling:** Railway cron job or external scheduler, weekly.
+
+### Pipeline Server Endpoint
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | `/track-rankings` | On-demand ranking tracking for a single domain |
+
+**Body:** `{ domain, email, force? }` — same auth as other endpoints.
+
+### Supabase Tables
+
+| Table | Purpose |
+|-------|---------|
+| `ranking_snapshots` | Per-keyword per-date position data (UNIQUE: audit_id, snapshot_date, keyword) |
+| `cluster_performance_snapshots` | Pre-aggregated cluster metrics per snapshot date |
+| `page_performance` | Post-publication page tracking (avg position, keyword gains) |
+| `ranking_deltas` (VIEW) | SQL-computed baseline vs latest position deltas per keyword |
+
+**Migration:** `scripts/performance-migration.sql`
+
+**RLS:** All tables: SELECT for audit owners (`audits.user_id = auth.uid()`). INSERT/UPDATE/DELETE restricted to service_role.
+
+---
+
 ## Operational Resilience
 
 **Date fallback:** Pipeline phases may span midnight. `resolveArtifactPath()` tries today's date first, then falls back to the most recent dated directory containing the requested file. This means a failed Phase 5 re-run at 12:01 AM still finds Phase 3's artifacts from 11:58 PM.
@@ -572,6 +631,7 @@ The pipeline server (`src/pipeline-server-standalone.ts`) is an HTTP server that
 | POST | `/scout-config` | Write prospect-config.json to disk |
 | POST | `/scout-report` | Read scout markdown + scope.json |
 | POST | `/artifact` | Download pipeline output files |
+| POST | `/track-rankings` | On-demand ranking tracking for a single domain |
 
 **Auth:** All endpoints (except `/health`) require `Authorization: Bearer <PIPELINE_TRIGGER_SECRET>`.
 
@@ -672,6 +732,9 @@ The pipeline server currently runs on a residential ISP connection. Supabase Edg
 | `oscar_requests` | Oscar | Dashboard (INSERT, status='pending') |
 | `client_profiles` | Pam, Oscar | Dashboard (manual) |
 | `agent_implementation_pages` | — | sync-pam (DELETE+INSERT, legacy compat) |
+| `ranking_snapshots` | Performance tab, ranking_deltas view | track-rankings.ts (UPSERT) |
+| `cluster_performance_snapshots` | Performance tab | track-rankings.ts (UPSERT) |
+| `page_performance` | Performance tab | track-rankings.ts (UPSERT) |
 
 ## Disk Artifact Reference
 

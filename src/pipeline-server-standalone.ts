@@ -223,6 +223,89 @@ async function handleScoutReport(req: http.IncomingMessage, res: http.ServerResp
   json(res, 200, { markdown, scope, date: latestDate });
 }
 
+async function handleTrackRankings(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  if (!checkAuth(req, res)) return;
+
+  let payload: { domain?: string; email?: string; force?: boolean };
+  try {
+    payload = JSON.parse(await readBody(req));
+  } catch {
+    json(res, 400, { error: 'Invalid JSON' });
+    return;
+  }
+
+  const { domain, email, force } = payload;
+  if (!domain || !email) {
+    json(res, 400, { error: 'domain and email are required' });
+    return;
+  }
+  if (!DOMAIN_RE.test(domain)) {
+    json(res, 400, { error: 'Invalid domain format' });
+    return;
+  }
+  if (!EMAIL_RE.test(email)) {
+    json(res, 400, { error: 'Invalid email format' });
+    return;
+  }
+
+  const trackKey = `track:${domain}`;
+  if (inFlight.has(trackKey)) {
+    json(res, 409, { error: `Tracking already running for ${domain}` });
+    return;
+  }
+
+  inFlight.add(trackKey);
+  console.log(`Track rankings triggered: ${domain} (${email})${force ? ' [force]' : ''}`);
+
+  const args = ['tsx', 'scripts/track-rankings.ts', '--domain', domain, '--user-email', email];
+  if (force) args.push('--force');
+
+  const child = spawn('npx', args, {
+    detached: true,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    cwd: process.cwd(),
+  });
+  child.unref();
+
+  const logLines: string[] = [];
+  const collect = (stream: NodeJS.ReadableStream | null, prefix: string) => {
+    if (!stream) return;
+    let buf = '';
+    stream.on('data', (chunk: Buffer) => {
+      buf += chunk.toString();
+      const lines = buf.split('\n');
+      buf = lines.pop() || '';
+      for (const line of lines) {
+        console.log(`[track:${domain}] ${prefix}: ${line}`);
+        logLines.push(`${prefix}: ${line}`);
+      }
+    });
+    stream.on('end', () => {
+      if (buf) {
+        console.log(`[track:${domain}] ${prefix}: ${buf}`);
+        logLines.push(`${prefix}: ${buf}`);
+      }
+    });
+  };
+  collect(child.stdout, 'OUT');
+  collect(child.stderr, 'ERR');
+
+  child.on('close', (code) => {
+    inFlight.delete(trackKey);
+    console.log(`Track rankings finished: ${domain} (exit ${code})`);
+    if (code !== 0) {
+      console.error(`Track rankings failed: ${domain} — last 10 lines:\n${logLines.slice(-10).join('\n')}`);
+    }
+  });
+
+  child.on('error', (err) => {
+    inFlight.delete(trackKey);
+    console.error(`Track rankings spawn error: ${domain}`, err);
+  });
+
+  json(res, 202, { status: 'tracking_started', domain });
+}
+
 async function handleArtifact(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   if (!checkAuth(req, res)) return;
 
@@ -309,6 +392,8 @@ const server = http.createServer((req, res) => {
     handleScoutReport(req, res);
   } else if (req.method === 'POST' && req.url === '/artifact') {
     handleArtifact(req, res);
+  } else if (req.method === 'POST' && req.url === '/track-rankings') {
+    handleTrackRankings(req, res);
   } else {
     json(res, 404, { error: 'Not found' });
   }
