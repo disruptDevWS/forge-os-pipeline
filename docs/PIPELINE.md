@@ -8,12 +8,16 @@ Trigger paths:
 - **New audit:** Dashboard `useCreateAudit` → `run-audit` Edge Function → HTTP POST to NanoClaw pipeline server → `run-pipeline.sh`
 - **Prospect conversion:** Dashboard `useConvertProspect` → creates audit + assumptions → `run-audit` Edge Function → same pipeline path
 - **Scout:** Dashboard Scout UI → `scout-config` Edge Function → NanoClaw pipeline server (`/scout-config` + `/trigger-pipeline` with `--mode prospect`)
+- **Re-canonicalize:** Settings page → `pipeline-controls` Edge Function → `/recanonicalize` → `run-canonicalize.ts` (Phase 3c+3d only)
+- **Refresh rankings:** Settings page → `pipeline-controls` Edge Function → `/track-rankings` → `track-rankings.ts`
+- **Re-run pipeline:** Settings page → `run-audit` Edge Function → `/trigger-pipeline` → `run-pipeline.sh`
+- **Cluster activation:** Clusters page → `cluster-action` Edge Function → `/activate-cluster` → `generate-cluster-strategy.ts`
 
 Edge Functions (deployed from [Lovable repo](https://github.com/disruptDevWS/market-position-audit-lovable)):
 - `run-audit` — validates audit, marks `running`, POSTs to `/trigger-pipeline`
-- `scout-config` — writes prospect config to disk, triggers scout, reads reports via `/scout-report`
-- `cluster-action` — proxies `/activate-cluster` and `/deactivate-cluster` to pipeline server
-- `pipeline-controls` — proxies `/recanonicalize` and `/track-rankings` to pipeline server (Settings page)
+- `scout-config` — writes prospect config to disk, triggers scout, reads reports via `/scout-report` (auth: `validateSuperAdmin` + `has_role`)
+- `cluster-action` — proxies `/activate-cluster` and `/deactivate-cluster` (auth: `resolveAuthContext` + ownership check)
+- `pipeline-controls` — proxies `/recanonicalize` and `/track-rankings` for Settings page (auth: `validateSuperAdmin` + `has_role`)
 
 Core scripts:
 - `scripts/pipeline-generate.ts` — agent generation logic
@@ -793,10 +797,11 @@ The pipeline server currently runs on a residential ISP connection. Supabase Edg
 | Table | Read By | Written By |
 |-------|---------|------------|
 | `audits` | All agents, all syncs | Jim, sync-jim, sync-michael, sync-dwight |
+| `audits.client_context` (JSONB) | Settings page (dashboard reads/writes) | Settings page `useUpdateClientContext`. Pipeline reads from disk (`prospect-config.json`), not this column |
 | `audit_keywords` | Canonicalize, Competitors, Gap, sync-jim, sync-michael | KeywordResearch (INSERT, source='keyword_research'), sync-jim (DELETE+INSERT, source='ranked'), Canonicalize (UPDATE), sync-michael (UPDATE cluster) |
-| `audit_clusters` | Gap, Michael | sync-jim (preliminary), rebuild-clusters Phase 3d (canonical, authoritative) |
+| `audit_clusters` | Gap, Michael, Clusters page | sync-jim (preliminary), rebuild-clusters Phase 3d (canonical, authoritative), generate-cluster-strategy.ts (status UPDATE) |
 | `audit_rollups` | — | sync-jim (preliminary), rebuild-clusters Phase 3d (canonical, authoritative) |
-| `audit_assumptions` | sync-jim, rebuild-clusters | Dashboard `useCreateAudit` (primary), `ensureAssumptions()` in sync (fallback from benchmarks) |
+| `audit_assumptions` | sync-jim, rebuild-clusters, Settings page | Dashboard `useCreateAudit` (primary), `ensureAssumptions()` in sync (fallback from benchmarks), Settings page `useUpdateAssumptions` |
 | `ctr_models` | sync-jim, rebuild-clusters | — (seeded) |
 | `benchmarks` | `ensureAssumptions()`, Dashboard `useCreateAudit` | — (seeded) |
 | `audit_snapshots` | Jim, Gap, sync-jim, sync-dwight, sync-michael | Jim, Dwight, Gap, sync-jim, sync-dwight, sync-michael |

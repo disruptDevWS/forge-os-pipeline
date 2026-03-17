@@ -59,6 +59,8 @@ Phase 6c sync-dwight     Technical audit → Supabase
 
 Post-pipeline (on-demand, per-page): **Pam** (content briefs) → **Oscar** (HTML generation)
 
+On-demand (Settings/Clusters page): **Re-canonicalize** (Phase 3c+3d only) | **Cluster activation** (Opus strategy) | **Track rankings** (DataForSEO)
+
 ## Development Commands
 
 ```bash
@@ -94,9 +96,9 @@ Run commands directly — don't tell the user to run them.
 
 | File | Purpose |
 |------|---------|
-| `src/pipeline-server-standalone.ts` | HTTP server: `/trigger-pipeline`, `/scout-config`, `/scout-report`, `/artifact`, `/health` |
-| `scripts/pipeline-generate.ts` | All phase runners: `runDwight()`, `runJim()`, `runMichael()`, etc. + QA agent |
-| `scripts/sync-to-dashboard.ts` | Supabase sync: `syncJim()`, `syncMichael()`, `syncDwight()`, `rebuildClustersAndRollups()` |
+| `src/pipeline-server-standalone.ts` | HTTP server: `/trigger-pipeline`, `/recanonicalize`, `/track-rankings`, `/activate-cluster`, `/deactivate-cluster`, `/scout-config`, `/scout-report`, `/artifact`, `/health` |
+| `scripts/pipeline-generate.ts` | All phase runners: `runDwight()`, `runJim()`, `runMichael()`, `runCanonicalize()`, etc. + QA agent |
+| `scripts/sync-to-dashboard.ts` | Supabase sync: `syncJim()`, `syncMichael()`, `syncDwight()`, `rebuildClustersAndRollups()` (with cluster status preservation) |
 | `scripts/anthropic-client.ts` | Anthropic SDK wrapper — `callClaude()` / `callClaudeAsync()` for all Claude calls |
 | `scripts/dataforseo-onpage.ts` | DataForSEO OnPage API client (crawl, poll, fetch pages/summary/microdata) |
 | `scripts/onpage-to-csv.ts` | Transforms OnPage API data to CSV files for downstream consumers |
@@ -104,6 +106,10 @@ Run commands directly — don't tell the user to run them.
 | `scripts/foundational_scout.sh` | DataForSEO CLI wrapper for Scout phase |
 | `scripts/generate-brief.ts` | Pam: content brief generation (metadata + schema + outline) |
 | `scripts/generate-content.ts` | Oscar: HTML content production from briefs |
+| `scripts/run-canonicalize.ts` | Standalone Phase 3c+3d runner (re-canonicalize from Settings page) |
+| `scripts/generate-cluster-strategy.ts` | Cluster activation: Opus strategy generation (on-demand, per-cluster) |
+| `scripts/track-rankings.ts` | Performance tracking: DataForSEO ranked_keywords snapshot |
+| `scripts/client-context.ts` | Shared utility: `loadClientContext()`, `buildClientContextPrompt()` |
 | `scripts/update-pipeline-status.ts` | Updates audit status in Supabase |
 | `scripts/run-migration.ts` | Database migration runner |
 | `Dockerfile.railway` | Railway deployment: node:22-slim + curl + jq |
