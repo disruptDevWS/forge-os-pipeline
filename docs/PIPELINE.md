@@ -601,6 +601,54 @@ Ranking performance tracking runs independently of the audit pipeline — weekly
 
 ---
 
+## Cluster Activation (On-Demand)
+
+Cluster activation is an on-demand step that generates a strategy document for a specific topic cluster, marks it active, and flags its execution_pages. It runs outside the main pipeline, triggered via HTTP endpoint or CLI.
+
+### generate-cluster-strategy.ts — Cluster Strategy Generator
+
+**Script:** `scripts/generate-cluster-strategy.ts` | **Model:** Claude Sonnet (single call)
+
+**Invocation:** `npx tsx scripts/generate-cluster-strategy.ts --domain <d> --canonical-key <key> --user-email <e>`
+
+**Prerequisites:** Phases 3c+3d must have run (canonical_key populated on audit_keywords and audit_clusters).
+
+**Steps:**
+1. Resolve audit from Supabase (domain + email)
+2. Load cluster, keywords, execution_pages, gap analysis, competitors, client context
+3. Build prompt → `callClaude()` with Sonnet
+4. Parse buyer_stages, recommended_pages, format_gaps (JSON blocks), AI optimization notes
+5. Upsert `cluster_strategy` table
+6. SET `audit_clusters.status = 'active'`, `activated_at = now()`
+7. SET `execution_pages.cluster_active = true` WHERE `canonical_key = key`
+8. Log `agent_runs` entry
+
+**Cost:** ~$0.05-0.15 per cluster (single Sonnet call).
+
+### Pipeline Server Endpoints
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | `/activate-cluster` | Spawn cluster strategy generation (202 async) |
+| POST | `/deactivate-cluster` | Instant deactivation (200 sync, 2 DB updates) |
+
+**Body (both):** `{ domain, canonical_key, email }` — same auth as other endpoints.
+
+**Deactivation** is handled directly in the server process (no script spawn) for near-instant response. It sets `audit_clusters.status = 'inactive'` and `execution_pages.cluster_active = false`.
+
+### Supabase Tables
+
+| Table | Purpose |
+|-------|---------|
+| `cluster_strategy` | Per-cluster strategy document (UNIQUE: audit_id, canonical_key) |
+| `audit_clusters.status` | `inactive` → `active` → `complete` lifecycle |
+| `audit_clusters.canonical_key` | Join key to `execution_pages.canonical_key` |
+| `execution_pages.cluster_active` | Boolean flag for content queue filtering |
+
+**Migration:** `scripts/cluster-focus-migration.sql`
+
+---
+
 ## Operational Resilience
 
 **Date fallback:** Pipeline phases may span midnight. `resolveArtifactPath()` tries today's date first, then falls back to the most recent dated directory containing the requested file. This means a failed Phase 5 re-run at 12:01 AM still finds Phase 3's artifacts from 11:58 PM.
@@ -632,6 +680,8 @@ The pipeline server (`src/pipeline-server-standalone.ts`) is an HTTP server that
 | POST | `/scout-report` | Read scout markdown + scope.json |
 | POST | `/artifact` | Download pipeline output files |
 | POST | `/track-rankings` | On-demand ranking tracking for a single domain |
+| POST | `/activate-cluster` | Start cluster strategy generation (async, 202) |
+| POST | `/deactivate-cluster` | Deactivate a cluster (sync, 200) |
 
 **Auth:** All endpoints (except `/health`) require `Authorization: Bearer <PIPELINE_TRIGGER_SECRET>`.
 
@@ -732,6 +782,7 @@ The pipeline server currently runs on a residential ISP connection. Supabase Edg
 | `oscar_requests` | Oscar | Dashboard (INSERT, status='pending') |
 | `client_profiles` | Pam, Oscar | Dashboard (manual) |
 | `agent_implementation_pages` | — | sync-pam (DELETE+INSERT, legacy compat) |
+| `cluster_strategy` | Cluster activation dashboard | generate-cluster-strategy.ts (UPSERT) |
 | `ranking_snapshots` | Performance tab, ranking_deltas view | track-rankings.ts (UPSERT) |
 | `cluster_performance_snapshots` | Performance tab | track-rankings.ts (UPSERT) |
 | `page_performance` | Performance tab | track-rankings.ts (UPSERT) |

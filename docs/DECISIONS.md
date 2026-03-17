@@ -167,6 +167,18 @@ The spec assumed `baseline_snapshots` contains all keyword positions for delta c
 
 Ranking tracking runs independently of the audit pipeline via `scripts/cron-track-all.ts` (weekly scheduler) and `scripts/track-rankings.ts` (per-domain). Rationale: rankings change slowly (weekly is sufficient), DataForSEO costs $0.05/call, and the pipeline runs once per domain while tracking is ongoing. A 6-day recency check in `track-rankings.ts` prevents double-runs from scheduling drift. The `/track-rankings` endpoint on the pipeline server enables on-demand runs from the dashboard.
 
+**2026-03-17: canonical_key is the contractual bridge between cluster layer and execution layer**
+
+`canonical_key` (set by Phase 3c) is the primary join key between `audit_clusters` and `execution_pages`. Any future phase connecting these tables must use `canonical_key` — not topic string matching, not silo name matching. Silos come from Michael's blueprint headings (e.g., "Core Plumbing Services (Boise)"), canonical_topics from Phase 3c semantic grouping (e.g., "Water Heater Repair") — completely different string spaces. `syncMichael()` backfills `canonical_key` on `execution_pages` by mapping each page's `primary_keyword` through `audit_keywords.canonical_key`.
+
+**2026-03-17: Geo-agnostic canonical keys**
+
+Canonical keys and topics must be geography-agnostic. "Boise water heater repair" and "water heater repair" resolve to `water_heater_repair`. Geographic context lives in keyword-level data and schema markup, not cluster identity. One cluster strategy document serves the topic regardless of geo variants. Phase 3d merges geo variants into combined clusters with correct aggregate volume/revenue. The Phase 3c prompt was strengthened to explicitly show geo-stripping examples and forbid geo prefixes in `canonical_key`.
+
+**2026-03-17: Cluster activation gates content production**
+
+Cluster activation (`/activate-cluster` endpoint) generates a strategy document via `generate-cluster-strategy.ts` (single Sonnet call, ~$0.05-0.15) and marks the cluster as `active`. Only pages in active clusters have `cluster_active=true` on `execution_pages`, enabling the dashboard to filter the Content Queue by active clusters. Deactivation (`/deactivate-cluster`) is near-instant (2 Supabase UPDATEs, no LLM call). This creates the upsell mechanic: activating a cluster is the explicit commitment to produce content for that topic.
+
 **2026-03-16: Stripped dead WhatsApp/container code (~5,500 lines)**
 
 NanoClaw was originally built as a WhatsApp bot with Docker-isolated Claude Agent SDK containers. WhatsApp was never used in production (WSL2 baileys conflicts), and the pipeline "agents" are single-shot prompt templates calling `callClaude()` — not Agent SDK multi-turn sessions. The actual product is a pipeline toolkit: Dashboard → Supabase Edge Functions → Railway HTTP server → shell orchestrator → TypeScript phase generators → Supabase sync. Deleted: `src/index.ts` (WhatsApp orchestrator), `src/channels/whatsapp.ts` (baileys client), `src/container-runner.ts`, `src/group-queue.ts`, `src/ipc.ts`, `src/task-scheduler.ts`, `src/router.ts`, `src/mount-security.ts`, `src/db.ts` (SQLite), `src/config.ts`, `src/env.ts`, `src/types.ts`, `src/pipeline-server.ts` (replaced by standalone), `src/logger.ts`, all 7 test files, `container/` directory, `groups/` directory, and 6 WhatsApp-focused docs. Removed 12 npm dependencies (baileys, better-sqlite3, pino, qrcode-terminal, cron-parser, zod, pg, qrcode, and their @types). `src/` now contains only `pipeline-server-standalone.ts`. Risk was very low: pipeline scripts have zero imports from any deleted file.

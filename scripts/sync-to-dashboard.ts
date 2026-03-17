@@ -728,11 +728,13 @@ async function rebuildClustersAndRollups(sb: SupabaseClient, auditId: string, la
 
   const clusterRecords = Array.from(clusterMap.entries())
     .sort((a, b) => b[1].revHigh - a[1].revHigh)
-    .map(([, c]) => {
+    .map(([canonicalKey, c]) => {
       const minPos = Math.min(...c.positions);
       const maxPos = Math.max(...c.positions);
       return {
         audit_id: auditId,
+        canonical_key: canonicalKey,
+        canonical_topic: c.topic,
         topic: c.topic,
         near_miss_positions: minPos === maxPos ? `${minPos}` : `${minPos}-${maxPos}`,
         total_volume: c.volMax,
@@ -1758,6 +1760,30 @@ async function syncMichael(
       }
     }
     console.log(`  [michael] Seeded ${execRecords.length} execution page briefs`);
+
+    // Backfill canonical_key on execution_pages from primary_keyword → audit_keywords
+    const pkToCanonical = new Map<string, string>();
+    const { data: kwWithCanonical } = await sb
+      .from('audit_keywords')
+      .select('keyword, canonical_key')
+      .eq('audit_id', auditId)
+      .not('canonical_key', 'is', null);
+    for (const row of (kwWithCanonical ?? []) as any[]) {
+      pkToCanonical.set(String(row.keyword).toLowerCase().trim(), row.canonical_key);
+    }
+    let canonicalUpdated = 0;
+    for (const p of pages) {
+      const pk = (p.primary_keyword ?? '').toLowerCase().trim();
+      const ck = pkToCanonical.get(pk);
+      if (ck) {
+        const slug = p.url_slug.replace(/^\/+/, '');
+        await sb.from('execution_pages').update({ canonical_key: ck })
+          .eq('audit_id', auditId)
+          .or(`url_slug.eq.${slug},url_slug.eq./${slug}`);
+        canonicalUpdated++;
+      }
+    }
+    console.log(`  [michael] Backfilled canonical_key for ${canonicalUpdated} of ${pages.length} pages`);
   }
 
   // Backfill audit_keywords.cluster from silo assignments

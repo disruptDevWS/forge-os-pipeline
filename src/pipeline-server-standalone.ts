@@ -9,10 +9,23 @@ import http from 'http';
 import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
 const PORT = parseInt(process.env.PORT || process.env.PIPELINE_SERVER_PORT || '3847', 10);
 const TRIGGER_SECRET = process.env.PIPELINE_TRIGGER_SECRET || '';
 const AUDITS_BASE = path.resolve(process.cwd(), 'audits');
+
+// Lightweight Supabase client for deactivation endpoint (direct DB updates, no script spawn)
+let sbClient: SupabaseClient | null = null;
+function getSb(): SupabaseClient | null {
+  if (sbClient) return sbClient;
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (url && key) {
+    sbClient = createClient(url, key);
+  }
+  return sbClient;
+}
 
 const inFlight = new Set<string>();
 const DOMAIN_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i;
@@ -306,6 +319,168 @@ async function handleTrackRankings(req: http.IncomingMessage, res: http.ServerRe
   json(res, 202, { status: 'tracking_started', domain });
 }
 
+async function handleActivateCluster(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  if (!checkAuth(req, res)) return;
+
+  let payload: { domain?: string; canonical_key?: string; email?: string };
+  try {
+    payload = JSON.parse(await readBody(req));
+  } catch {
+    json(res, 400, { error: 'Invalid JSON' });
+    return;
+  }
+
+  const { domain, canonical_key, email } = payload;
+  if (!domain || !canonical_key || !email) {
+    json(res, 400, { error: 'domain, canonical_key, and email are required' });
+    return;
+  }
+  if (!DOMAIN_RE.test(domain)) {
+    json(res, 400, { error: 'Invalid domain format' });
+    return;
+  }
+  if (!EMAIL_RE.test(email)) {
+    json(res, 400, { error: 'Invalid email format' });
+    return;
+  }
+
+  const activateKey = `activate:${domain}:${canonical_key}`;
+  if (inFlight.has(activateKey)) {
+    json(res, 409, { error: `Cluster activation already running for ${domain}/${canonical_key}` });
+    return;
+  }
+
+  inFlight.add(activateKey);
+  console.log(`Cluster activation triggered: ${domain} / ${canonical_key} (${email})`);
+
+  const child = spawn('npx', ['tsx', 'scripts/generate-cluster-strategy.ts', '--domain', domain, '--canonical-key', canonical_key, '--user-email', email], {
+    detached: true,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    cwd: process.cwd(),
+  });
+  child.unref();
+
+  const logLines: string[] = [];
+  const collect = (stream: NodeJS.ReadableStream | null, prefix: string) => {
+    if (!stream) return;
+    let buf = '';
+    stream.on('data', (chunk: Buffer) => {
+      buf += chunk.toString();
+      const lines = buf.split('\n');
+      buf = lines.pop() || '';
+      for (const line of lines) {
+        console.log(`[activate:${domain}:${canonical_key}] ${prefix}: ${line}`);
+        logLines.push(`${prefix}: ${line}`);
+      }
+    });
+    stream.on('end', () => {
+      if (buf) {
+        console.log(`[activate:${domain}:${canonical_key}] ${prefix}: ${buf}`);
+        logLines.push(`${prefix}: ${buf}`);
+      }
+    });
+  };
+  collect(child.stdout, 'OUT');
+  collect(child.stderr, 'ERR');
+
+  child.on('close', (code) => {
+    inFlight.delete(activateKey);
+    console.log(`Cluster activation finished: ${domain}/${canonical_key} (exit ${code})`);
+    if (code !== 0) {
+      console.error(`Cluster activation failed: ${domain}/${canonical_key} — last 10 lines:\n${logLines.slice(-10).join('\n')}`);
+    }
+  });
+
+  child.on('error', (err) => {
+    inFlight.delete(activateKey);
+    console.error(`Cluster activation spawn error: ${domain}/${canonical_key}`, err);
+  });
+
+  json(res, 202, { status: 'activation_started', domain, canonical_key });
+}
+
+async function handleDeactivateCluster(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  if (!checkAuth(req, res)) return;
+
+  let payload: { domain?: string; canonical_key?: string; email?: string };
+  try {
+    payload = JSON.parse(await readBody(req));
+  } catch {
+    json(res, 400, { error: 'Invalid JSON' });
+    return;
+  }
+
+  const { domain, canonical_key, email } = payload;
+  if (!domain || !canonical_key || !email) {
+    json(res, 400, { error: 'domain, canonical_key, and email are required' });
+    return;
+  }
+  if (!DOMAIN_RE.test(domain)) {
+    json(res, 400, { error: 'Invalid domain format' });
+    return;
+  }
+  if (!EMAIL_RE.test(email)) {
+    json(res, 400, { error: 'Invalid email format' });
+    return;
+  }
+
+  const sb = getSb();
+  if (!sb) {
+    json(res, 500, { error: 'Supabase not configured (SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY missing)' });
+    return;
+  }
+
+  // Resolve audit
+  const { data: userData } = await sb.auth.admin.listUsers();
+  const user = userData?.users?.find((u: any) => u.email === email);
+  if (!user) {
+    json(res, 404, { error: `User not found: ${email}` });
+    return;
+  }
+
+  const { data: audit } = await sb
+    .from('audits')
+    .select('id')
+    .eq('domain', domain)
+    .eq('user_id', user.id)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (!audit) {
+    json(res, 404, { error: `No audit found for ${domain} / ${email}` });
+    return;
+  }
+
+  const auditId = (audit as any).id;
+
+  // Deactivate cluster
+  const { error: clusterErr } = await sb
+    .from('audit_clusters')
+    .update({ status: 'inactive', activated_at: null, activated_by: null })
+    .eq('audit_id', auditId)
+    .eq('canonical_key', canonical_key);
+
+  if (clusterErr) {
+    json(res, 500, { error: `Cluster update failed: ${clusterErr.message}` });
+    return;
+  }
+
+  // Unflag execution_pages
+  const { error: pageErr } = await sb
+    .from('execution_pages')
+    .update({ cluster_active: false })
+    .eq('audit_id', auditId)
+    .eq('canonical_key', canonical_key);
+
+  if (pageErr) {
+    console.warn(`Deactivate: execution_pages update failed: ${pageErr.message}`);
+  }
+
+  console.log(`Cluster deactivated: ${domain} / ${canonical_key}`);
+  json(res, 200, { status: 'deactivated', domain, canonical_key });
+}
+
 async function handleArtifact(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   if (!checkAuth(req, res)) return;
 
@@ -394,6 +569,10 @@ const server = http.createServer((req, res) => {
     handleArtifact(req, res);
   } else if (req.method === 'POST' && req.url === '/track-rankings') {
     handleTrackRankings(req, res);
+  } else if (req.method === 'POST' && req.url === '/activate-cluster') {
+    handleActivateCluster(req, res);
+  } else if (req.method === 'POST' && req.url === '/deactivate-cluster') {
+    handleDeactivateCluster(req, res);
   } else {
     json(res, 404, { error: 'Not found' });
   }

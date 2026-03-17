@@ -1723,10 +1723,13 @@ async function runCanonicalize(sb: SupabaseClient, auditId: string, domain: stri
 Below are ${batch.length} keywords numbered 1 to ${batch.length}. Group them into semantic topics.
 
 RULES:
-- Strip location names from topic labels (e.g., "boise ac repair" → "AC Repair")
+- Canonical keys and topics MUST be geography-agnostic. Remove ALL city, state, region, and "near me" modifiers.
+  "boise water heater repair", "water heater repair boise", "meridian water heater repair" ALL map to canonical_key: "water_heater_repair", canonical_topic: "Water Heater Repair"
+  "plumber boise idaho", "boise plumber", "plumber meridian" ALL map to canonical_key: "plumbing", canonical_topic: "Plumbing"
+  Geographic targeting is handled by keyword-level data, not cluster identity.
 - Merge synonyms and word-order variants (e.g., "ac repair" and "air conditioning repair" → same group)
-- canonical_key: lowercase with underscores (e.g., "ac_repair", "water_heater_repair")
-- canonical_topic: Title Case human-readable (e.g., "AC Repair", "Water Heater Repair")
+- canonical_key: lowercase with underscores, NO geo modifiers, NO state/city codes (e.g., "water_heater_repair" NOT "id:boise:water_heater_repair")
+- canonical_topic: Title Case, NO geo modifiers (e.g., "Water Heater Repair" NOT "Boise Water Heater Repair")
 - Target 10-30 groups total
 - Mark branded keywords (company names, brand terms) with is_brand: true
 - Classify intent_type for each keyword using standard SEO intent taxonomy:
@@ -3340,62 +3343,11 @@ function buildCoverageValidationMd(domain: string, validation: { coverage: any[]
 // ============================================================
 
 // ============================================================
-// Client context — injected into prompts for full-mode audits
+// Client context — re-exported from shared utility
 // ============================================================
 
-interface ClientContext {
-  business_model?: string;
-  services?: string[];
-  pricing_tier?: 'low' | 'mid' | 'high';
-  price_range?: string;
-  out_of_scope?: string[];
-  competitive_advantage?: string;
-  target_audience?: string;
-}
-
-/**
- * Load client_context from prospect-config.json for the domain.
- * Returns null if absent (sales mode or no config).
- */
-function loadClientContext(domain: string): ClientContext | null {
-  const configPath = path.join(AUDITS_BASE, domain, 'prospect-config.json');
-  if (!fs.existsSync(configPath)) return null;
-  try {
-    const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-    return config.client_context ?? null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Build a prompt section from ClientContext for injection into agent prompts.
- */
-function buildClientContextPrompt(ctx: ClientContext, phase: 'keyword-research' | 'jim' | 'gap' | 'michael'): string {
-  const lines: string[] = [];
-  lines.push('## Client Business Context');
-
-  if (ctx.business_model) lines.push(`Business model: ${ctx.business_model}`);
-  if (ctx.target_audience) lines.push(`Target audience: ${ctx.target_audience}`);
-  if (ctx.services?.length) lines.push(`Core services: ${ctx.services.join(', ')}`);
-  if (ctx.competitive_advantage) lines.push(`Competitive advantage: ${ctx.competitive_advantage}`);
-
-  if (phase === 'michael') {
-    if (ctx.pricing_tier) lines.push(`Pricing tier: ${ctx.pricing_tier}`);
-    if (ctx.price_range) lines.push(`Price range: ${ctx.price_range}`);
-  }
-
-  if (ctx.out_of_scope?.length) {
-    lines.push('');
-    lines.push('OUT OF SCOPE — do not recommend content or pages for these topics/models:');
-    for (const item of ctx.out_of_scope) {
-      lines.push(`- ${item}`);
-    }
-    lines.push('Filter these from your analysis using judgment, not just keyword matching.');
-  }
-
-  return lines.join('\n');
-}
+import { loadClientContext, buildClientContextPrompt } from './client-context.js';
+import type { ClientContext } from './client-context.js';
 
 interface ProspectConfig {
   name: string;
