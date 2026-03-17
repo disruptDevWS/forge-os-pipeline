@@ -346,6 +346,29 @@ async function trackRankings(cliArgs: CliArgs) {
 }
 
 // ============================================================
+// Authority score helpers
+// ============================================================
+
+function positionWeight(position: number | null): number {
+  if (!position) return 0.0;
+  if (position <= 3) return 1.0;
+  if (position <= 10) return 0.6;
+  if (position <= 20) return 0.3;
+  if (position <= 30) return 0.1;
+  return 0.05;
+}
+
+function computeAuthorityScore(keywords: Array<{ rank_position: number | null }>): number {
+  if (keywords.length === 0) return 0;
+  const maxWeight = keywords.length * 1.0;
+  const actualWeight = keywords.reduce(
+    (sum, kw) => sum + positionWeight(kw.rank_position),
+    0,
+  );
+  return Math.round((actualWeight / maxWeight) * 100 * 10) / 10;
+}
+
+// ============================================================
 // Cluster aggregation
 // ============================================================
 
@@ -388,6 +411,22 @@ async function aggregateClusterPerformance(sb: SupabaseClient, auditId: string, 
     });
   }
 
+  // Load previous authority scores for delta computation
+  const { data: prevScores } = await sb
+    .from('cluster_performance_snapshots')
+    .select('canonical_key, authority_score, snapshot_date')
+    .eq('audit_id', auditId)
+    .lt('snapshot_date', snapshotDate)
+    .order('snapshot_date', { ascending: false });
+
+  const prevScoreMap = new Map<string, number>();
+  for (const row of prevScores ?? []) {
+    // Take only the most recent previous score per cluster
+    if (row.canonical_key && row.authority_score !== null && !prevScoreMap.has(row.canonical_key)) {
+      prevScoreMap.set(row.canonical_key, Number(row.authority_score));
+    }
+  }
+
   // Build aggregation records
   const records: any[] = [];
   for (const [canonicalKey, data] of clusters.entries()) {
@@ -395,6 +434,12 @@ async function aggregateClusterPerformance(sb: SupabaseClient, auditId: string, 
 
     const ranked = data.keywords.filter((k) => k.rank_position !== null);
     const positions = ranked.map((k) => k.rank_position!);
+
+    const authorityScore = computeAuthorityScore(data.keywords);
+    const prevScore = prevScoreMap.get(canonicalKey);
+    const authorityScoreDelta = prevScore !== undefined
+      ? Math.round((authorityScore - prevScore) * 10) / 10
+      : null;
 
     records.push({
       audit_id: auditId,
@@ -410,6 +455,8 @@ async function aggregateClusterPerformance(sb: SupabaseClient, auditId: string, 
       keywords_p11_30: positions.filter((p) => p >= 11 && p <= 30).length,
       keywords_p31_100: positions.filter((p) => p >= 31).length,
       total_volume: data.keywords.reduce((s, k) => s + k.search_volume, 0),
+      authority_score: authorityScore,
+      authority_score_delta: authorityScoreDelta,
     });
   }
 
@@ -424,6 +471,23 @@ async function aggregateClusterPerformance(sb: SupabaseClient, auditId: string, 
   }
 
   console.log(`  Aggregated ${records.length} cluster performance records`);
+
+  // Update audit_clusters with latest authority scores
+  for (const rec of records) {
+    if (rec.authority_score !== null) {
+      await sb.from('audit_clusters')
+        .update({
+          authority_score: rec.authority_score,
+          authority_score_updated_at: new Date().toISOString(),
+        })
+        .eq('audit_id', auditId)
+        .eq('canonical_key', rec.canonical_key);
+    }
+  }
+
+  if (records.length > 0) {
+    console.log(`  Updated authority scores for ${records.length} clusters`);
+  }
 }
 
 // ============================================================
