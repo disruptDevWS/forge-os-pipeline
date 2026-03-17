@@ -22,7 +22,7 @@ NanoClaw 用一个你能在 8 分钟内理解的代码库，为你提供了同�
 ## 快速上手
 
 ```bash
-git clone https://github.com/gavrielc/nanoclaw.git
+git clone https://github.com/disruptDevWS/nanoclaw.git
 cd nanoclaw
 claude
 ```

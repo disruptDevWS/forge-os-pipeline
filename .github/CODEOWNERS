@@ -1,10 +1,10 @@
 # Core code - maintainer only
-/src/ @gavrielc
-/container/ @gavrielc
-/groups/ @gavrielc
-/launchd/ @gavrielc
-/package.json @gavrielc
-/package-lock.json @gavrielc
+/src/ @disruptDevWS
+/container/ @disruptDevWS
+/groups/ @disruptDevWS
+/launchd/ @disruptDevWS
+/package.json @disruptDevWS
+/package-lock.json @disruptDevWS
 
 # Skills - open to contributors
 /.claude/skills/
