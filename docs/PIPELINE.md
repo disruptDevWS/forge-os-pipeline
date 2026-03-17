@@ -558,8 +558,8 @@ Ranking performance tracking runs independently of the audit pipeline — weekly
 3. Load `audit_keywords` from Supabase (keyword → metadata map: canonical_key, cluster, intent_type, volume)
 4. Fetch DataForSEO `ranked_keywords/live` (max 1000 keywords, ~$0.05/call)
 5. Build + upsert `ranking_snapshots` (500-record batches). Keywords not in DataForSEO results get `rank_position=null`
-6. Aggregate `cluster_performance_snapshots` (avg position, keyword distribution, revenue estimates)
-7. Track published pages in `page_performance` (match ranking URLs against published `execution_pages`)
+6. Aggregate `cluster_performance_snapshots` — groups by `canonical_key`, computes `avg_position` (mean of ranked keywords only; unranked `rank_position=null` excluded), position bucket counts (`keywords_p1_3/p4_10/p11_30/p31_100` — ranked only), `keyword_count` (all keywords including unranked), revenue estimates
+7. Track published pages in `page_performance` — matches ranking URLs against published `execution_pages`, computes `current_avg_position` (ranked keywords only, same exclusion as clusters)
 8. Log to `agent_runs` (agent_name='performance_tracker')
 
 **External APIs:**
