@@ -108,6 +108,35 @@ async function resolveAudit(sb: SupabaseClient, domain: string, userEmail: strin
 }
 
 // ============================================================
+// Artifact resolution (same logic as pipeline-generate.ts)
+// ============================================================
+
+const AUDITS_BASE = path.resolve(process.cwd(), 'audits');
+
+function todayStr(): string {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+}
+
+function resolveArtifactPath(domain: string, subdir: 'research' | 'architecture', filename: string): string | null {
+  const basePath = path.join(AUDITS_BASE, domain, subdir);
+  const preferred = todayStr();
+  const preferredPath = path.join(basePath, preferred, filename);
+  if (fs.existsSync(preferredPath)) return preferredPath;
+
+  if (!fs.existsSync(basePath)) return null;
+  const dateDirs = fs.readdirSync(basePath).filter((e) => /^\d{4}-\d{2}-\d{2}$/.test(e)).sort();
+  for (let i = dateDirs.length - 1; i >= 0; i--) {
+    const candidate = path.join(basePath, dateDirs[i], filename);
+    if (fs.existsSync(candidate)) {
+      console.log(`  [cluster-strategy] ${filename}: using ${dateDirs[i]}/ (date fallback)`);
+      return candidate;
+    }
+  }
+  return null;
+}
+
+// ============================================================
 // Main
 // ============================================================
 
@@ -185,7 +214,26 @@ async function main() {
   const clientCtx = loadClientContext(args.domain);
   const clientCtxPrompt = clientCtx ? buildClientContextPrompt(clientCtx, 'cluster-strategy') : '';
 
-  // 8. Build prompt
+  // 8. Load research_summary.md for strategic context (striking distance, key takeaways)
+  let researchContext = '';
+  const researchPath = resolveArtifactPath(args.domain, 'research', 'research_summary.md');
+  if (researchPath) {
+    const fullResearch = fs.readFileSync(researchPath, 'utf-8');
+    // Extract key strategic sections: striking distance (§8) and key takeaways (§10)
+    const section8Match = fullResearch.match(/## 8\.\s*Striking Distance[\s\S]*?(?=## 9\.|$)/i);
+    const section10Match = fullResearch.match(/## 10\.\s*Key Takeaways[\s\S]*$/i);
+    const sections: string[] = [];
+    if (section8Match) sections.push(section8Match[0].trim());
+    if (section10Match) sections.push(section10Match[0].trim());
+    if (sections.length > 0) {
+      researchContext = `## Market Intelligence (from Research Summary)\n\n${sections.join('\n\n')}`;
+      console.log(`  [cluster-strategy] Loaded research context: ${sections.length} sections from research_summary.md`);
+    }
+  } else {
+    console.log(`  [cluster-strategy] research_summary.md not found on disk (may be Railway-only)`);
+  }
+
+  // 9. Build prompt
   const kwTable = kwList
     .sort((a: any, b: any) => (b.search_volume ?? 0) - (a.search_volume ?? 0))
     .slice(0, 50)
@@ -243,6 +291,8 @@ ${competitorSection}
 
 ${clientCtxPrompt}
 
+${researchContext}
+
 ---
 
 Produce a cluster strategy with the following sections:
@@ -294,8 +344,8 @@ IMPORTANT FORMATTING RULES:
 
 REMINDER: Your response IS the cluster strategy document — start with "### 1. Buyer Journey Map". No preamble, no narration.`;
 
-  console.log(`  [cluster-strategy] Calling Claude (Sonnet)...`);
-  const result = await callClaude(prompt, { model: 'sonnet', phase: 'cluster-strategy' });
+  console.log(`  [cluster-strategy] Calling Claude (Opus)...`);
+  const result = await callClaude(prompt, { model: 'opus', phase: 'cluster-strategy' });
 
   // 9. Parse JSON sections from the response
   const extractJson = (text: string, sectionName: string): any => {
@@ -338,7 +388,7 @@ REMINDER: Your response IS the cluster strategy document — start with "### 1. 
     format_gaps: formatGaps,
     ai_optimization_notes: aiOptimizationNotes,
     generated_at: new Date().toISOString(),
-    model_used: 'sonnet',
+    model_used: 'opus',
   }, { onConflict: 'audit_id,canonical_key' });
 
   if (stratErr) throw new Error(`cluster_strategy upsert failed: ${stratErr.message}`);

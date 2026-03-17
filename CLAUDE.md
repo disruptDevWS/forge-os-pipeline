@@ -37,7 +37,7 @@ Each pipeline phase (Dwight, Jim, Michael, etc.) is a **prompt template**, not a
 4. Parses the response
 5. Writes results to disk + Supabase
 
-`scripts/anthropic-client.ts` wraps the `@anthropic-ai/sdk` Messages API. Per-phase `max_tokens` configured in `PHASE_MAX_TOKENS`. Model mapping: `sonnet` → `claude-sonnet-4-6`, `haiku` → `claude-haiku-4-5`.
+`scripts/anthropic-client.ts` wraps the `@anthropic-ai/sdk` Messages API. Per-phase `max_tokens` configured in `PHASE_MAX_TOKENS`. Model mapping: `sonnet` → `claude-sonnet-4-6`, `haiku` → `claude-haiku-4-5`, `opus` → `claude-opus-4-6`. Three-tier policy: Haiku for classification/batching, Sonnet for synthesis/generation, Opus for strategic judgment (cluster strategy).
 
 ### Pipeline Phase Order
 

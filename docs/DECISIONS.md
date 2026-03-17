@@ -175,6 +175,19 @@ Ranking tracking runs independently of the audit pipeline via `scripts/cron-trac
 
 Canonical keys and topics must be geography-agnostic. "Boise water heater repair" and "water heater repair" resolve to `water_heater_repair`. Geographic context lives in keyword-level data and schema markup, not cluster identity. One cluster strategy document serves the topic regardless of geo variants. Phase 3d merges geo variants into combined clusters with correct aggregate volume/revenue. The Phase 3c prompt was strengthened to explicitly show geo-stripping examples and forbid geo prefixes in `canonical_key`.
 
+**2026-03-17: Three-tier model allocation policy (Haiku / Sonnet / Opus)**
+
+Explicit policy for which Claude model to use per phase:
+- **Haiku** — high-volume classification, batching, validation (Canonicalize, Competitors, QA, Validator, service detection). Runs dozens of times per pipeline. Cost must stay low.
+- **Sonnet** — synthesis and generation phases with large context and structured output (Dwight, Jim, KeywordResearch, Gap, Michael, Pam, Oscar, Scout). Primary workhorse. Good balance of quality and cost.
+- **Opus** — strategic judgment phases where a wrong decision has high downstream cost, reasoning requires cross-domain depth, and call frequency is low (Cluster Strategy). A misdirected cluster strategy cascades into weeks of wasted content production — exactly the agency failure mode this system replaces. Cost delta is ~$0.45/cluster vs Sonnet, trivial against the execution cost it governs.
+
+Scout stays on Sonnet despite producing strategic output, because it runs at $2 budget per prospect (many never convert) and Opus would consume ~30% of that on one call. Cluster strategy only fires for converted, paying clients — the right economic boundary for Opus.
+
+**2026-03-17: Cluster strategy prompt includes Jim's research narrative**
+
+`generate-cluster-strategy.ts` loads `research_summary.md` via `resolveArtifactPath()` and extracts Section 8 (Striking Distance) and Section 10 (Key Takeaways). This gives Opus the strategic observations about the domain's competitive position alongside structured cluster data — why the cluster matters competitively, not just what keywords are in it. Falls back gracefully if the file doesn't exist on disk (Railway-only deployments).
+
 **2026-03-17: Cluster activation gates content production**
 
 Cluster activation (`/activate-cluster` endpoint) generates a strategy document via `generate-cluster-strategy.ts` (single Sonnet call, ~$0.05-0.15) and marks the cluster as `active`. Only pages in active clusters have `cluster_active=true` on `execution_pages`, enabling the dashboard to filter the Content Queue by active clusters. Deactivation (`/deactivate-cluster`) is near-instant (2 Supabase UPDATEs, no LLM call). This creates the upsell mechanic: activating a cluster is the explicit commitment to produce content for that topic.

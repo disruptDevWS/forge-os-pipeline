@@ -607,7 +607,7 @@ Cluster activation is an on-demand step that generates a strategy document for a
 
 ### generate-cluster-strategy.ts — Cluster Strategy Generator
 
-**Script:** `scripts/generate-cluster-strategy.ts` | **Model:** Claude Sonnet (single call)
+**Script:** `scripts/generate-cluster-strategy.ts` | **Model:** Claude Opus (single call)
 
 **Invocation:** `npx tsx scripts/generate-cluster-strategy.ts --domain <d> --canonical-key <key> --user-email <e>`
 
@@ -752,6 +752,7 @@ The pipeline server currently runs on a residential ISP connection. Supabase Edg
 | QA | QA Agent | **haiku** | `callClaude()` | Phase evaluation against rubrics |
 | — | Pam | **sonnet** | `callClaude()` | Content brief (metadata + schema + outline) |
 | — | Oscar | **sonnet** | `callClaude()` | Production HTML from brief |
+| — | Cluster Strategy | **opus** | `callClaude()` | Strategic cluster analysis (on-demand, per-cluster) |
 
 **SDK migration:** All phases use `@anthropic-ai/sdk` via `scripts/anthropic-client.ts`. Per-phase `max_tokens` configured in `PHASE_MAX_TOKENS` (e.g., sonnet phases: 16384, haiku phases: 4096). No more Claude CLI binary, env var stripping, or `stripClaudePreamble()`.
 
