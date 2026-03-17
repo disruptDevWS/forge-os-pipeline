@@ -1642,7 +1642,7 @@ async function fetchSerpOrganic(
 // Canonicalize — Claude-based semantic topic grouping
 // ============================================================
 
-async function runCanonicalize(sb: SupabaseClient, auditId: string, domain: string) {
+export async function runCanonicalize(sb: SupabaseClient, auditId: string, domain: string) {
   // Fetch audit metadata for context
   const { data: auditRow } = await sb
     .from('audits')

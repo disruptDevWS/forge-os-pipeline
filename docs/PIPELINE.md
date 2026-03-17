@@ -12,6 +12,8 @@ Trigger paths:
 Edge Functions (deployed from [Lovable repo](https://github.com/disruptDevWS/market-position-audit-lovable)):
 - `run-audit` — validates audit, marks `running`, POSTs to `/trigger-pipeline`
 - `scout-config` — writes prospect config to disk, triggers scout, reads reports via `/scout-report`
+- `cluster-action` — proxies `/activate-cluster` and `/deactivate-cluster` to pipeline server
+- `pipeline-controls` — proxies `/recanonicalize` and `/track-rankings` to pipeline server (Settings page)
 
 Core scripts:
 - `scripts/pipeline-generate.ts` — agent generation logic
@@ -601,6 +603,35 @@ Ranking performance tracking runs independently of the audit pipeline — weekly
 
 ---
 
+## Re-Canonicalize (On-Demand)
+
+Re-canonicalize runs Phase 3c + 3d without the full pipeline. Used from the Settings page when operators want to refresh keyword groupings or cluster structure.
+
+### run-canonicalize.ts
+
+**Script:** `scripts/run-canonicalize.ts` | **Model:** Claude Haiku (Phase 3c)
+
+**Invocation:** `npx tsx scripts/run-canonicalize.ts --domain <d> --user-email <e>`
+
+**Steps:**
+1. Resolve audit from Supabase (domain + email)
+2. Run Phase 3c (`runCanonicalize()`) — semantic topic grouping
+3. Run Phase 3d (`rebuildClustersAndRollups()`) — delete + insert clusters with status preservation
+4. Re-backfill `execution_pages.canonical_key` from updated `audit_keywords`
+5. Log `agent_runs` entry
+
+**Status preservation:** `rebuildClustersAndRollups()` saves cluster activation status (status, activated_at, activated_by, target_publish_date, notes) before DELETE and restores it after INSERT for clusters that survive the rebuild. Also preserves `execution_pages.cluster_active` for surviving active clusters and deactivates pages for lost clusters.
+
+### Pipeline Server Endpoint
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | `/recanonicalize` | Start re-canonicalize (async, 202) |
+
+**Body:** `{ domain, email }` — same auth as other endpoints.
+
+---
+
 ## Cluster Activation (On-Demand)
 
 Cluster activation is an on-demand step that generates a strategy document for a specific topic cluster, marks it active, and flags its execution_pages. It runs outside the main pipeline, triggered via HTTP endpoint or CLI.
@@ -616,14 +647,14 @@ Cluster activation is an on-demand step that generates a strategy document for a
 **Steps:**
 1. Resolve audit from Supabase (domain + email)
 2. Load cluster, keywords, execution_pages, gap analysis, competitors, client context
-3. Build prompt → `callClaude()` with Sonnet
+3. Build prompt → `callClaude()` with Opus (strategic judgment tier)
 4. Parse buyer_stages, recommended_pages, format_gaps (JSON blocks), AI optimization notes
 5. Upsert `cluster_strategy` table
 6. SET `audit_clusters.status = 'active'`, `activated_at = now()`
 7. SET `execution_pages.cluster_active = true` WHERE `canonical_key = key`
 8. Log `agent_runs` entry
 
-**Cost:** ~$0.05-0.15 per cluster (single Sonnet call).
+**Cost:** ~$0.15-0.50 per cluster (single Opus call).
 
 ### Pipeline Server Endpoints
 
@@ -680,6 +711,7 @@ The pipeline server (`src/pipeline-server-standalone.ts`) is an HTTP server that
 | POST | `/scout-report` | Read scout markdown + scope.json |
 | POST | `/artifact` | Download pipeline output files |
 | POST | `/track-rankings` | On-demand ranking tracking for a single domain |
+| POST | `/recanonicalize` | Re-run Phase 3c+3d with status preservation (async, 202) |
 | POST | `/activate-cluster` | Start cluster strategy generation (async, 202) |
 | POST | `/deactivate-cluster` | Deactivate a cluster (sync, 200) |
 

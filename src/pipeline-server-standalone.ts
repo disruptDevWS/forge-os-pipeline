@@ -319,6 +319,86 @@ async function handleTrackRankings(req: http.IncomingMessage, res: http.ServerRe
   json(res, 202, { status: 'tracking_started', domain });
 }
 
+async function handleRecanonicalize(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  if (!checkAuth(req, res)) return;
+
+  let payload: { domain?: string; email?: string };
+  try {
+    payload = JSON.parse(await readBody(req));
+  } catch {
+    json(res, 400, { error: 'Invalid JSON' });
+    return;
+  }
+
+  const { domain, email } = payload;
+  if (!domain || !email) {
+    json(res, 400, { error: 'domain and email are required' });
+    return;
+  }
+  if (!DOMAIN_RE.test(domain)) {
+    json(res, 400, { error: 'Invalid domain format' });
+    return;
+  }
+  if (!EMAIL_RE.test(email)) {
+    json(res, 400, { error: 'Invalid email format' });
+    return;
+  }
+
+  const recanonKey = `recanonicalize:${domain}`;
+  if (inFlight.has(recanonKey)) {
+    json(res, 409, { error: `Re-canonicalize already running for ${domain}` });
+    return;
+  }
+
+  inFlight.add(recanonKey);
+  console.log(`Re-canonicalize triggered: ${domain} (${email})`);
+
+  const child = spawn('npx', ['tsx', 'scripts/run-canonicalize.ts', '--domain', domain, '--user-email', email], {
+    detached: true,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    cwd: process.cwd(),
+  });
+  child.unref();
+
+  const logLines: string[] = [];
+  const collect = (stream: NodeJS.ReadableStream | null, prefix: string) => {
+    if (!stream) return;
+    let buf = '';
+    stream.on('data', (chunk: Buffer) => {
+      buf += chunk.toString();
+      const lines = buf.split('\n');
+      buf = lines.pop() || '';
+      for (const line of lines) {
+        console.log(`[recanon:${domain}] ${prefix}: ${line}`);
+        logLines.push(`${prefix}: ${line}`);
+      }
+    });
+    stream.on('end', () => {
+      if (buf) {
+        console.log(`[recanon:${domain}] ${prefix}: ${buf}`);
+        logLines.push(`${prefix}: ${buf}`);
+      }
+    });
+  };
+  collect(child.stdout, 'OUT');
+  collect(child.stderr, 'ERR');
+
+  child.on('close', (code) => {
+    inFlight.delete(recanonKey);
+    console.log(`Re-canonicalize finished: ${domain} (exit ${code})`);
+    if (code !== 0) {
+      console.error(`Re-canonicalize failed: ${domain} — last 10 lines:\n${logLines.slice(-10).join('\n')}`);
+    }
+  });
+
+  child.on('error', (err) => {
+    inFlight.delete(recanonKey);
+    console.error(`Re-canonicalize spawn error: ${domain}`, err);
+  });
+
+  json(res, 202, { status: 'recanonicalize_started', domain });
+}
+
 async function handleActivateCluster(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   if (!checkAuth(req, res)) return;
 
@@ -569,6 +649,8 @@ const server = http.createServer((req, res) => {
     handleArtifact(req, res);
   } else if (req.method === 'POST' && req.url === '/track-rankings') {
     handleTrackRankings(req, res);
+  } else if (req.method === 'POST' && req.url === '/recanonicalize') {
+    handleRecanonicalize(req, res);
   } else if (req.method === 'POST' && req.url === '/activate-cluster') {
     handleActivateCluster(req, res);
   } else if (req.method === 'POST' && req.url === '/deactivate-cluster') {

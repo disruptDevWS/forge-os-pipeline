@@ -647,7 +647,7 @@ function buildClusterMap(rows: any[]): Map<string, ClusterAgg> {
   return map;
 }
 
-async function rebuildClustersAndRollups(sb: SupabaseClient, auditId: string, label: string = 'rebuild') {
+export async function rebuildClustersAndRollups(sb: SupabaseClient, auditId: string, label: string = 'rebuild') {
   // Load assumptions
   const { data: assumptions } = await sb
     .from('audit_assumptions')
@@ -673,6 +673,20 @@ async function rebuildClustersAndRollups(sb: SupabaseClient, auditId: string, la
   }
 
   const ctrBuckets = ctrModel.buckets as CtrBuckets;
+
+  // Preserve cluster activation status before delete
+  const { data: existingStatuses } = await sb
+    .from('audit_clusters')
+    .select('canonical_key, status, activated_at, activated_by, target_publish_date, notes')
+    .eq('audit_id', auditId);
+  const statusMap = new Map(
+    (existingStatuses ?? [])
+      .filter((r: any) => r.canonical_key && r.status !== 'inactive')
+      .map((r: any) => [r.canonical_key, r]),
+  );
+
+  // Preserve execution_pages cluster_active state
+  const activeClusterKeys = new Set(statusMap.keys());
 
   // Clear existing clusters + rollups
   await sb.from('audit_clusters').delete().eq('audit_id', auditId);
@@ -751,6 +765,55 @@ async function rebuildClustersAndRollups(sb: SupabaseClient, auditId: string, la
     const { error } = await sb.from('audit_clusters').insert(clusterRecords);
     if (error) throw new Error(`cluster insert failed: ${error.message}`);
     console.log(`  [${label}] Inserted ${clusterRecords.length} clusters`);
+
+    // Restore activation status for clusters that survived the rebuild
+    if (statusMap.size > 0) {
+      let restored = 0;
+      for (const [canonicalKey, prev] of statusMap) {
+        const exists = clusterRecords.some((r) => r.canonical_key === canonicalKey);
+        if (exists) {
+          await sb.from('audit_clusters').update({
+            status: (prev as any).status,
+            activated_at: (prev as any).activated_at,
+            activated_by: (prev as any).activated_by,
+            target_publish_date: (prev as any).target_publish_date,
+            notes: (prev as any).notes,
+          }).eq('audit_id', auditId).eq('canonical_key', canonicalKey);
+          restored++;
+        }
+      }
+      if (restored > 0) {
+        console.log(`  [${label}] Restored activation status for ${restored} clusters`);
+      }
+    }
+
+    // Restore execution_pages cluster_active based on surviving active clusters
+    if (activeClusterKeys.size > 0) {
+      const survivingActiveKeys = clusterRecords
+        .filter((r) => statusMap.has(r.canonical_key))
+        .map((r) => r.canonical_key);
+      const lostKeys = [...activeClusterKeys].filter(
+        (k) => !clusterRecords.some((r) => r.canonical_key === k),
+      );
+
+      // Re-activate pages for surviving active clusters
+      for (const key of survivingActiveKeys) {
+        await sb.from('execution_pages')
+          .update({ cluster_active: true })
+          .eq('audit_id', auditId)
+          .eq('canonical_key', key);
+      }
+      // Deactivate pages for clusters that didn't survive
+      for (const key of lostKeys) {
+        await sb.from('execution_pages')
+          .update({ cluster_active: false })
+          .eq('audit_id', auditId)
+          .eq('canonical_key', key);
+      }
+      if (survivingActiveKeys.length > 0 || lostKeys.length > 0) {
+        console.log(`  [${label}] execution_pages cluster_active: ${survivingActiveKeys.length} preserved, ${lostKeys.length} deactivated`);
+      }
+    }
   }
 
   // Rollup

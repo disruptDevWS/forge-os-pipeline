@@ -190,7 +190,19 @@ Scout stays on Sonnet despite producing strategic output, because it runs at $2 
 
 **2026-03-17: Cluster activation gates content production**
 
-Cluster activation (`/activate-cluster` endpoint) generates a strategy document via `generate-cluster-strategy.ts` (single Sonnet call, ~$0.05-0.15) and marks the cluster as `active`. Only pages in active clusters have `cluster_active=true` on `execution_pages`, enabling the dashboard to filter the Content Queue by active clusters. Deactivation (`/deactivate-cluster`) is near-instant (2 Supabase UPDATEs, no LLM call). This creates the upsell mechanic: activating a cluster is the explicit commitment to produce content for that topic.
+Cluster activation (`/activate-cluster` endpoint) generates a strategy document via `generate-cluster-strategy.ts` (single Opus call, ~$0.15-0.50) and marks the cluster as `active`. Only pages in active clusters have `cluster_active=true` on `execution_pages`, enabling the dashboard to filter the Content Queue by active clusters. Deactivation (`/deactivate-cluster`) is near-instant (2 Supabase UPDATEs, no LLM call). This creates the upsell mechanic: activating a cluster is the explicit commitment to produce content for that topic.
+
+**2026-03-17: Cluster status preservation through rebuild**
+
+`rebuildClustersAndRollups()` does DELETE+INSERT on `audit_clusters`. Without preservation, re-canonicalize would deactivate all active clusters. The function now saves activation metadata (status, activated_at, activated_by, target_publish_date, notes) before DELETE and restores it after INSERT for clusters whose `canonical_key` survives the rebuild. Also syncs `execution_pages.cluster_active` — surviving active clusters keep their pages flagged, lost clusters get their pages deactivated.
+
+**2026-03-17: client_context lives on disk (prospect-config.json), mirrored to audits table**
+
+The pipeline reads `client_context` from `audits/{domain}/prospect-config.json` via `loadClientContext()`. The dashboard Settings page reads/writes `audits.client_context` JSONB column. These are separate stores — the pipeline never reads from Supabase `client_context`, and the dashboard never reads from disk. They are synced at convert-to-client time. If the pipeline needs to pick up Settings-page edits, the edge function must write to both disk (via `/scout-config`) and Supabase.
+
+**2026-03-17: pipeline-controls edge function for Settings page**
+
+Settings page pipeline actions (re-canonicalize, track rankings) route through a single `pipeline-controls` edge function rather than one edge function per action. This follows the `scout-config` pattern (action switch on request body) and keeps the edge function count manageable. Both actions proxy to existing pipeline server endpoints (`/recanonicalize`, `/track-rankings`).
 
 **2026-03-16: Stripped dead WhatsApp/container code (~5,500 lines)**
 
