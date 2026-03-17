@@ -4,154 +4,146 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Quick Context
 
-NanoClaw is a personal Claude assistant. Single Node.js process connects to WhatsApp, routes messages to Claude Agent SDK running in containers (Apple Container on macOS, Docker on Linux). Each WhatsApp group gets an isolated container with its own filesystem and memory.
-
-See [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) for architecture decisions and [docs/SECURITY.md](docs/SECURITY.md) for the trust model.
+NanoClaw is an **SEO audit pipeline toolkit**. Dashboard buttons trigger Supabase Edge Functions, which POST to a Node.js HTTP server on Railway, which spawns a shell orchestrator that runs TypeScript phase generators, then syncs results back to Supabase tables for the dashboard to display.
 
 **Before modifying pipeline code**, read [docs/PIPELINE.md](docs/PIPELINE.md) (authoritative phase contract — who owns what data) and [docs/DECISIONS.md](docs/DECISIONS.md) (why non-obvious choices were made). If a phase responsibility changes, update PIPELINE.md in the same commit.
+
+## Architecture
+
+```
+Dashboard → Supabase Edge Function (run-audit)
+                    │
+                    ▼
+    pipeline-server-standalone.ts (HTTP, port 3847)
+                    │
+                    ▼
+          run-pipeline.sh <domain> <email> [flags]
+                    │
+          ┌─────────┴──────────────────────────────────┐
+          ▼                                            ▼
+  pipeline-generate.ts (phase runners)     sync-to-dashboard.ts (Supabase sync)
+          │                                            │
+          ├─ callClaude() → Anthropic API              ├─ audit_keywords
+          ├─ DataForSEO APIs                           ├─ audit_clusters
+          └─ disk artifacts (audits/{domain}/)         └─ audit_rollups, etc.
+```
+
+### Execution Model
+
+Each pipeline phase (Dwight, Jim, Michael, etc.) is a **prompt template**, not an agent. It:
+1. Gathers context (disk files + Supabase queries)
+2. Builds a prompt string
+3. Calls `callClaude()` once (single-shot, no multi-turn, no tool use)
+4. Parses the response
+5. Writes results to disk + Supabase
+
+`scripts/anthropic-client.ts` wraps the `@anthropic-ai/sdk` Messages API. Per-phase `max_tokens` configured in `PHASE_MAX_TOKENS`. Model mapping: `sonnet` → `claude-sonnet-4-6`, `haiku` → `claude-haiku-4-5`.
+
+### Pipeline Phase Order
+
+```
+Phase 0  Scout           (prospect mode only, exits after)
+Phase 1  Dwight          Technical crawl + audit report
+Phase 2  KeywordResearch Service × city × intent keyword matrix
+Phase 3  Jim             DataForSEO research + narrative
+Phase 3b sync-jim        Keywords → Supabase (revenue modeling)
+Phase 3c Canonicalize    Semantic topic grouping (Haiku)
+Phase 3d rebuild-clusters Re-aggregate with canonical keys
+Phase 4  Competitors     SERP analysis (skipped in sales mode)
+Phase 5  Gap             Content gap analysis (skipped in sales mode)
+Phase 6  Michael         Architecture blueprint
+Phase 6.5 Validator      Coverage cross-check (skipped in sales mode)
+Phase 6b sync-michael    Architecture → Supabase
+Phase 6c sync-dwight     Technical audit → Supabase
+```
+
+Post-pipeline (on-demand, per-page): **Pam** (content briefs) → **Oscar** (HTML generation)
 
 ## Development Commands
 
 ```bash
-npm run dev              # Run with hot reload (tsx)
+npm run dev              # Run pipeline server with hot reload (tsx)
 npm run build            # Compile TypeScript (tsc)
 npm run typecheck        # Type-check without emitting (tsc --noEmit)
 npm run format           # Format with prettier
 npm run format:check     # Check formatting
 npm test                 # Run all tests (vitest run)
 npm run test:watch       # Watch mode
-npx vitest run src/db.test.ts  # Run a single test file
-./container/build.sh     # Rebuild agent container image
+npm run sync             # Run sync-to-dashboard.ts
 ```
 
 Run commands directly — don't tell the user to run them.
 
-macOS service management:
+### Running the Pipeline Manually
+
 ```bash
-launchctl load ~/Library/LaunchAgents/com.nanoclaw.plist
-launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist
+# Full pipeline
+./scripts/run-pipeline.sh <domain> <email>
+
+# Sales mode (skips Competitors, Gap, Validator)
+./scripts/run-pipeline.sh <domain> <email> --mode sales
+
+# Resume from a specific phase
+./scripts/run-pipeline.sh <domain> <email> --start-from 3
+
+# Prospect scout only
+./scripts/run-pipeline.sh <domain> <email> --mode prospect --prospect-config audits/<domain>/prospect-config.json
 ```
-
-## Skills
-
-| Skill | When to Use |
-|-------|-------------|
-| `/setup` | First-time installation, authentication, service configuration |
-| `/customize` | Adding channels, integrations, changing behavior |
-| `/debug` | Container issues, logs, troubleshooting |
-
-## Architecture
-
-```
-WhatsApp (baileys) → SQLite → Polling loop (2s) → GroupQueue → Container (Claude Agent SDK) → Response
-                                                                    ↕
-                                                              IPC (filesystem)
-```
-
-### Message Flow
-
-1. **Inbound**: `WhatsAppChannel` receives messages via baileys, stores in SQLite (`messages` table).
-2. **Poll loop** (`src/index.ts`): Every 2s, queries for new messages across registered groups. Checks trigger pattern (`@Andy` by default). Groups messages by `chat_jid`.
-3. **Queue** (`src/group-queue.ts`): Enforces one container per group, max 5 concurrent containers total. Tasks are prioritized over messages. Exponential retry backoff (5s base, max 5 retries).
-4. **Container spawn** (`src/container-runner.ts`): Builds volume mounts, spawns container process, passes secrets via stdin (never env vars or disk). Streams output via sentinel markers (`---NANOCLAW_OUTPUT_START---`/`---NANOCLAW_OUTPUT_END---`).
-5. **Agent execution** (`container/agent-runner/src/index.ts`): Runs Claude Agent SDK `query()` with `MessageStream` (async iterable) to support multi-turn and agent teams. Polls IPC input directory for follow-up messages during execution.
-6. **Outbound**: Agent writes IPC files → host IPC watcher routes to WhatsApp. `<internal>…</internal>` blocks are stripped before sending.
-
-### IPC Model
-
-File-based IPC via `data/ipc/{groupFolder}/` mounted as `/workspace/ipc/` in the container:
-
-- **Container → Host**: `messages/` (send_message) and `tasks/` (schedule/pause/resume/cancel tasks, register groups)
-- **Host → Container**: `input/` (follow-up messages) and `input/_close` (graceful shutdown sentinel)
-- MCP server (`ipc-mcp-stdio.ts`) exposes tools: `send_message`, `schedule_task`, `list_tasks`, `pause_task`, `resume_task`, `cancel_task`, `register_group`
-- IPC watcher (`src/ipc.ts`) enforces authorization: non-main groups can only message/schedule for themselves; main group has cross-group access
-
-### Container Lifecycle
-
-- Agent-runner TypeScript is **recompiled on every container start** from the host-mounted source (`container/agent-runner/src/`). This bypasses the build cache so code changes take effect without rebuilding the image.
-- Credentials (`CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`) are read from `.env` by `container-runner.ts` and passed as JSON via stdin. They are never written to disk inside the container.
-- The `_close` sentinel is the clean shutdown path: `GroupQueue.closeStdin()` writes it after idle timeout; agent-runner exits gracefully.
-- Session resumption uses `resumeAt` (UUID of last assistant message) so follow-up queries pick up where the previous one ended.
-
-### Container Mounts
-
-| Container Path | Host Source | Access |
-|----------------|------------|--------|
-| `/workspace/group` | `groups/{folder}/` | RW |
-| `/workspace/global` | `groups/global/` (non-main only) | RO |
-| `/workspace/project` | project root (main only) | RW |
-| `/home/node/.claude` | `data/sessions/{folder}/.claude/` | RW |
-| `/workspace/ipc` | `data/ipc/{folder}/` | RW |
-| `/app/src` | `container/agent-runner/src/` | RO |
-| `/workspace/extra/{name}` | additional mounts (allowlist-validated) | configurable |
-
-Mount security: additional mounts are validated against `~/.config/nanoclaw/mount-allowlist.json` (`src/mount-security.ts`).
 
 ## Key Files
 
 | File | Purpose |
 |------|---------|
-| `src/index.ts` | Orchestrator: state, message loop, agent invocation |
-| `src/channels/whatsapp.ts` | WhatsApp connection, auth, send/receive |
-| `src/ipc.ts` | IPC watcher and task authorization |
-| `src/router.ts` | Message formatting (`escapeXml`, XML wrapping) and outbound routing |
-| `src/config.ts` | Trigger pattern, paths, intervals, env-configurable values |
-| `src/container-runner.ts` | Container spawn, volume mounts, streaming output parser |
-| `src/group-queue.ts` | Per-group queue with global concurrency limit |
-| `src/task-scheduler.ts` | Cron/interval/once scheduled tasks |
-| `src/mount-security.ts` | Allowlist-based mount path validation |
-| `src/db.ts` | SQLite operations (messages, groups, sessions, tasks, state) |
-| `src/env.ts` | `.env` file parser (never touches `process.env`) |
-| `src/types.ts` | All TypeScript interfaces (`Channel`, `RegisteredGroup`, etc.) |
-| `container/agent-runner/src/index.ts` | In-container SDK query loop, MessageStream, IPC polling |
-| `container/agent-runner/src/ipc-mcp-stdio.ts` | MCP server exposing IPC tools to the agent |
-| `container/Dockerfile` | node:22-slim + Chromium + claude-code |
-| `scripts/pipeline-generate.ts` | Audit pipeline: all agent generation phases (Dwight, Jim, etc.) |
-| `scripts/anthropic-client.ts` | Anthropic SDK wrapper — drop-in for all Claude calls |
-| `scripts/dataforseo-onpage.ts` | DataForSEO OnPage API client (replaces Screaming Frog) |
-| `scripts/onpage-to-csv.ts` | Transforms OnPage API data to SF-compatible CSVs |
-| `scripts/run-pipeline.sh` | Sequential pipeline orchestrator with QA gates |
-| `src/pipeline-server.ts` | HTTP trigger server for pipeline runs |
-| `Dockerfile.railway` | Railway deployment (pipeline server only) |
-| `groups/global/CLAUDE.md` | Global persona injected into all agents (read-only) |
-| `groups/main/CLAUDE.md` | Main group persona with admin/group management context |
-| `groups/{name}/CLAUDE.md` | Per-group memory (isolated) |
+| `src/pipeline-server-standalone.ts` | HTTP server: `/trigger-pipeline`, `/scout-config`, `/scout-report`, `/artifact`, `/health` |
+| `scripts/pipeline-generate.ts` | All phase runners: `runDwight()`, `runJim()`, `runMichael()`, etc. + QA agent |
+| `scripts/sync-to-dashboard.ts` | Supabase sync: `syncJim()`, `syncMichael()`, `syncDwight()`, `rebuildClustersAndRollups()` |
+| `scripts/anthropic-client.ts` | Anthropic SDK wrapper — `callClaude()` / `callClaudeAsync()` for all Claude calls |
+| `scripts/dataforseo-onpage.ts` | DataForSEO OnPage API client (crawl, poll, fetch pages/summary/microdata) |
+| `scripts/onpage-to-csv.ts` | Transforms OnPage API data to CSV files for downstream consumers |
+| `scripts/run-pipeline.sh` | Shell orchestrator: runs phases sequentially with QA gates |
+| `scripts/foundational_scout.sh` | DataForSEO CLI wrapper for Scout phase |
+| `scripts/generate-brief.ts` | Pam: content brief generation (metadata + schema + outline) |
+| `scripts/generate-content.ts` | Oscar: HTML content production from briefs |
+| `scripts/update-pipeline-status.ts` | Updates audit status in Supabase |
+| `scripts/run-migration.ts` | Database migration runner |
+| `Dockerfile.railway` | Railway deployment: node:22-slim + curl + jq |
 
 ## Runtime Directories (not in repo)
 
 ```
-store/messages.db              # SQLite database
-store/auth/                    # WhatsApp baileys credentials
-data/ipc/{group}/              # IPC namespace per group
-data/sessions/{group}/.claude/ # Claude SDK sessions per group
-groups/{group}/logs/           # Per-run container logs
-groups/{group}/conversations/  # Archived transcripts (PreCompact hook)
+audits/{domain}/           # Pipeline artifacts per domain (dated subdirs)
+  auditor/{date}/          # Dwight: internal_all.csv, AUDIT_REPORT.md, CSVs
+  research/{date}/         # Jim: ranked_keywords.json, research_summary.md
+  architecture/{date}/     # Michael: architecture_blueprint.md
+  scout/{date}/            # Scout: scout report + scope.json
+  content/{date}/{slug}/   # Pam/Oscar: metadata, schema, outline, page.html
 ```
 
 ## Testing Patterns
 
-- **vitest** with `vi.mock()` for module mocking and `vi.useFakeTimers()` for timeout control
-- `db.ts` exports `_initTestDatabase()` for in-memory SQLite — used in `beforeEach` for clean state
-- Container-runner tests mock `child_process.spawn` with fake `EventEmitter` + `PassThrough` streams
-- Config overrides via `vi.mock('./config.js', () => ({...}))`
+- **vitest** with `vi.mock()` for module mocking
 - CI runs `tsc --noEmit` then `vitest run` on ubuntu/Node 20
+- `passWithNoTests: true` in vitest config so CI passes without test files
 
 ## Code Conventions
 
 - ESM project (`"type": "module"`). Imports use `.js` extensions (e.g., `import { foo } from './config.js'`).
 - Prettier with `singleQuote: true`.
-- `Channel` interface (`src/types.ts`) is the extension point for new messaging channels — implement `name`, `connect()`, `sendMessage()`, `isConnected()`, `ownsJid()`, `disconnect()`, optionally `setTyping()`.
-- Bot messages are identified by `is_bot_message` flag plus `content LIKE 'Andy:%'` as backstop for pre-migration rows.
+- `loadEnv()` in scripts falls through to `process.env` when `.env` is absent (Railway deployment).
+- All Claude calls go through `scripts/anthropic-client.ts` — never spawn a CLI binary.
+- Prompt framing: "YOUR ENTIRE RESPONSE IS THE [ARTIFACT]" top/bottom to prevent narration.
+- `validateArtifact()` rejects conversational preamble in LLM output.
+- `resolveArtifactPath()` handles cross-date fallback (Phase 3 finding Phase 1 artifacts from yesterday).
 
-## Container Build Cache
+## Adding a New Pipeline Phase
 
-Apple Container's buildkit caches aggressively. `--no-cache` alone does NOT invalidate COPY steps. To force a truly clean rebuild:
-
-```bash
-container builder stop && container builder rm && container builder start
-./container/build.sh
-```
-
-Verify after rebuild: `container run -i --rm --entrypoint wc nanoclaw-agent:latest -l /app/src/index.ts`
-
-Note: agent-runner source changes do NOT require a rebuild (recompiled at container start). Only Dockerfile changes (system packages, npm dependencies) need a full rebuild.
+1. Add a `runNewPhase()` function in `scripts/pipeline-generate.ts` following the existing pattern:
+   - Gather context (disk files via `resolveArtifactPath()`, Supabase queries)
+   - Build prompt string with "YOUR ENTIRE RESPONSE IS THE [X]" framing
+   - Call `callClaude()` or `callClaudeAsync()` with appropriate model/max_tokens
+   - Validate output with `validateArtifact()`
+   - Write to disk in `audits/{domain}/{subdir}/{date}/`
+2. Add the phase to `scripts/run-pipeline.sh` in the correct position
+3. If the phase writes to Supabase, add a sync function in `scripts/sync-to-dashboard.ts`
+4. If QA-gated, add a rubric in the `QA_RUBRICS` object and a `runQA()` call after the phase
+5. Update `docs/PIPELINE.md` — this is a contract, not optional documentation

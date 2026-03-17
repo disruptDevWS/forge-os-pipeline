@@ -356,6 +356,115 @@ const SERVICE_KEYWORD_SEEDS: Record<string, string[]> = {
 const MIN_RANKED_KEYWORDS_THRESHOLD = 50;
 
 // ============================================================
+// Aggregator / directory domain filter — pre-filters Jim's competitor table
+// ============================================================
+
+const AGGREGATOR_DOMAINS = new Set([
+  'yelp.com', 'homeadvisor.com', 'angieslist.com', 'angi.com',
+  'thumbtack.com', 'bbb.org', 'yellowpages.com', 'mapquest.com',
+  'nextdoor.com', 'facebook.com', 'linkedin.com', 'instagram.com',
+  'twitter.com', 'x.com', 'pinterest.com', 'youtube.com',
+  'wikipedia.org', 'reddit.com', 'quora.com', 'manta.com',
+  'expertise.com', 'porch.com', 'houzz.com', 'bark.com',
+]);
+
+function isAggregatorDomain(domain: string): boolean {
+  const d = domain.replace(/^www\./, '').toLowerCase();
+  return AGGREGATOR_DOMAINS.has(d);
+}
+
+// ============================================================
+// Service key detection — auto-detect vertical from crawl data
+// ============================================================
+
+/**
+ * Detect the service_key from AUDIT_REPORT.md content by matching against SERVICE_KEYWORD_SEEDS.
+ * Tier 1: count seed term matches — return vertical with most hits (min 2).
+ * Tier 2: if no vertical meets threshold, ask Haiku to classify.
+ */
+async function detectServiceKey(reportContent: string): Promise<string | null> {
+  const contentLower = reportContent.toLowerCase();
+
+  // Tier 1: fast seed matching
+  const scores: [string, number][] = [];
+  for (const [key, seeds] of Object.entries(SERVICE_KEYWORD_SEEDS)) {
+    const hits = seeds.filter((s) => contentLower.includes(s.toLowerCase())).length;
+    scores.push([key, hits]);
+  }
+  scores.sort((a, b) => b[1] - a[1]);
+  if (scores[0][1] >= 2) {
+    return scores[0][0];
+  }
+
+  // Tier 2: Haiku classification
+  const verticals = Object.keys(SERVICE_KEYWORD_SEEDS).join(', ');
+  const prompt = `Given this site crawl summary, classify the business vertical.
+Choose exactly one from: ${verticals}
+If none fit, respond with: other
+
+Site content (first 3000 chars):
+${reportContent.slice(0, 3000)}
+
+Respond with the key only (e.g., "plumbing"). No explanation.`;
+
+  try {
+    const result = await callClaude(prompt, { model: 'haiku', phase: 'detect-service-key' });
+    const key = result.trim().toLowerCase().replace(/[^a-z_]/g, '');
+    if (SERVICE_KEYWORD_SEEDS[key]) return key;
+  } catch (err: any) {
+    console.log(`  Warning: detectServiceKey Haiku call failed: ${err.message}`);
+  }
+  return null;
+}
+
+/**
+ * Expand extracted services by cross-referencing SERVICE_KEYWORD_SEEDS against crawl data.
+ * For each seed term with evidence in AUDIT_REPORT.md or internal_all.csv URLs,
+ * add it if not already covered by extracted services.
+ */
+function expandServicesFromCrawl(
+  extractedServices: string[],
+  serviceKey: string,
+  reportContent: string,
+  csvContent: string | null,
+): string[] {
+  const seeds = SERVICE_KEYWORD_SEEDS[serviceKey];
+  if (!seeds) return extractedServices;
+
+  const existingLower = new Set(extractedServices.map((s) => s.toLowerCase()));
+  const reportLower = reportContent.toLowerCase();
+  const csvLower = csvContent?.toLowerCase() ?? '';
+  const expanded: string[] = [...extractedServices];
+
+  for (const seed of seeds) {
+    const seedLower = seed.toLowerCase();
+
+    // Skip if already covered (fuzzy: check if any extracted service contains the seed or vice versa)
+    let alreadyCovered = false;
+    for (const existing of existingLower) {
+      if (existing.includes(seedLower) || seedLower.includes(existing)) {
+        alreadyCovered = true;
+        break;
+      }
+    }
+    if (alreadyCovered) continue;
+
+    // Check evidence: seed appears in report text or CSV URLs/content
+    const inReport = reportLower.includes(seedLower);
+    const inCsv = csvLower.includes(seedLower);
+
+    if (inReport || inCsv) {
+      // Title-case the seed for display
+      const titleCased = seed.split(' ').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+      expanded.push(titleCased);
+      existingLower.add(seedLower);
+    }
+  }
+
+  return expanded;
+}
+
+// ============================================================
 // Seed Mode helpers — synthetic keyword universe for new/zero-visibility sites
 // ============================================================
 
@@ -834,14 +943,22 @@ async function runJim(sb: SupabaseClient, auditId: string, domain: string, audit
     })
     .join('\n');
 
-  // Extract competitors from DataForSEO response
+  // Extract competitors from DataForSEO response, filtering out aggregators/directories
   const rawCompetitors: any[] = [];
+  let aggregatorsFiltered = 0;
   for (const task of competitorsData?.tasks ?? []) {
     for (const result of task?.result ?? []) {
       for (const item of result?.items ?? []) {
+        if (item.domain && isAggregatorDomain(item.domain)) {
+          aggregatorsFiltered++;
+          continue;
+        }
         rawCompetitors.push(item);
       }
     }
+  }
+  if (aggregatorsFiltered > 0) {
+    console.log(`  Filtered ${aggregatorsFiltered} aggregator/directory domains from competitors`);
   }
 
   const top20Competitors = rawCompetitors
@@ -889,10 +1006,14 @@ All other formatting rules still apply.\n`
   const fallbackNote = !hasUpstreamData && !isSeedMode
     ? `\nNOTE: No upstream data from Dwight or KeywordResearch is available. Using seed keyword fallback for supplementation.\n`
     : '';
+  // Load client context for full-mode prompt injection
+  const jimClientCtx = loadClientContext(domain);
+  const jimClientContextBlock = jimClientCtx ? `\n${buildClientContextPrompt(jimClientCtx, 'jim')}\n` : '';
+
   const narrativePrompt = `You are Jim, The Scout — a foundational search intelligence analyst. You have full DataForSEO data for ${domain}.
 
 YOUR ENTIRE RESPONSE IS THE REPORT. Output ONLY the markdown content of research_summary.md — start with "# Research Summary" heading. Do NOT narrate, summarize what you did, or describe the file. Do NOT say "I'll write" or "Here's the report" or use backtick file paths. Just output the formatted report that Michael (The Architect) will use to plan the site's information architecture.
-${seedModeNote}${autoSupplementNote}${salesModeNote}${upstreamNote}${fallbackNote}
+${seedModeNote}${autoSupplementNote}${salesModeNote}${upstreamNote}${fallbackNote}${jimClientContextBlock}
 ${siteInventory ? `${siteInventory}\n` : ''}${kwResearchSection ? `## Keyword Opportunities (from KeywordResearch)\n${kwResearchSection}\n\n` : ''}## Raw Keyword Data (top 100 of ${totalKeywords} by volume)
 Keyword | Position | Volume | CPC | Difficulty | Competition | Ranking URL
 ${keywordTable}
@@ -1013,6 +1134,7 @@ You MUST use these exact section headings and table column orders. The downstrea
 - Use /mo suffix for volume in Keyword Overview and Branded tables.
 - Use $ prefix for dollar values.
 - Do NOT add extra columns or change column order.
+- Exclude aggregator/directory sites (Yelp, HomeAdvisor, Angi, BBB, Thumbtack, social media, Wikipedia, Reddit) from competitor analysis. Focus ONLY on direct business competitors.
 - Be specific — reference actual keywords, URLs, and competitor domains from the data.
 - Add analysis commentary BELOW tables, not inside them.
 - This is a professional deliverable, not a summary of summaries.`;
@@ -1120,6 +1242,85 @@ function resolveArtifactPath(domain: string, subdir: 'research' | 'architecture'
     }
   }
   return null;
+}
+
+/**
+ * Build a deterministic revenue opportunity table for sales mode.
+ * Uses total keyword volume × benchmark conversion rates × average contract values.
+ * No LLM call — every number traces to input data for auditability.
+ */
+async function buildRevenueTable(
+  sb: SupabaseClient,
+  auditId: string,
+  serviceKey: string,
+): Promise<string | null> {
+  // Fetch assumptions (created by syncJim in Phase 3b)
+  const { data: assumptions } = await sb
+    .from('audit_assumptions')
+    .select('cr_used_min, cr_used_mid, cr_used_max, acv_used_min, acv_used_mid, acv_used_max, target_ctr')
+    .eq('audit_id', auditId)
+    .maybeSingle();
+
+  if (!assumptions) {
+    console.log('  Warning: No audit_assumptions found — skipping revenue table');
+    return null;
+  }
+
+  // Fetch rollup totals
+  const { data: rollups } = await sb
+    .from('audit_rollups')
+    .select('total_volume, delta_traffic, delta_revenue_low, delta_revenue_mid, delta_revenue_high')
+    .eq('audit_id', auditId)
+    .maybeSingle();
+
+  // Fetch total new pages count from clusters
+  const { data: clusters } = await sb
+    .from('audit_clusters')
+    .select('topic, total_volume')
+    .eq('audit_id', auditId);
+
+  const totalVolume = rollups?.total_volume ?? (clusters ?? []).reduce((s, c) => s + (c.total_volume ?? 0), 0);
+  const pageCount = (clusters ?? []).length;
+
+  if (totalVolume === 0) {
+    console.log('  Warning: Zero total volume — skipping revenue table');
+    return null;
+  }
+
+  // Use rollup revenue if available, otherwise compute from assumptions
+  let revLow: number, revMid: number, revHigh: number;
+  if (rollups?.delta_revenue_mid) {
+    revLow = Math.round(rollups.delta_revenue_low ?? 0);
+    revMid = Math.round(rollups.delta_revenue_mid ?? 0);
+    revHigh = Math.round(rollups.delta_revenue_high ?? 0);
+  } else {
+    // Fallback: estimate from total volume × target CTR × cr × acv
+    const targetCtr = assumptions.target_ctr ?? 0.05;
+    const estimatedTraffic = totalVolume * targetCtr;
+    const crMin = assumptions.cr_used_min ?? 0.02;
+    const crMid = assumptions.cr_used_mid ?? (crMin + (assumptions.cr_used_max ?? 0.08)) / 2;
+    const crMax = assumptions.cr_used_max ?? 0.08;
+    const acvMin = assumptions.acv_used_min ?? 200;
+    const acvMid = assumptions.acv_used_mid ?? (acvMin + (assumptions.acv_used_max ?? 800)) / 2;
+    const acvMax = assumptions.acv_used_max ?? 800;
+    revLow = Math.round(estimatedTraffic * crMin * acvMin);
+    revMid = Math.round(estimatedTraffic * crMid * acvMid);
+    revHigh = Math.round(estimatedTraffic * crMax * acvMax);
+  }
+
+  const verticalLabel = serviceKey.replace(/_/g, ' ');
+
+  return `## Revenue Opportunity
+
+Based on ${pageCount} new pages targeting ${totalVolume.toLocaleString()} monthly searches:
+
+| Scenario | Monthly Revenue Potential |
+|----------|-------------------------|
+| Conservative | $${revLow.toLocaleString()}/mo |
+| Expected | $${revMid.toLocaleString()}/mo |
+| Optimistic | $${revHigh.toLocaleString()}/mo |
+
+*Based on industry benchmark conversion rates and average contract values for ${verticalLabel}.*`;
 }
 
 async function runMichael(sb: SupabaseClient, auditId: string, domain: string, researchDate?: string, mode: CliArgs['mode'] = 'full') {
@@ -1265,6 +1466,23 @@ ${semanticSummary.rows}`;
     console.log('  Warning: No auditor directory found — Dwight may not have run');
   }
 
+  // --- Client context (full-mode only) ---
+  const michaelClientCtx = loadClientContext(domain);
+  const michaelClientContextBlock = michaelClientCtx ? buildClientContextPrompt(michaelClientCtx, 'michael') : '';
+  if (michaelClientCtx) {
+    console.log(`  Client context loaded: ${michaelClientCtx.services?.length ?? 0} services, ${michaelClientCtx.out_of_scope?.length ?? 0} out-of-scope items`);
+  }
+
+  // --- Revenue table (sales mode only) ---
+  let revenueSection = '';
+  if (mode === 'sales') {
+    const revenueTable = await buildRevenueTable(sb, auditId, audit.service_key ?? 'other');
+    if (revenueTable) {
+      revenueSection = revenueTable;
+      console.log(`  Revenue table pre-computed for sales mode`);
+    }
+  }
+
   console.log(`  Context loaded: ${clusters.length} clusters, research=${!!researchSummary}, keywords=${!!keywordSection}, gap=${!!gapSection}, crawl=${!!crawlSection}, platform=${!!platformSection}`);
 
   // --- Build comprehensive prompt ---
@@ -1285,13 +1503,13 @@ ${crawlSection ? `${crawlSection}\n` : ''}
 ${semanticSection ? `${semanticSection}\n` : ''}
 ${gapSection ? `## Content Gap Intelligence\nThe following analysis was produced by the Gap agent. Your architecture MUST address every identified gap.\n\n${gapSection}\n` : ''}
 ${platformSection ? `## Platform Constraints (from Dwight's Technical Audit)\nThe following platform/CMS observations were identified by the technical auditor. Your architecture MUST account for these constraints.\n\n${platformSection}\n` : ''}
-${mode === 'sales' ? `## SALES MODE OVERRIDE
+${michaelClientContextBlock ? `${michaelClientContextBlock}\n` : ''}${mode === 'sales' ? `## SALES MODE OVERRIDE
 This is a condensed sales prospect report. Follow these overrides:
 - Executive Summary: 3-5 paragraphs strategic pitch focused on revenue opportunity
 - Max 3 silos with 3-5 pages each
 - Skip Cannibalization Warnings and Internal Linking Strategy sections entirely
 - Use revenue opportunity language throughout — this is for a prospect, not an internal planning doc
-` : ''}## Output Format — CRITICAL
+${revenueSection ? `- Include the following Revenue Opportunity section at the END of your blueprint, after the last silo, VERBATIM (do not modify the numbers):\n\n${revenueSection}\n` : ''}` : ''}## Output Format — CRITICAL
 You MUST produce output in this EXACT format. The parser depends on these heading patterns:
 
 ### Start with:
@@ -1930,10 +2148,14 @@ async function runGap(sb: SupabaseClient, auditId: string, domain: string) {
     ? plannedPages.map((p) => `${p.url_slug} (${p.silo_name}/${p.role}) → "${p.primary_keyword}" [${p.action_required}]`).join('\n')
     : 'No architecture plan exists yet.';
 
+  // Load client context for full-mode prompt injection
+  const gapClientCtx = loadClientContext(domain);
+  const gapClientContextBlock = gapClientCtx ? `\n${buildClientContextPrompt(gapClientCtx, 'gap')}\n` : '';
+
   const prompt = `You are a Content Gap Analyst. Given the competitive landscape data for ${domain}, produce a JSON analysis identifying where competitors rank but the client is absent or weak.
 
 YOUR ENTIRE RESPONSE IS RAW JSON. Output ONLY the JSON object starting with {. No markdown, no code fences, no narration, no explanation before or after.
-
+${gapClientContextBlock}
 ## Dominance Scores (worst first — low score = competitor dominates)
 ${topDominance || 'No dominance data available.'}
 
@@ -2638,7 +2860,8 @@ Rules:
 - Normalize services to clean labels (e.g., "Kitchen Remodeling" not "/residential/kitchen-remodeling/")
 - Normalize locations to city names only (e.g., "St. Charles" not "St. Charles, IL")
 - Deduplicate (e.g., "kitchen remodel" and "kitchen remodeling" → "Kitchen Remodeling")
-- If no services or locations are found, return empty arrays — do NOT guess
+- Include sub-services visible in navigation, page titles, service descriptions, URL paths — do not limit to top-level categories
+- If no services or locations are found, return empty arrays — do NOT invent services not mentioned anywhere on the site
 ${scopeContext}
 YOUR ENTIRE RESPONSE IS RAW JSON. Output ONLY the JSON object starting with {. No markdown, no code fences, no narration.
 
@@ -2663,13 +2886,58 @@ ${reportContent}`;
     throw new Error(`Service/location extraction failed: ${err.message}`);
   }
 
-  const services = extraction.services ?? [];
+  let services = extraction.services ?? [];
   const locations = extraction.locations ?? [];
   const platform = extraction.platform ?? 'unknown';
 
   console.log(`  Services extracted (${services.length}): ${services.join(', ')}`);
   console.log(`  Locations extracted (${locations.length}): ${locations.join(', ')}`);
   console.log(`  Platform: ${platform}`);
+
+  // --- Auto-detect service_key if 'other' and expand services from crawl data ---
+  let effectiveServiceKey = serviceKey;
+  if (serviceKey === 'other' || !serviceKey) {
+    const detectedKey = await detectServiceKey(reportContent);
+    if (detectedKey) {
+      effectiveServiceKey = detectedKey;
+      console.log(`  Auto-detected service_key: ${effectiveServiceKey}`);
+      // Update audit row so downstream phases inherit the detected key
+      await sb.from('audits').update({ service_key: effectiveServiceKey }).eq('id', auditId);
+    }
+  }
+
+  // Expand services using seed terms with evidence in crawl data
+  if (effectiveServiceKey && SERVICE_KEYWORD_SEEDS[effectiveServiceKey]) {
+    // Read internal_all.csv for URL evidence
+    let csvContent: string | null = null;
+    const internalAllPath = path.join(auditorDir, 'internal_all.csv');
+    if (fs.existsSync(internalAllPath)) {
+      csvContent = readCsvSafe(internalAllPath, false);
+    }
+
+    const beforeCount = services.length;
+    services = expandServicesFromCrawl(services, effectiveServiceKey, reportContent, csvContent);
+    if (services.length > beforeCount) {
+      console.log(`  Services expanded from ${beforeCount} to ${services.length}: ${services.slice(beforeCount).join(', ')}`);
+    }
+  }
+
+  // --- Inject client context services (full mode) ---
+  const kwClientCtx = loadClientContext(domain);
+  if (kwClientCtx?.services?.length) {
+    const existingLower = new Set(services.map((s) => s.toLowerCase()));
+    let added = 0;
+    for (const svc of kwClientCtx.services) {
+      if (!existingLower.has(svc.toLowerCase())) {
+        services.push(svc);
+        existingLower.add(svc.toLowerCase());
+        added++;
+      }
+    }
+    if (added > 0) {
+      console.log(`  Added ${added} services from client_context: ${kwClientCtx.services.join(', ')}`);
+    }
+  }
 
   if (services.length === 0) {
     console.error('  ERROR: No services extracted from AUDIT_REPORT.md — cannot build keyword matrix');
@@ -3071,6 +3339,64 @@ function buildCoverageValidationMd(domain: string, validation: { coverage: any[]
 // Phase 0: Scout — Pre-pipeline prospect discovery
 // ============================================================
 
+// ============================================================
+// Client context — injected into prompts for full-mode audits
+// ============================================================
+
+interface ClientContext {
+  business_model?: string;
+  services?: string[];
+  pricing_tier?: 'low' | 'mid' | 'high';
+  price_range?: string;
+  out_of_scope?: string[];
+  competitive_advantage?: string;
+  target_audience?: string;
+}
+
+/**
+ * Load client_context from prospect-config.json for the domain.
+ * Returns null if absent (sales mode or no config).
+ */
+function loadClientContext(domain: string): ClientContext | null {
+  const configPath = path.join(AUDITS_BASE, domain, 'prospect-config.json');
+  if (!fs.existsSync(configPath)) return null;
+  try {
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+    return config.client_context ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Build a prompt section from ClientContext for injection into agent prompts.
+ */
+function buildClientContextPrompt(ctx: ClientContext, phase: 'keyword-research' | 'jim' | 'gap' | 'michael'): string {
+  const lines: string[] = [];
+  lines.push('## Client Business Context');
+
+  if (ctx.business_model) lines.push(`Business model: ${ctx.business_model}`);
+  if (ctx.target_audience) lines.push(`Target audience: ${ctx.target_audience}`);
+  if (ctx.services?.length) lines.push(`Core services: ${ctx.services.join(', ')}`);
+  if (ctx.competitive_advantage) lines.push(`Competitive advantage: ${ctx.competitive_advantage}`);
+
+  if (phase === 'michael') {
+    if (ctx.pricing_tier) lines.push(`Pricing tier: ${ctx.pricing_tier}`);
+    if (ctx.price_range) lines.push(`Price range: ${ctx.price_range}`);
+  }
+
+  if (ctx.out_of_scope?.length) {
+    lines.push('');
+    lines.push('OUT OF SCOPE — do not recommend content or pages for these topics/models:');
+    for (const item of ctx.out_of_scope) {
+      lines.push(`- ${item}`);
+    }
+    lines.push('Filter these from your analysis using judgment, not just keyword matching.');
+  }
+
+  return lines.join('\n');
+}
+
 interface ProspectConfig {
   name: string;
   domain: string;
@@ -3078,6 +3404,7 @@ interface ProspectConfig {
   target_geos: Array<{ state: string; metros: string[] }>;
   topic_patterns: string[];
   state: string;
+  client_context?: ClientContext;
 }
 
 interface ProspectRecord {

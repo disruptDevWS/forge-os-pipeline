@@ -53,10 +53,13 @@ Phase 1 (Dwight)
       │
       ▼
 Phase 2 (KeywordResearch)
-  READS:     AUDIT_REPORT.md (Dwight), Supabase ← audits metadata,
-             scope.json (Scout, optional — pre-seeds matrix with gap keywords)
+  READS:     AUDIT_REPORT.md (Dwight), internal_all.csv (Dwight, for service expansion),
+             Supabase ← audits metadata,
+             scope.json (Scout, optional — pre-seeds matrix with gap keywords),
+             prospect-config.json → client_context.services (full mode, optional)
   PRODUCES:  keyword_research_summary.md, keyword_research_raw.json
              Supabase → audit_keywords (source='keyword_research', is_near_me)
+             Supabase → audits.service_key (updated if auto-detected from 'other')
       │
       ▼
 Phase 3 (Jim)
@@ -100,8 +103,9 @@ Phase 6 (Michael)
   READS:     research_summary.md (Jim), ranked_keywords.json (Jim),
              content_gap_analysis.md (Gap), internal_all.csv (Dwight),
              AUDIT_REPORT.md (Dwight, platform section),
-             Supabase ← audit_clusters
-  PRODUCES:  architecture_blueprint.md
+             Supabase ← audit_clusters, audit_assumptions, audit_rollups,
+             prospect-config.json → client_context (full mode, optional)
+  PRODUCES:  architecture_blueprint.md (+ ## Revenue Opportunity in sales mode)
       │
       ▼
 Phase 6.5 (Validator)                    ← skipped in sales mode
@@ -191,11 +195,13 @@ Phase 6c (sync dwight)
 **Function:** `runKeywordResearch()` | **Model:** Claude Haiku (extraction, async) + Claude Sonnet (synthesis, async)
 
 **Steps:**
-1. **Extract** — Haiku reads Dwight's AUDIT_REPORT.md, extracts services, locations, and platform. If Scout's `scope.json` exists, scout priors are injected into the extraction prompt for validation against crawl data.
-2. **Matrix build** — Generates `service × city × intent` keyword candidates, capped at `MAX_KEYWORD_MATRIX_SIZE = 200`. If `scope.json` has gap keywords, they are pre-seeded at priority 0 (survive truncation).
-3. **Volume validation** — DataForSEO bulk volume API filters zero-volume/zero-CPC keywords
-4. **Synthesis** — Sonnet produces `keyword_research_summary.md` from validated matrix
-5. **Seed Supabase** — Inserts validated keywords into `audit_keywords` with `source: 'keyword_research'` and `is_near_me` flags
+1. **Extract** — Haiku reads Dwight's AUDIT_REPORT.md, extracts services, locations, and platform. Prompt asks for sub-services from navigation, titles, URL paths (not just top-level categories). If Scout's `scope.json` exists, scout priors are injected into the extraction prompt for validation against crawl data.
+2. **Service expansion** — If `service_key` is 'other' (auto-created sales audits), `detectServiceKey()` auto-detects the vertical (Tier 1: seed matching, Tier 2: Haiku fallback) and updates the audit row. Then `expandServicesFromCrawl()` cross-references `SERVICE_KEYWORD_SEEDS[serviceKey]` against report content and CSV URLs to add sub-services with evidence in the crawl data.
+3. **Client context** — If `prospect-config.json` has `client_context.services`, those are merged into the services list (full mode only).
+4. **Matrix build** — Generates `service × city × intent` keyword candidates, capped at `MAX_KEYWORD_MATRIX_SIZE = 200`. If `scope.json` has gap keywords, they are pre-seeded at priority 0 (survive truncation).
+5. **Volume validation** — DataForSEO bulk volume API filters zero-volume/zero-CPC keywords
+6. **Synthesis** — Sonnet produces `keyword_research_summary.md` from validated matrix
+7. **Seed Supabase** — Inserts validated keywords into `audit_keywords` with `source: 'keyword_research'` and `is_near_me` flags
 
 **External APIs:**
 
@@ -232,6 +238,10 @@ Phase 6c (sync dwight)
 | DataForSEO Competitors | `/v3/dataforseo_labs/google/competitors_domain/live` | Competitor domain landscape |
 | DataForSEO Bulk Volume | `/v3/keywords_data/google_ads/search_volume/live` | Volume for seed/supplementary keywords |
 | Anthropic API (sonnet) | `callClaude()` | Generate research_summary.md narrative |
+
+**Aggregator filtering:** Before building the prompt, competitors are pre-filtered using `isAggregatorDomain()` (Yelp, HomeAdvisor, Angi, BBB, Thumbtack, social media, Wikipedia, Reddit, etc.). This prevents aggregator domains with massive ETV from dominating the competitor table and misleading analysis.
+
+**Client context:** If `prospect-config.json` has `client_context`, a `## Client Business Context` block is injected into the prompt (full mode only). Includes business model, target audience, core services, and out-of-scope reasoning constraints.
 
 **Modes:**
 - **Mode A (default):** Calls ranked-keywords + competitors for the domain. If <50 keywords returned, auto-supplements from `SERVICE_KEYWORD_SEEDS[service_key] × market_city locales` via bulk volume API.
@@ -340,6 +350,8 @@ Synthesizes all competitive intelligence + keyword data into a structured gap an
 
 **Output JSON keys:** `authority_gaps` (with `data_source` provenance), `format_gaps`, `unaddressed_gaps`, `priority_recommendations`, `summary`
 
+**Client context:** If `prospect-config.json` has `client_context`, out-of-scope items are injected as reasoning constraints ("do not surface gaps related to these topics or delivery models").
+
 **Quality rules:**
 - Near-me keywords excluded from `revenue_opportunity` estimates
 - Authority gaps include `data_source` ("SERP dominance" | "keyword overlap") for provenance
@@ -361,11 +373,16 @@ Reads ALL prior artifacts to produce a silo-based site architecture.
 - Jim: `research_summary.md` + top 200 keywords from `ranked_keywords.json`
 - Gap: `content_gap_analysis.md`
 - Dwight: `internal_all.csv` (filtered, 100 rows), Platform Observations from `AUDIT_REPORT.md`
-- Supabase: `audit_clusters` (revenue estimates)
+- Supabase: `audit_clusters` (revenue estimates), `audit_assumptions` + `audit_rollups` (sales mode revenue)
+- Client context: `prospect-config.json` → `client_context` (full mode only)
 
 All cross-phase reads use `resolveArtifactPath()` with date fallback for operational resilience.
 
-**Output:** `architecture/{date}/architecture_blueprint.md` — Executive Summary + Platform Constraints + 3-7 Silos (each with page table: URL slug, status, role, primary keyword, volume, action) + Cannibalization Warnings + Internal Linking Strategy
+**Revenue headline (sales mode):** `buildRevenueTable()` pre-computes a deterministic `## Revenue Opportunity` section from `audit_assumptions` (CR/ACV) and `audit_rollups` (total volume). Passed verbatim to Michael's prompt — no LLM interpretation of revenue numbers.
+
+**Client context (full mode):** `## Client Business Context` block injected with business model, target audience, pricing, services, and out-of-scope reasoning constraints.
+
+**Output:** `architecture/{date}/architecture_blueprint.md` — Executive Summary + Platform Constraints + 3-7 Silos (each with page table: URL slug, status, role, primary keyword, volume, action) + Cannibalization Warnings + Internal Linking Strategy. In sales mode, additionally includes `## Revenue Opportunity` section.
 
 **Structural validation:** Blueprint must contain `## Executive Summary` and at least one `### Silo N:` heading. If missing, Michael auto-retries once.
 
@@ -544,19 +561,21 @@ published    → (manual, via dashboard)
 
 ## Pipeline Server Infrastructure
 
-The NanoClaw pipeline server (`src/pipeline-server.ts`) is an HTTP server that Supabase Edge Functions call to trigger pipeline runs, write scout configs, and read scout reports.
+The pipeline server (`src/pipeline-server-standalone.ts`) is an HTTP server that Supabase Edge Functions call to trigger pipeline runs, write scout configs, and read scout reports.
 
 **Endpoints:**
 
 | Method | Path | Purpose |
 |--------|------|---------|
+| GET | `/health` | Health check (uptime, in-flight domains, env var presence) |
 | POST | `/trigger-pipeline` | Start a full/sales/prospect pipeline run |
 | POST | `/scout-config` | Write prospect-config.json to disk |
 | POST | `/scout-report` | Read scout markdown + scope.json |
+| POST | `/artifact` | Download pipeline output files |
 
-**Auth:** All endpoints require `Authorization: Bearer <PIPELINE_TRIGGER_SECRET>`.
+**Auth:** All endpoints (except `/health`) require `Authorization: Bearer <PIPELINE_TRIGGER_SECRET>`.
 
-**Startup:** `npx tsx src/index.ts --pipeline-only` (skips WhatsApp, runs only the pipeline server). Production: `nanoclaw-pipeline.service` systemd unit.
+**Startup:** `npm run dev` (local) or `npm start` (production on Railway).
 
 ### Supabase Secrets
 

@@ -138,3 +138,23 @@ Added `GET /health` to `pipeline-server.ts` returning `{ status: 'ok', uptime, i
 **2026-03-13: Dockerfile.railway for cloud deployment**
 
 `Dockerfile.railway` uses `node:22-slim` + curl + jq (for `foundational_scout.sh`). Railway volume mounts at `/app/audits` for inter-phase artifact persistence. No Claude binary, no Screaming Frog, no Java — pure Node.js + HTTP APIs.
+
+**2026-03-16: Pre-filter aggregator domains from Jim's competitor table**
+
+Jim's DataForSEO competitor data included Yelp ($1.3B ETV), HomeAdvisor, BBB, etc. as top competitors — useless for sales or strategy analysis. Added `AGGREGATOR_DOMAINS` constant and `isAggregatorDomain()` filter that removes these before building the prompt. Phase 4 (Competitors) already had its own Haiku-based classification, but Jim's output feeds the dashboard and Michael directly, so pre-filtering is needed at the data level. The filter runs on `competitors.json` extraction, not the raw file — `competitors.json` on disk stays unmodified for debugging.
+
+**2026-03-16: Evidence-based service expansion in KeywordResearch (Phase 2)**
+
+The KeywordResearch extraction prompt's "do NOT guess" rule was too conservative — boiseserviceplumbers.com extracted only "Residential Plumbing" and "Commercial Plumbing" despite offering emergency plumbing, drain cleaning, water heater repair, etc. Two fixes: (1) relaxed the extraction prompt to include sub-services from navigation, titles, and URL paths; (2) added `expandServicesFromCrawl()` which cross-references `SERVICE_KEYWORD_SEEDS[serviceKey]` against AUDIT_REPORT.md text and internal_all.csv URLs. Only seeds with evidence in the crawl are added — this prevents hallucinating services the business doesn't offer. Also added `detectServiceKey()` for auto-created sales audits where `service_key='other'`: Tier 1 counts seed term matches (min 2), Tier 2 asks Haiku (~$0.001). The detected key is written to the audit row so downstream phases inherit it.
+
+**2026-03-16: Client context as prompt reasoning constraints (not keyword filters)**
+
+Full-mode audits for clients (e.g., Summit Medical Academy) produced irrelevant content recommendations because the pipeline had no business context. Added `client_context` to `prospect-config.json` with `business_model`, `services`, `out_of_scope`, `target_audience`, etc. Injected into Phases 2/3/5/6 as prompt context. The key design choice: `out_of_scope` is injected as **reasoning constraints**, not keyword matrix filters. A keyword filter catches exact matches ("phlebotomy") but misses semantic exclusions ("online-only means no geo city pages"). The LLM needs the reasoning context to make these judgment calls. Sales mode is unaffected (no `client_context` in prospect-config).
+
+**2026-03-16: Deterministic revenue headline for sales mode (not LLM)**
+
+Sales prospects need a dollar figure. Revenue model already existed (benchmarks → audit_assumptions → CR/ACV) but only ran during sync. Added `buildRevenueTable()` which reads `audit_assumptions` and `audit_rollups` to produce a `## Revenue Opportunity` markdown table (Conservative / Expected / Optimistic). This is deterministic — no LLM call — because revenue figures end up in sales reports. A hallucinated number from Michael could misrepresent opportunity to a prospect. The table is passed verbatim to Michael's prompt so the blueprint includes it in one pass (no post-hoc file rewrite).
+
+**2026-03-16: Stripped dead WhatsApp/container code (~5,500 lines)**
+
+NanoClaw was originally built as a WhatsApp bot with Docker-isolated Claude Agent SDK containers. WhatsApp was never used in production (WSL2 baileys conflicts), and the pipeline "agents" are single-shot prompt templates calling `callClaude()` — not Agent SDK multi-turn sessions. The actual product is a pipeline toolkit: Dashboard → Supabase Edge Functions → Railway HTTP server → shell orchestrator → TypeScript phase generators → Supabase sync. Deleted: `src/index.ts` (WhatsApp orchestrator), `src/channels/whatsapp.ts` (baileys client), `src/container-runner.ts`, `src/group-queue.ts`, `src/ipc.ts`, `src/task-scheduler.ts`, `src/router.ts`, `src/mount-security.ts`, `src/db.ts` (SQLite), `src/config.ts`, `src/env.ts`, `src/types.ts`, `src/pipeline-server.ts` (replaced by standalone), `src/logger.ts`, all 7 test files, `container/` directory, `groups/` directory, and 6 WhatsApp-focused docs. Removed 12 npm dependencies (baileys, better-sqlite3, pino, qrcode-terminal, cron-parser, zod, pg, qrcode, and their @types). `src/` now contains only `pipeline-server-standalone.ts`. Risk was very low: pipeline scripts have zero imports from any deleted file.
