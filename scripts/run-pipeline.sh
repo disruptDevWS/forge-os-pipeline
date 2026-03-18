@@ -21,6 +21,8 @@
 #   agent_architecture_blueprint — Phase 6b
 #   execution_pages     — Phase 6b (UPSERT)
 #   agent_technical_pages — Phase 6c
+#   gbp_snapshots       — Phase 6d
+#   citation_snapshots  — Phase 6d
 #   audit_snapshots     — Phase 3b, 6b, 6c
 #   agent_runs          — all generation phases
 #   audits              — agent_pipeline_status updates throughout
@@ -41,6 +43,7 @@
 # Phase 6.5: Validator — Coverage validation (gap vs blueprint cross-check)
 # Phase 6b: sync michael — architecture_blueprint.md → Supabase
 # Phase 6c: sync dwight — internal_all.csv + AUDIT_REPORT.md → Supabase
+# Phase 6d: local presence — GBP lookup + SERP citation scan → gbp_snapshots, citation_snapshots
 #
 # All phases run synchronously. No NanoClaw, Docker, or WhatsApp dependency.
 #
@@ -90,7 +93,7 @@ for i in "$@"; do
 done
 
 # Phase ordering for --start-from
-PHASE_ORDER=(1 2 3 3b 3c 3d 4 5 6 6.5 6b)
+PHASE_ORDER=(1 2 3 3b 3c 3d 4 5 6 6.5 6b 6c 6d)
 should_run_phase() {
   local phase="$1"
   [[ -z "$START_FROM" ]] && return 0
@@ -279,16 +282,26 @@ if [[ "$MODE" != "sales" ]]; then
   else echo "  [SKIP] Phase 6.5: Validator"; fi
 fi
 
-# ─── Phase 6b+c: Sync remaining agents → Supabase ───────────
+# ─── Phase 6b: Sync Michael → Supabase ────────────────────────
 if should_run_phase 6b; then
 echo ""
 echo "--- Phase 6b: Sync Michael → Supabase ---"
 npx tsx scripts/sync-to-dashboard.ts --domain "$DOMAIN" --user-email "$EMAIL" --agents michael
+else echo "  [SKIP] Phase 6b: Sync Michael"; fi
 
+# ─── Phase 6c: Sync Dwight → Supabase ─────────────────────────
+if should_run_phase 6c; then
 echo ""
 echo "--- Phase 6c: Sync Dwight → Supabase ---"
 npx tsx scripts/sync-to-dashboard.ts --domain "$DOMAIN" --user-email "$EMAIL" --agents dwight
-else echo "  [SKIP] Phase 6b+c: Sync"; fi
+else echo "  [SKIP] Phase 6c: Sync Dwight"; fi
+
+# ─── Phase 6d: Local Presence Diagnostic (GBP + Citations) ────
+if should_run_phase 6d; then
+echo ""
+echo "--- Phase 6d: Local Presence Diagnostic (GBP + Citations) ---"
+npx tsx scripts/local-presence.ts --domain "$DOMAIN" --user-email "$EMAIL" --force
+else echo "  [SKIP] Phase 6d: Local Presence"; fi
 
 update_status complete
 
@@ -314,5 +327,6 @@ if [[ "$MODE" != "sales" ]]; then
 fi
 echo "  Phase 6b: sync     — architecture_blueprint.md → Supabase"
 echo "  Phase 6c: sync     — internal_all.csv + AUDIT_REPORT.md → Supabase"
+echo "  Phase 6d: local    — GBP lookup + citation scan (11 directories)"
 echo ""
 echo "Dashboard tabs: Research, Strategy, Content Factory, Technical Audit"

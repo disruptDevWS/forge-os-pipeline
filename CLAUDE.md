@@ -61,6 +61,7 @@ Phase 6  Michael         Architecture blueprint
 Phase 6.5 Validator      Coverage cross-check (skipped in sales mode)
 Phase 6b sync-michael    Architecture → Supabase
 Phase 6c sync-dwight     Technical audit → Supabase
+Phase 6d LocalPresence   GBP lookup + citation scan → Supabase
 ```
 
 Post-pipeline (on-demand, per-page): **Pam** (content briefs) → **Oscar** (HTML generation)
@@ -114,6 +115,8 @@ Run commands directly — don't tell the user to run them.
 | `scripts/generate-content.ts` | Oscar: HTML content production from briefs |
 | `scripts/run-canonicalize.ts` | Standalone Phase 3c+3d runner (re-canonicalize from Settings page) |
 | `scripts/generate-cluster-strategy.ts` | Cluster activation: Opus strategy generation (on-demand, per-cluster) |
+| `scripts/local-presence.ts` | Phase 6d: GBP lookup + SERP citation scan → gbp_snapshots, citation_snapshots |
+| `scripts/dataforseo-business.ts` | DataForSEO client: GBP lookup + SERP citation scan |
 | `scripts/track-rankings.ts` | Performance tracking: DataForSEO ranked_keywords snapshot + authority scoring |
 | `scripts/backfill-authority-scores.ts` | Backfill authority scores for existing snapshots |
 | `scripts/cron-track-all.ts` | Batch runner: tracks all completed audits weekly |
@@ -209,6 +212,12 @@ Dashboard surfaces: Performance page (authority trend chart, cluster table with 
 Dashboard admin page: Client Context, Revenue Assumptions, Pipeline Controls (re-canonicalize, track rankings, re-run pipeline), Danger Zone. `pipeline-controls` edge function routes to pipeline server endpoints.
 
 **Key decisions**: `client_context` dual-store — pipeline reads from disk (`prospect-config.json`), dashboard reads/writes `audits.client_context` JSONB. `rebuildClustersAndRollups()` preserves cluster activation status through DELETE+INSERT. `pipeline-controls` uses single edge function with action switch (not one per action).
+
+### Local Presence Diagnostic (Phase 6d)
+
+Automatic GBP lookup + citation scan across 11 directories, runs at end of every pipeline (both sales and full mode). DataForSEO Business Data for GBP, SERP API with `site:` filter for citation presence detection. Cost ~$0.026/audit. Stores `gbp_snapshots` (GBP listing data, canonical NAP, claimed status) and `citation_snapshots` (per-directory presence, NAP match booleans). Google citation row synthesized from GBP data (`data_source: 'gbp'`), others from SERP (`data_source: 'serp'`).
+
+**Key decisions**: SERP citation scan (no BrightLocal vendor). GBP canonical NAP = source of truth for NAP comparison. `gbp_snapshots` always upserted even when `listing_found: false` (missing GBP = highest-value sales signal). Runs in both modes because local presence data drives sales conversions.
 
 ### Infrastructure
 

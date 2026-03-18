@@ -128,6 +128,13 @@ Phase 6b (sync michael)
 Phase 6c (sync dwight)
   READS:     internal_all.csv, AUDIT_REPORT.md
   PRODUCES:  Supabase → agent_technical_pages, audit_snapshots
+      │
+      ▼
+Phase 6d (Local Presence)
+  READS:     Supabase ← audits (business_name, market_city, market_state),
+             client_profiles (canonical NAP fallback)
+  PRODUCES:  Supabase → gbp_snapshots, citation_snapshots (11 directories)
+  EXTERNAL:  DataForSEO Business Data (GBP lookup), DataForSEO SERP (citation scan)
 ```
 
 ---
@@ -442,6 +449,46 @@ Cross-checks Gap's identified gaps against Michael's blueprint to verify coverag
 |-------|---------|
 | `agent_technical_pages` | Per-page technical data (status_code, word_count, title, h1, meta_desc, depth, indexability, inlinks) |
 | `audit_snapshots` | Parsed AUDIT_REPORT.md sections (executive_summary, prioritized_fixes, agentic_readiness, structured_data_issues, heading_issues, security_issues) |
+
+---
+
+### Phase 6d: Local Presence Diagnostic (GBP + Citations)
+
+**Script:** `scripts/local-presence.ts` | **No LLM** — pure DataForSEO API calls
+
+**Invocation:** `npx tsx scripts/local-presence.ts --domain <domain> --user-email <email> [--force]`
+
+**Runs in:** Both sales and full mode (always with `--force` when inline pipeline).
+
+**Steps:**
+1. **Resolve business identity** — Fallback chain: `audit.business_name` → `client_profiles.canonical_name` → domain-derived name
+2. **GBP lookup** — DataForSEO `/v3/business_data/google/my_business_info/live` → match confidence, category, rating, reviews, claimed status, canonical NAP
+3. **Upsert `gbp_snapshots`** — Always, even if `listing_found: false` (unclaimed/missing GBP is a high-value sales signal)
+4. **Synthesize Google citation** — Derive `citation_snapshots` row from GBP data (`data_source: 'gbp'`)
+5. **SERP citation scan** — For each of 10 directories: DataForSEO SERP API with `site:` filter → presence detection + NAP extraction from snippets
+6. **NAP comparison** — Fuzzy name match, digits-only phone match, contains-based address match
+7. **Batch upsert `citation_snapshots`** — 11 rows (Google + 10 directories)
+
+**External APIs:**
+
+| API | Endpoint | Purpose | Cost |
+|-----|----------|---------|------|
+| DataForSEO Business Data | `/v3/business_data/google/my_business_info/live` | GBP listing lookup | ~$0.005 |
+| DataForSEO SERP | `/v3/serp/google/organic/live` | Citation scan per directory (×10) | ~$0.002 each |
+
+**Total cost:** ~$0.026/audit
+
+**Citation directories** (11 total): Google (from GBP), Apple Maps, Bing Places, Facebook, Yelp, BBB, Angi, Thumbtack, Foursquare, Yellow Pages, Manta
+
+**Supabase writes:**
+
+| Table | Purpose |
+|-------|---------|
+| `gbp_snapshots` | GBP listing data, canonical NAP, claimed status, rating/reviews |
+| `citation_snapshots` | Per-directory presence, listing URL, NAP match booleans |
+| `agent_runs` | agent_name='local_presence' |
+
+**Recency:** 6-day check (same as track-rankings). `--force` overrides.
 
 ---
 
