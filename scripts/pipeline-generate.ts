@@ -3358,20 +3358,25 @@ REMINDER: Your response IS the JSON — start with { and end with }. No preamble
   fs.writeFileSync(outPath, validationMd, 'utf-8');
   console.log(`  Written coverage_validation.md to ${path.relative(process.cwd(), outDir)}/`);
 
-  // Write to Supabase — DELETE + INSERT
-  await sb.from('audit_coverage_validation').delete().eq('audit_id', auditId);
-  if (coverage.length > 0) {
-    const rows = coverage.map((c) => ({
-      audit_id: auditId,
-      gap_topic: c.gap_topic,
-      gap_type: c.gap_type,
-      blueprint_page: c.blueprint_page ?? null,
-      status: c.status,
-      notes: c.notes ?? null,
-    }));
-    const { error } = await sb.from('audit_coverage_validation').insert(rows);
-    if (error) console.warn(`  Warning: Supabase insert failed: ${error.message}`);
-    else console.log(`  Inserted ${rows.length} rows into audit_coverage_validation`);
+  // Write to Supabase — pre-check table exists, then DELETE + INSERT
+  const { error: probeErr } = await sb.from('audit_coverage_validation').select('id', { count: 'exact', head: true }).limit(0);
+  if (probeErr) {
+    console.warn(`  Warning: audit_coverage_validation table not available (${probeErr.message}) — skipping DB write`);
+  } else {
+    await sb.from('audit_coverage_validation').delete().eq('audit_id', auditId);
+    if (coverage.length > 0) {
+      const rows = coverage.map((c) => ({
+        audit_id: auditId,
+        gap_topic: c.gap_topic,
+        gap_type: c.gap_type,
+        blueprint_page: c.blueprint_page ?? null,
+        status: c.status,
+        notes: c.notes ?? null,
+      }));
+      const { error } = await sb.from('audit_coverage_validation').insert(rows);
+      if (error) console.warn(`  Warning: Supabase insert failed: ${error.message}`);
+      else console.log(`  Inserted ${rows.length} rows into audit_coverage_validation`);
+    }
   }
 
   console.log(`  Validator complete — ${addressed}/${coverage.length} gaps addressed`);
@@ -4000,6 +4005,66 @@ interface QAResult {
   feedback: string;
 }
 
+/**
+ * Deterministic pre-flight checks that run before LLM QA.
+ * Returns failed checks (empty array = all passed).
+ */
+async function runDeterministicChecks(
+  sb: SupabaseClient,
+  auditId: string,
+  phase: string,
+): Promise<Array<{ name: string; passed: boolean; feedback: string }>> {
+  const failures: Array<{ name: string; passed: boolean; feedback: string }> = [];
+
+  if (phase === 'jim') {
+    // Phase 2 QA: fail if 0 validated keywords were seeded
+    const { count } = await sb
+      .from('audit_keywords')
+      .select('id', { count: 'exact', head: true })
+      .eq('audit_id', auditId)
+      .eq('source', 'keyword_research');
+    if ((count ?? 0) === 0) {
+      failures.push({
+        name: 'keyword_seed_count',
+        passed: false,
+        feedback: 'Phase 2 produced 0 validated keywords — keyword matrix likely misconfigured or geo scope yielded no volume',
+      });
+    }
+  }
+
+  // After Phase 3d: warn if cluster count dropped >50% from canonical topic count
+  if (phase === 'michael') {
+    const { count: topicCount } = await sb
+      .from('audit_keywords')
+      .select('canonical_key', { count: 'exact', head: true })
+      .eq('audit_id', auditId)
+      .not('canonical_key', 'is', null);
+
+    const { count: clusterCount } = await sb
+      .from('audit_clusters')
+      .select('id', { count: 'exact', head: true })
+      .eq('audit_id', auditId);
+
+    // Get distinct canonical_key count for comparison
+    const { data: distinctKeys } = await sb
+      .from('audit_keywords')
+      .select('canonical_key')
+      .eq('audit_id', auditId)
+      .not('canonical_key', 'is', null);
+    const uniqueTopics = new Set((distinctKeys ?? []).map((r: any) => r.canonical_key)).size;
+
+    if (uniqueTopics > 0 && (clusterCount ?? 0) < uniqueTopics * 0.5) {
+      failures.push({
+        name: 'cluster_topic_ratio',
+        passed: false,
+        feedback: `Cluster count (${clusterCount}) is less than 50% of canonical topic count (${uniqueTopics}) — rebuild may be filtering too aggressively`,
+      });
+    }
+  }
+
+  return failures;
+}
+
 async function runQA(
   sb: SupabaseClient,
   auditId: string,
@@ -4009,6 +4074,30 @@ async function runQA(
 ): Promise<QAResult> {
   const rubric = QA_RUBRICS[phase];
   if (!rubric) throw new Error(`No QA rubric defined for phase: ${phase}`);
+
+  // Run deterministic pre-flight checks
+  const deterministicFailures = await runDeterministicChecks(sb, auditId, phase);
+  if (deterministicFailures.length > 0) {
+    for (const f of deterministicFailures) {
+      console.log(`  QA DETERMINISTIC FAIL: ${f.name} — ${f.feedback}`);
+    }
+    const result: QAResult = {
+      verdict: 'fail',
+      checks: deterministicFailures,
+      feedback: deterministicFailures.map((f) => f.feedback).join('; '),
+    };
+    try {
+      await sb.from('audit_qa_results').insert({
+        audit_id: auditId,
+        phase,
+        verdict: result.verdict,
+        checks: result.checks,
+        feedback: result.feedback,
+        attempt_number: attemptNumber,
+      });
+    } catch { /* non-fatal */ }
+    return result;
+  }
 
   // Resolve artifact path
   const baseDir = path.join(AUDITS_BASE, domain, rubric.artifactSubdir);
