@@ -2,11 +2,17 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Session Start
+
+**At the start of every new session**, read these two documents before doing any work:
+1. [docs/PIPELINE.md](docs/PIPELINE.md) — authoritative phase contract (who owns what data, trigger paths, Supabase table ownership)
+2. [docs/DECISIONS.md](docs/DECISIONS.md) — why non-obvious choices were made (check here before "fixing" something)
+
+These documents are the source of truth. If a phase responsibility changes, update PIPELINE.md in the same commit. If a non-obvious choice is made, add an entry to DECISIONS.md.
+
 ## Quick Context
 
 NanoClaw is an **SEO audit pipeline toolkit**. Dashboard buttons trigger Supabase Edge Functions, which POST to a Node.js HTTP server on Railway, which spawns a shell orchestrator that runs TypeScript phase generators, then syncs results back to Supabase tables for the dashboard to display.
-
-**Before modifying pipeline code**, read [docs/PIPELINE.md](docs/PIPELINE.md) (authoritative phase contract — who owns what data) and [docs/DECISIONS.md](docs/DECISIONS.md) (why non-obvious choices were made). If a phase responsibility changes, update PIPELINE.md in the same commit.
 
 ## Architecture
 
@@ -108,7 +114,9 @@ Run commands directly — don't tell the user to run them.
 | `scripts/generate-content.ts` | Oscar: HTML content production from briefs |
 | `scripts/run-canonicalize.ts` | Standalone Phase 3c+3d runner (re-canonicalize from Settings page) |
 | `scripts/generate-cluster-strategy.ts` | Cluster activation: Opus strategy generation (on-demand, per-cluster) |
-| `scripts/track-rankings.ts` | Performance tracking: DataForSEO ranked_keywords snapshot |
+| `scripts/track-rankings.ts` | Performance tracking: DataForSEO ranked_keywords snapshot + authority scoring |
+| `scripts/backfill-authority-scores.ts` | Backfill authority scores for existing snapshots |
+| `scripts/cron-track-all.ts` | Batch runner: tracks all completed audits weekly |
 | `scripts/client-context.ts` | Shared utility: `loadClientContext()`, `buildClientContextPrompt()` |
 | `scripts/update-pipeline-status.ts` | Updates audit status in Supabase |
 | `scripts/run-migration.ts` | Database migration runner |
@@ -153,3 +161,57 @@ audits/{domain}/           # Pipeline artifacts per domain (dated subdirs)
 3. If the phase writes to Supabase, add a sync function in `scripts/sync-to-dashboard.ts`
 4. If QA-gated, add a rubric in the `QA_RUBRICS` object and a `runQA()` call after the phase
 5. Update `docs/PIPELINE.md` — this is a contract, not optional documentation
+
+## Completed
+
+Summary of what has been built and the key decisions behind each system. For full details, see [docs/PIPELINE.md](docs/PIPELINE.md) (contracts) and [docs/DECISIONS.md](docs/DECISIONS.md) (rationale).
+
+### Core Pipeline (Phases 0–6c)
+
+12-phase SEO audit pipeline that runs end-to-end in ~15 minutes per domain. Each phase is a single-shot prompt template — not a multi-turn agent. Phases produce disk artifacts and sync to Supabase tables. Shell orchestrator (`run-pipeline.sh`) handles sequencing, QA gates, and mode flags (full/sales/prospect).
+
+**Key decisions**: Phases are prompt templates not agents (deterministic, debuggable). QA agent uses Haiku rubrics to gate generation phases — ENHANCE re-runs, FAIL halts. Three-tier model policy: Haiku for classification, Sonnet for synthesis, Opus for strategic judgment.
+
+### Keyword Pipeline (Phases 2–3d)
+
+Service × city × intent keyword matrix (Phase 2) → DataForSEO research + narrative (Phase 3) → Supabase sync with revenue modeling (Phase 3b) → semantic canonicalization via Haiku (Phase 3c) → cluster rebuild with canonical keys (Phase 3d).
+
+**Key decisions**: Canonical keys are geo-agnostic ("water_heater_repair" not "boise_water_heater_repair"). Phase 3d exists because 3b builds clusters before canonical_key exists. Revenue model is three-tier (low/mid/high) from CR × ACV × delta_traffic. Near-me and navigational keywords excluded from striking distance via three-layer defense.
+
+### Scout (Phase 0)
+
+Prospect qualification at $2/run. DataForSEO ranked keywords + bulk volume → Haiku topic extraction → Sonnet report. Produces `scope.json` (Jim-compatible seed data) that persists through conversion. No crawl — Dwight handles that in Phase 1.
+
+**Key decisions**: Scout uses `prospects` table (not `audits`). Prospect mode exits after Scout. scope.json consumed as optional priors by KeywordResearch (gap keywords pre-seeded at priority 0).
+
+### Content Factory (Pam + Oscar)
+
+On-demand, per-page content production. Pam generates briefs (metadata + JSON-LD schema + outline) from execution_pages. Oscar produces HTML from briefs. Both poll Supabase request tables.
+
+**Key decisions**: Oscar reads from DB only (disk fallback removed). Pam uses sentinel markers to parse three output sections from a single Claude call.
+
+### Cluster Activation + Strategy
+
+On-demand per-cluster. Single Opus call (~$0.15-0.50) produces strategy document. `/activate-cluster` gates content production — only pages in active clusters get `cluster_active=true` on `execution_pages`.
+
+**Key decisions**: Opus justified because a misdirected cluster strategy cascades into weeks of wasted content. Deactivation is instant (2 UPDATEs, no LLM). `cluster_strategy` table stores the strategy document per cluster.
+
+### Performance Tracking + Authority Scoring
+
+Weekly ranking snapshots via DataForSEO `ranked_keywords/live` (~$0.05/call). Position-weighted authority score per cluster: pos 1-3=1.0, 4-10=0.6, 11-20=0.3, 21-30=0.1, 31+=0.05, unranked=0.0. Denominator includes all keywords (penalizes coverage gaps, not just poor positions). Stored in `cluster_performance_snapshots` (historical) + `audit_clusters` (current).
+
+Dashboard surfaces: Performance page (authority trend chart, cluster table with authority/delta columns, weighted-avg summary), Clusters page (authority/delta columns, "Opportunity" badge on best inactive cluster with authority < 50).
+
+**Key decisions**: First `ranking_snapshots` entry = effective baseline (not `baseline_snapshots`). `ranking_deltas` SQL view computes deltas server-side. `avg_position` excludes unranked keywords. Weekly cron with 6-day recency check prevents double-runs.
+
+### Settings Page
+
+Dashboard admin page: Client Context, Revenue Assumptions, Pipeline Controls (re-canonicalize, track rankings, re-run pipeline), Danger Zone. `pipeline-controls` edge function routes to pipeline server endpoints.
+
+**Key decisions**: `client_context` dual-store — pipeline reads from disk (`prospect-config.json`), dashboard reads/writes `audits.client_context` JSONB. `rebuildClustersAndRollups()` preserves cluster activation status through DELETE+INSERT. `pipeline-controls` uses single edge function with action switch (not one per action).
+
+### Infrastructure
+
+Pipeline server (`pipeline-server-standalone.ts`) on port 3847, 9 endpoints. Supabase Edge Functions as auth layer (2 patterns: `validateSuperAdmin` for admin ops, `resolveAuthContext` for user ops). DataForSEO OnPage API replaced Screaming Frog. Anthropic SDK replaced Claude CLI binary. `loadEnv()` falls through to `process.env` for Railway deployment.
+
+**Key decisions**: 409 from pipeline server = success in edge function (already running). `PIPELINE_BASE_URL` secret serves all endpoints. Public IP exposure is temporary — Cloudflare Tunnel recommended.

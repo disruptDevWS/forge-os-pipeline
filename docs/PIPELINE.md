@@ -602,7 +602,9 @@ Ranking performance tracking runs independently of the audit pipeline — weekly
 | `page_performance` | Post-publication page tracking (avg position, keyword gains) |
 | `ranking_deltas` (VIEW) | SQL-computed baseline vs latest position deltas per keyword |
 
-**Migration:** `scripts/performance-migration.sql`
+**Migration:** `scripts/performance-migration.sql` + `scripts/authority-score-migration.sql`
+
+**Backfill:** `npx tsx scripts/backfill-authority-scores.ts [--domain <d>]` — computes authority scores for existing `cluster_performance_snapshots` and updates `audit_clusters`. Uses `audit_keywords` as denominator (not snapshot data) since older snapshots may be incomplete. Processes snapshot dates chronologically so deltas are correct.
 
 **RLS:** All tables: SELECT for audit owners (`audits.user_id = auth.uid()`). INSERT/UPDATE/DELETE restricted to service_role.
 
