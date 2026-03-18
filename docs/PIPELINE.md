@@ -800,7 +800,7 @@ The pipeline server currently runs on a residential ISP connection. Supabase Edg
 | `audits` | All agents, all syncs | Jim, sync-jim, sync-michael, sync-dwight |
 | `audits.client_context` (JSONB) | Settings page (dashboard reads/writes) | Settings page `useUpdateClientContext`. Pipeline reads from disk (`prospect-config.json`), not this column |
 | `audit_keywords` | Canonicalize, Competitors, Gap, sync-jim, sync-michael | KeywordResearch (INSERT, source='keyword_research'), sync-jim (DELETE+INSERT, source='ranked'), Canonicalize (UPDATE), sync-michael (UPDATE cluster) |
-| `audit_clusters` | Gap, Michael, Clusters page | sync-jim (preliminary), rebuild-clusters Phase 3d (canonical, authoritative), generate-cluster-strategy.ts (status UPDATE) |
+| `audit_clusters` | Gap, Michael, Clusters page (status + authority_score), Performance page (authority_score) | sync-jim (preliminary), rebuild-clusters Phase 3d (canonical, authoritative), generate-cluster-strategy.ts (status UPDATE), track-rankings.ts (authority_score UPDATE) |
 | `audit_rollups` | — | sync-jim (preliminary), rebuild-clusters Phase 3d (canonical, authoritative) |
 | `audit_assumptions` | sync-jim, rebuild-clusters, Settings page | Dashboard `useCreateAudit` (primary), `ensureAssumptions()` in sync (fallback from benchmarks), Settings page `useUpdateAssumptions` |
 | `ctr_models` | sync-jim, rebuild-clusters | — (seeded) |
@@ -823,7 +823,7 @@ The pipeline server currently runs on a residential ISP connection. Supabase Edg
 | `agent_implementation_pages` | — | sync-pam (DELETE+INSERT, legacy compat) |
 | `cluster_strategy` | Cluster activation dashboard | generate-cluster-strategy.ts (UPSERT) |
 | `ranking_snapshots` | Performance tab, ranking_deltas view | track-rankings.ts (UPSERT) |
-| `cluster_performance_snapshots` | Performance tab | track-rankings.ts (UPSERT) |
+| `cluster_performance_snapshots` | Performance page (authority trend chart), Clusters page (authority delta) | track-rankings.ts (UPSERT) |
 | `page_performance` | Performance tab | track-rankings.ts (UPSERT) |
 
 ## Disk Artifact Reference
