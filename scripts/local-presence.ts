@@ -233,14 +233,39 @@ async function runLocalPresence(cliArgs: CliArgs) {
     console.log(`  WARNING: No business_name found, using domain-derived: "${businessName}"`);
   }
 
-  const city = audit.market_city?.split(',')[0]?.trim() || '';
-  const stateRaw = audit.market_state || '';
-  const state = expandState(stateRaw);
-  if (!city || !state) {
-    console.log(`  WARNING: market_city or market_state missing on audit. GBP lookup may be less precise.`);
+  // Resolve city/state for GBP lookup
+  // For state-mode audits, market_city is often empty — fall back to client_profiles address
+  let city = audit.market_city?.split(',')[0]?.trim() || '';
+  let stateRaw = audit.market_state || '';
+
+  if (!city) {
+    // Try client_profiles canonical_address for city
+    const { data: profile } = await sb
+      .from('client_profiles')
+      .select('canonical_address')
+      .eq('audit_id', audit.id)
+      .maybeSingle();
+    if (profile?.canonical_address) {
+      // Parse "123 Main St, Boise, ID 83702" → city = "Boise", state = "ID"
+      const parts = profile.canonical_address.split(',').map((p: string) => p.trim());
+      if (parts.length >= 2) {
+        city = parts[parts.length - 2] || ''; // second-to-last = city
+        const stateZip = parts[parts.length - 1] || '';
+        const stateMatch = stateZip.match(/^([A-Z]{2})\b/);
+        if (stateMatch && !stateRaw) stateRaw = stateMatch[1];
+      }
+      if (city) console.log(`  City from client_profiles address: ${city}`);
+    }
   }
 
-  console.log(`  Business: "${businessName}", Location: ${city}, ${state}`);
+  const state = expandState(stateRaw);
+  if (!city && !state) {
+    console.log(`  WARNING: No city or state available for GBP lookup. Results may be imprecise.`);
+  } else if (!city) {
+    console.log(`  WARNING: No city available — GBP lookup will use state only.`);
+  }
+
+  console.log(`  Business: "${businessName}", Location: ${city ? `${city}, ` : ''}${state}`);
 
   // 4. Fetch GBP listing
   console.log('\n--- GBP Lookup ---');
@@ -324,7 +349,7 @@ async function runLocalPresence(cliArgs: CliArgs) {
 
   // 7. Scan citation directories via SERP
   console.log('\n--- Citation Scan (SERP) ---');
-  const cityState = `${city}, ${state}`;
+  const cityState = city && state ? `${city}, ${state}` : city || state || '';
   const citationResults = await scanCitations(env, businessName, cityState, canonicalNAP);
 
   // 8. Combine Google + SERP citations (11 total)

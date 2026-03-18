@@ -2947,10 +2947,45 @@ ${reportContent}`;
     console.error('  Check the audit report for service page URLs, H1s, or structured data');
     return;
   }
-  if (locations.length === 0) {
-    console.error('  ERROR: No locations extracted from AUDIT_REPORT.md — cannot build keyword matrix');
-    console.error('  Check the audit report for areaServed markup, service area pages, or city mentions');
-    return;
+
+  // --- Resolve locations from geo_mode + audit metadata ---
+  // For city/metro: use kwGeo.locales (from audit row), fall back to Haiku extraction
+  // For state: three buckets — national unmodified, state-level, top cities per state
+  // For national: national unmodified only (no geo modifier)
+  let effectiveLocations: string[] = [];
+  const geoMode = kwGeo.mode;
+
+  if (geoMode === 'city' || geoMode === 'metro') {
+    // Use structured geo from audit row; fall back to Haiku extraction
+    effectiveLocations = kwGeo.locales.length > 0 ? kwGeo.locales : locations;
+    if (kwGeo.locales.length > 0 && locations.length > 0) {
+      // Merge any Haiku-discovered cities not in the audit row (crawl may reveal new service areas)
+      const existing = new Set(kwGeo.locales.map((l) => l.toLowerCase()));
+      for (const loc of locations) {
+        if (!existing.has(loc.toLowerCase())) {
+          effectiveLocations.push(loc);
+        }
+      }
+    }
+    console.log(`  Locations (${geoMode}): ${effectiveLocations.join(', ')} (source: ${kwGeo.locales.length > 0 ? 'audit row' : 'haiku extraction'})`);
+  } else if (geoMode === 'state') {
+    // State mode: locales are state names — used for state-level variants
+    // Haiku-extracted cities supplement as top-city hints
+    console.log(`  Geo mode: state — target states: ${kwGeo.locales.join(', ')}`);
+    if (locations.length > 0) {
+      console.log(`  City hints from crawl: ${locations.join(', ')}`);
+    }
+  } else {
+    // National mode: no geo modifier
+    console.log('  Geo mode: national — generating unmodified national terms');
+  }
+
+  if (geoMode === 'city' || geoMode === 'metro') {
+    if (effectiveLocations.length === 0) {
+      console.error('  ERROR: No locations available — cannot build keyword matrix');
+      console.error('  Set market_geos on the audit row, or ensure the site has city mentions');
+      return;
+    }
   }
 
   // --- Step 2: Build the matrix ---
@@ -2965,50 +3000,88 @@ ${reportContent}`;
 
   const matrix: MatrixKeyword[] = [];
   let priorityCounter = 0;
+  const seen = new Set<string>();
+
+  const addKw = (keyword: string, service: string, city: string, intent: MatrixKeyword['intent'], isNearMe: boolean) => {
+    const kwLower = keyword.toLowerCase();
+    if (seen.has(kwLower)) return;
+    seen.add(kwLower);
+    matrix.push({ keyword: kwLower, service, city, intent, is_near_me: isNearMe, priority: priorityCounter++ });
+  };
 
   // Pre-seed from scout gap keywords (priority 0+, survives truncation)
   if (scopeData?.gap_summary?.top_opportunities?.length) {
     for (const opp of scopeData.gap_summary.top_opportunities) {
-      const kwLower = opp.keyword.toLowerCase();
-      if (!matrix.some((m) => m.keyword === kwLower)) {
-        matrix.push({
-          keyword: kwLower, service: opp.topic || 'scout', city: '',
-          intent: 'commercial', is_near_me: kwLower.includes(' near me'),
-          priority: priorityCounter++,
-        });
-      }
+      addKw(opp.keyword, opp.topic || 'scout', '', 'commercial', opp.keyword.toLowerCase().includes(' near me'));
     }
     console.log(`  Pre-seeded ${matrix.length} keywords from scout gap_summary`);
   }
 
-  // Primary city is the first (usually the business's main market)
-  const primaryCity = locations[0];
-  const secondaryCities = locations.slice(1);
-
-  for (const service of services) {
-    const svcLower = service.toLowerCase();
-
-    // Commercial intent — primary city first
-    matrix.push({ keyword: `${svcLower} ${primaryCity.toLowerCase()}`, service, city: primaryCity, intent: 'commercial', is_near_me: false, priority: priorityCounter++ });
-
-    // Commercial intent — secondary cities
-    for (const city of secondaryCities) {
-      matrix.push({ keyword: `${svcLower} ${city.toLowerCase()}`, service, city, intent: 'commercial', is_near_me: false, priority: priorityCounter++ });
+  if (geoMode === 'state' || geoMode === 'national') {
+    // ── State/National mode: three keyword buckets ──
+    // Bucket 1 (highest priority): National unmodified terms
+    // These capture the highest-volume head terms for online/multi-state providers
+    for (const service of services) {
+      const svc = service.toLowerCase();
+      addKw(svc, service, '', 'commercial', false);
+      addKw(`${svc} online`, service, '', 'commercial', false);
+      addKw(`best ${svc}`, service, '', 'transactional', false);
+      addKw(`${svc} cost`, service, '', 'informational', false);
+      addKw(`${svc} near me`, service, '', 'commercial', true);
     }
 
-    // Informational intent
-    for (const city of locations) {
-      matrix.push({ keyword: `${svcLower} cost ${city.toLowerCase()}`, service, city, intent: 'informational', is_near_me: false, priority: priorityCounter++ });
-    }
+    if (geoMode === 'state') {
+      // Bucket 2: State-level variants
+      for (const service of services) {
+        const svc = service.toLowerCase();
+        for (const st of kwGeo.locales) {
+          addKw(`${svc} ${st}`, service, st, 'commercial', false);
+          addKw(`best ${svc} ${st}`, service, st, 'transactional', false);
+        }
+      }
 
-    // Transactional intent
-    for (const city of locations) {
-      matrix.push({ keyword: `best ${svcLower} ${city.toLowerCase()}`, service, city, intent: 'transactional', is_near_me: false, priority: priorityCounter++ });
-      matrix.push({ keyword: `${svcLower} contractor ${city.toLowerCase()}`, service, city, intent: 'transactional', is_near_me: false, priority: priorityCounter++ });
+      // Bucket 3: Top city variants from Haiku extraction (if any cities found in crawl)
+      // These capture local intent even for online providers (campus/hybrid searches)
+      if (locations.length > 0) {
+        const topCities = locations.slice(0, 3); // cap at 3 cities to control matrix size
+        for (const service of services) {
+          const svc = service.toLowerCase();
+          for (const city of topCities) {
+            addKw(`${svc} ${city}`, service, city, 'commercial', false);
+          }
+        }
+      }
     }
+  } else {
+    // ── City/Metro mode: existing geo × service matrix ──
+    const primaryCity = effectiveLocations[0];
+    const secondaryCities = effectiveLocations.slice(1);
 
-    // Near-me variant — category signal only, flagged from the start
-    matrix.push({ keyword: `${svcLower} near me`, service, city: '', intent: 'commercial', is_near_me: true, priority: priorityCounter++ });
+    for (const service of services) {
+      const svcLower = service.toLowerCase();
+
+      // Commercial intent — primary city first
+      addKw(`${svcLower} ${primaryCity}`, service, primaryCity, 'commercial', false);
+
+      // Commercial intent — secondary cities
+      for (const city of secondaryCities) {
+        addKw(`${svcLower} ${city}`, service, city, 'commercial', false);
+      }
+
+      // Informational intent
+      for (const city of effectiveLocations) {
+        addKw(`${svcLower} cost ${city}`, service, city, 'informational', false);
+      }
+
+      // Transactional intent
+      for (const city of effectiveLocations) {
+        addKw(`best ${svcLower} ${city}`, service, city, 'transactional', false);
+        addKw(`${svcLower} contractor ${city}`, service, city, 'transactional', false);
+      }
+
+      // Near-me variant
+      addKw(`${svcLower} near me`, service, '', 'commercial', true);
+    }
   }
 
   // Cap at mode-aware limit
@@ -3153,7 +3226,7 @@ REMINDER: Your response IS the JSON — start with { and end with }. No preamble
         keyword: opp.keyword,
         search_volume: opp.volume ?? 0,
         cpc: opp.cpc ?? 0,
-        rank_pos: null,
+        rank_pos: 0,
         intent: opp.intent ?? null,
         is_near_me: opp.is_near_me ?? false,
         source: 'keyword_research',
