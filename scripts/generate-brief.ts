@@ -286,6 +286,33 @@ async function gatherContext(sb: SupabaseClient, req: PamRequest) {
     console.log(`  WARNING: No market context for /${req.page_url} — brief generated without striking distance data`);
   }
 
+  // 7b. Strategy brief — Visibility Posture + Architecture Directive
+  let strategyContext = '';
+  try {
+    const researchBase2 = path.join(AUDITS_BASE, req.domain, 'research');
+    const researchDate2 = getLatestDateDir(researchBase2);
+    if (researchDate2) {
+      const briefPath = path.join(researchBase2, researchDate2, 'strategy_brief.md');
+      if (fs.existsSync(briefPath)) {
+        const briefContent = fs.readFileSync(briefPath, 'utf-8');
+        const extractSection = (heading: string) => {
+          const re = new RegExp(`## ${heading}\\n([\\s\\S]*?)(?=\\n## |\\n---\\s*$|$)`);
+          return re.exec(briefContent)?.[1]?.trim() ?? '';
+        };
+        const posture = extractSection('Visibility Posture');
+        const archDirective = extractSection('Architecture Directive');
+        const parts: string[] = [];
+        if (posture) parts.push(`**Visibility Posture:** ${posture}`);
+        if (archDirective) parts.push(`**Architecture Directive:**\n${archDirective}`);
+        if (parts.length > 0) {
+          strategyContext = parts.join('\n\n');
+        }
+      }
+    }
+  } catch {
+    // Strategy brief is optional
+  }
+
   // 8. Content gap data from Phase 5 (Gap agent)
   let authorityGaps: any[] = [];
   let formatGaps: any[] = [];
@@ -326,7 +353,7 @@ async function gatherContext(sb: SupabaseClient, req: PamRequest) {
     // Table may not exist yet
   }
 
-  return { auditMeta, brief, keywords, siblings, blueprintExcerpt, siloName, serpEnrichment, clientProfile, authorityGaps, formatGaps, marketContext };
+  return { auditMeta, brief, keywords, siblings, blueprintExcerpt, siloName, serpEnrichment, clientProfile, authorityGaps, formatGaps, marketContext, strategyContext };
 }
 
 function escapeRegex(s: string): string {
@@ -596,7 +623,7 @@ function buildPrompt(
   req: PamRequest,
   ctx: Awaited<ReturnType<typeof gatherContext>>
 ): string {
-  const { auditMeta, brief, keywords, siblings, blueprintExcerpt, siloName, clientProfile, authorityGaps, formatGaps, marketContext } = ctx;
+  const { auditMeta, brief, keywords, siblings, blueprintExcerpt, siloName, clientProfile, authorityGaps, formatGaps, marketContext, strategyContext } = ctx;
   const slug = req.page_url.replace(/^\/+/, '');
   const actionType = req.action_type || 'create';
   const pageRole = req.page_role ?? brief?.role ?? 'service page';
@@ -651,7 +678,9 @@ ${keywordTable}
 ${siblingsTable}
 IMPORTANT: Your content outline MUST include internal links to/from these sibling pages. Each link should use descriptive anchor text matching the target page's primary keyword, not generic text like "learn more."
 
-${marketContext ? `## Market Context
+${strategyContext ? `## Strategy Brief (Phase 1b)
+${strategyContext}
+` : ''}${marketContext ? `## Market Context
 Use striking distance keywords to identify where the client has existing ranking momentum that this page can accelerate. Reference key takeaways when writing competitive differentiation and content direction for each section.
 
 ${marketContext}` : ''}

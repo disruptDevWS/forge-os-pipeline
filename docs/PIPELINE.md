@@ -58,8 +58,17 @@ Phase 1 (Dwight)
              Copies internal_all.csv → architecture/
       │
       ▼
+Phase 1b (Strategy Brief)
+  READS:     AUDIT_REPORT.md (Dwight), scope.json + scout-report.md (Scout, optional),
+             prospect-config.json → client_context (optional),
+             Supabase ← client_profiles (optional), audits metadata
+  PRODUCES:  strategy_brief.md (disk — research/{date}/)
+             Supabase → agent_runs (agent_name='strategy_brief')
+      │
+      ▼
 Phase 2 (KeywordResearch)
   READS:     AUDIT_REPORT.md (Dwight), internal_all.csv (Dwight, for service expansion),
+             strategy_brief.md (Phase 1b, optional — keyword directive injected into synthesis),
              Supabase ← audits metadata,
              scope.json (Scout, optional — pre-seeds matrix with gap keywords),
              prospect-config.json → client_context.services (full mode, optional)
@@ -200,6 +209,28 @@ Phase 6d (Local Presence)
 **Prompt framing:** Uses "YOUR ENTIRE RESPONSE IS THE REPORT" top/bottom framing to prevent narration. `validateArtifact()` enforces ≥5000 byte minimum and checks for conversational patterns.
 
 **Supabase writes:** `agent_runs`, `audit_snapshots` (agent='dwight')
+
+---
+
+### Phase 1b: Strategy Brief
+
+**Script:** `scripts/strategy-brief.ts` | **Model:** Claude Sonnet
+
+**Steps:**
+1. **Gather** — Loads AUDIT_REPORT.md (cross-date fallback), scope.json + scout markdown (optional), client_context from prospect-config.json (optional), client_profiles from Supabase (optional), audit metadata (geo_mode, market_geos, service_key)
+2. **Synthesize** — Single Sonnet call produces `strategy_brief.md` with four sections: Visibility Posture, Keyword Research Directive, Architecture Directive, Risk Flags
+3. **Write** — Brief saved to `audits/{domain}/research/{date}/strategy_brief.md`
+
+**Downstream consumption:**
+- **Phase 2 (KeywordResearch):** Keyword Research Directive section injected into the Sonnet synthesis prompt (not the Haiku extraction prompt)
+- **Phase 6 (Michael):** Architecture Directive + Risk Flags + Keyword Research Directive sections injected (Visibility Posture dropped — framing, not actionable for architecture)
+- **Pam (content briefs):** Visibility Posture + Architecture Directive sections injected alongside market context
+
+**Cost:** ~$0.06 (Sonnet, ~14K tokens)
+
+**Graceful degradation:** Runs with whatever inputs exist. No AUDIT_REPORT.md + no scope.json = skip. Missing Scout = posture based on Dwight crawl only. Missing client_context = technical-only framing.
+
+**Supabase writes:** `agent_runs` (agent_name='strategy_brief')
 
 ---
 

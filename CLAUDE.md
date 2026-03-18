@@ -50,6 +50,7 @@ Each pipeline phase (Dwight, Jim, Michael, etc.) is a **prompt template**, not a
 ```
 Phase 0  Scout           (prospect mode only, exits after)
 Phase 1  Dwight          Technical crawl + audit report
+Phase 1b Strategy Brief  Synthesize Dwight + Scout + client profile → strategic framing
 Phase 2  KeywordResearch Service × city × intent keyword matrix
 Phase 3  Jim             DataForSEO research + narrative
 Phase 3b sync-jim        Keywords → Supabase (revenue modeling)
@@ -117,6 +118,7 @@ Run commands directly — don't tell the user to run them.
 | `scripts/generate-cluster-strategy.ts` | Cluster activation: Opus strategy generation (on-demand, per-cluster) |
 | `scripts/local-presence.ts` | Phase 6d: GBP lookup + SERP citation scan → gbp_snapshots, citation_snapshots |
 | `scripts/dataforseo-business.ts` | DataForSEO client: GBP lookup + SERP citation scan |
+| `scripts/strategy-brief.ts` | Phase 1b: synthesize Dwight + Scout + client profile → strategy_brief.md |
 | `scripts/track-rankings.ts` | Performance tracking: DataForSEO ranked_keywords snapshot + authority scoring |
 | `scripts/backfill-authority-scores.ts` | Backfill authority scores for existing snapshots |
 | `scripts/cron-track-all.ts` | Batch runner: tracks all completed audits weekly |
@@ -169,11 +171,17 @@ audits/{domain}/           # Pipeline artifacts per domain (dated subdirs)
 
 Summary of what has been built and the key decisions behind each system. For full details, see [docs/PIPELINE.md](docs/PIPELINE.md) (contracts) and [docs/DECISIONS.md](docs/DECISIONS.md) (rationale).
 
-### Core Pipeline (Phases 0–6c)
+### Core Pipeline (Phases 0–6d)
 
-12-phase SEO audit pipeline that runs end-to-end in ~15 minutes per domain. Each phase is a single-shot prompt template — not a multi-turn agent. Phases produce disk artifacts and sync to Supabase tables. Shell orchestrator (`run-pipeline.sh`) handles sequencing, QA gates, and mode flags (full/sales/prospect).
+13-phase SEO audit pipeline that runs end-to-end in ~15 minutes per domain. Each phase is a single-shot prompt template — not a multi-turn agent. Phases produce disk artifacts and sync to Supabase tables. Shell orchestrator (`run-pipeline.sh`) handles sequencing, QA gates, and mode flags (full/sales/prospect).
 
-**Key decisions**: Phases are prompt templates not agents (deterministic, debuggable). QA agent uses Haiku rubrics to gate generation phases — ENHANCE re-runs, FAIL halts. Three-tier model policy: Haiku for classification, Sonnet for synthesis, Opus for strategic judgment.
+**Key decisions**: Phases are prompt templates not agents (deterministic, debuggable). QA agent uses Haiku rubrics to gate generation phases — ENHANCE re-runs, FAIL halts. Three-tier model policy: Haiku for classification, Sonnet for synthesis, Opus for strategic judgment. Deterministic pre-flight QA checks (keyword count, cluster/topic ratio) run before LLM evaluation.
+
+### Strategy Brief (Phase 1b)
+
+Single Sonnet call (~$0.06) synthesizes Dwight + Scout + client profile into `strategy_brief.md` with four sections: Visibility Posture, Keyword Research Directive, Architecture Directive, Risk Flags. Injected into Phase 2 (keyword directive in Sonnet synthesis prompt), Michael (architecture + risk flags, posture dropped), Pam (posture + architecture). Disk artifact only — no Supabase table. Scout gap report markdown enters the pipeline for the first time here (previously only served dashboard UI).
+
+**Key decisions**: Sonnet not Haiku (synthesis + judgment, not extraction). Single call → markdown (not JSON — downstream agents read it as prompt sections). Brief validates and supplements Phase 2's TypeScript geo_mode conditionals, doesn't replace them. Regenerated every run (no caching — $0.06 isn't worth stale risk). Cross-date fallback on AUDIT_REPORT.md so `--start-from 2` works.
 
 ### Keyword Pipeline (Phases 2–3d)
 

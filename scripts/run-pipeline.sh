@@ -93,7 +93,7 @@ for i in "$@"; do
 done
 
 # Phase ordering for --start-from
-PHASE_ORDER=(1 2 3 3b 3c 3d 4 5 6 6.5 6b 6c 6d)
+PHASE_ORDER=(1 1b 2 3 3b 3c 3d 4 5 6 6.5 6b 6c 6d)
 should_run_phase() {
   local phase="$1"
   [[ -z "$START_FROM" ]] && return 0
@@ -165,6 +165,13 @@ QA_RESULT=$(npx tsx scripts/pipeline-generate.ts qa --domain "$DOMAIN" --user-em
 }
 echo "  QA PASSED: Dwight"
 else echo "  [SKIP] Phase 1: Dwight"; fi
+
+# ─── Phase 1b: Strategy Brief ────────────────────────────────
+if should_run_phase 1b; then
+echo ""
+echo "--- Phase 1b: Strategy Brief ---"
+npx tsx scripts/strategy-brief.ts --domain "$DOMAIN" --user-email "$EMAIL" --force
+else echo "  [SKIP] Phase 1b: Strategy Brief"; fi
 
 # ─── Phase 2: Keyword Research ───────────────────────────────
 if should_run_phase 2; then

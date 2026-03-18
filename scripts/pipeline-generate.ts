@@ -1466,6 +1466,29 @@ ${semanticSummary.rows}`;
     console.log('  Warning: No auditor directory found — Dwight may not have run');
   }
 
+  // --- Strategy brief (Phase 1b) ---
+  let michaelStrategyBlock = '';
+  const michaelBriefPath = resolveArtifactPath(domain, 'research', 'strategy_brief.md');
+  if (michaelBriefPath) {
+    const briefContent = fs.readFileSync(michaelBriefPath, 'utf-8');
+    // Extract Architecture Directive + Risk Flags + Keyword Research Directive (drop Visibility Posture)
+    const extractSection = (heading: string) => {
+      const re = new RegExp(`## ${heading}\\n([\\s\\S]*?)(?=\\n## |\\n---\\s*$|$)`);
+      return re.exec(briefContent)?.[1]?.trim() ?? '';
+    };
+    const kwDirective = extractSection('Keyword Research Directive');
+    const archDirective = extractSection('Architecture Directive');
+    const riskFlags = extractSection('Risk Flags');
+    const parts: string[] = [];
+    if (kwDirective) parts.push(`## Keyword Research Directive\n${kwDirective}`);
+    if (archDirective) parts.push(`## Architecture Directive\n${archDirective}`);
+    if (riskFlags) parts.push(`## Risk Flags\n${riskFlags}`);
+    if (parts.length > 0) {
+      michaelStrategyBlock = `## Strategy Brief (Phase 1b — strategic framing for this audit)\nThe following directives were produced by synthesizing the client profile, Scout data, and technical audit. Your architecture MUST align with these directives and address all BLOCKING risk flags.\n\n${parts.join('\n\n')}`;
+      console.log(`  Strategy brief: loaded for Michael (${michaelStrategyBlock.length} chars)`);
+    }
+  }
+
   // --- Client context (full-mode only) ---
   const michaelClientCtx = loadClientContext(domain);
   const michaelClientContextBlock = michaelClientCtx ? buildClientContextPrompt(michaelClientCtx, 'michael') : '';
@@ -1503,7 +1526,7 @@ ${crawlSection ? `${crawlSection}\n` : ''}
 ${semanticSection ? `${semanticSection}\n` : ''}
 ${gapSection ? `## Content Gap Intelligence\nThe following analysis was produced by the Gap agent. Your architecture MUST address every identified gap.\n\n${gapSection}\n` : ''}
 ${platformSection ? `## Platform Constraints (from Dwight's Technical Audit)\nThe following platform/CMS observations were identified by the technical auditor. Your architecture MUST account for these constraints.\n\n${platformSection}\n` : ''}
-${michaelClientContextBlock ? `${michaelClientContextBlock}\n` : ''}${mode === 'sales' ? `## SALES MODE OVERRIDE
+${michaelStrategyBlock ? `${michaelStrategyBlock}\n\n` : ''}${michaelClientContextBlock ? `${michaelClientContextBlock}\n` : ''}${mode === 'sales' ? `## SALES MODE OVERRIDE
 This is a condensed sales prospect report. Follow these overrides:
 - Executive Summary: 3-5 paragraphs strategic pitch focused on revenue opportunity
 - Max 3 silos with 3-5 pages each
@@ -2817,6 +2840,19 @@ async function runKeywordResearch(sb: SupabaseClient, auditId: string, domain: s
     }
   }
 
+  // --- Optional: Load strategy brief from Phase 1b ---
+  let strategyDirective = '';
+  const briefPath = resolveArtifactPath(domain, 'research', 'strategy_brief.md');
+  if (briefPath) {
+    const briefContent = fs.readFileSync(briefPath, 'utf-8');
+    // Extract ## Keyword Research Directive section
+    const directiveMatch = briefContent.match(/## Keyword Research Directive\n([\s\S]*?)(?=\n## |\n---\s*$|$)/);
+    if (directiveMatch) {
+      strategyDirective = directiveMatch[1].trim();
+      console.log(`  Strategy brief: loaded keyword directive (${strategyDirective.length} chars)`);
+    }
+  }
+
   // Get audit metadata (select * to avoid column-not-found errors on optional fields)
   const { data: auditRow, error: auditErr } = await sb
     .from('audits')
@@ -3144,6 +3180,13 @@ ${reportContent}`;
     .map((v) => `${v.keyword} | ${v.service} | ${v.city || 'N/A'} | ${v.intent} | ${v.volume} | $${v.cpc} | ${v.is_near_me ? 'yes' : 'no'}`)
     .join('\n');
 
+  const strategySection = strategyDirective ? `
+## Strategic Keyword Directive (from Strategy Brief — Phase 1b)
+${strategyDirective}
+
+Use this directive to inform your prioritization and analysis. The directive specifies which keyword buckets matter most and what to avoid.
+` : '';
+
   const synthesisPrompt = `You are a Keyword Research Analyst for a ${industryLabel} business in ${kwGeo.label || 'unknown'}.
 
 ## Site Inventory (from Dwight's Crawl)
@@ -3151,7 +3194,7 @@ Services: ${services.join(', ')}
 Locations: ${locations.join(', ')}
 Platform: ${platform}
 Existing pages: ${existingUrls.length} URLs crawled
-
+${strategySection}
 ## Validated Keyword Matrix (top 100 of ${validated.length}, sorted by CPC)
 Keyword | Service | City | Intent | Volume | CPC | Near-Me
 ${validatedTable}
