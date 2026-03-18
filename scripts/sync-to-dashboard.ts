@@ -692,53 +692,18 @@ export async function rebuildClustersAndRollups(sb: SupabaseClient, auditId: str
   await sb.from('audit_clusters').delete().eq('audit_id', auditId);
   await sb.from('audit_rollups').delete().eq('audit_id', auditId);
 
-  // Pull near-miss keywords
+  // Pull ALL keywords with a canonical_key (full topic map, not just near-miss)
   const { data: kwRows } = await sb
     .from('audit_keywords')
     .select('keyword, rank_pos, search_volume, cpc, delta_traffic, delta_revenue_low, delta_revenue_mid, delta_revenue_high, delta_leads_low, delta_leads_high, canonical_key, canonical_topic, cluster, intent_type, intent, is_brand, is_near_miss, topic')
     .eq('audit_id', auditId)
-    .eq('is_near_miss', true);
+    .not('canonical_key', 'is', null);
 
   let clusterMap = buildClusterMap((kwRows ?? []) as any[]);
 
-  // Fallback: if near-miss clustering produces 0 non-brand commercial topics,
-  // build from ALL non-brand keywords with volume >= min_volume.
-  if (clusterMap.size === 0) {
-    console.log(`  [${label}] No near-miss opportunity clusters — falling back to full keyword opportunity`);
-    const FALLBACK_MAX_VOLUME = 2000;
-    const { data: allKwRows } = await sb
-      .from('audit_keywords')
-      .select('keyword, rank_pos, search_volume, cpc, canonical_key, canonical_topic, cluster, intent_type, intent, is_brand, is_near_me, topic')
-      .eq('audit_id', auditId)
-      .gte('search_volume', assumptions.min_volume)
-      .lte('search_volume', FALLBACK_MAX_VOLUME);
-
-    const conservativeTargetCtr = ctrBuckets['6-10'] ?? ctrBuckets['4-5'] ?? assumptions.target_ctr * 0.25;
-    console.log(`  [${label}] Fallback target CTR: ${(conservativeTargetCtr * 100).toFixed(1)}% (page 1 bottom)`);
-    const fallbackRows = (allKwRows ?? []).map((r: any) => {
-      const vol = Number(r.search_volume ?? 0);
-      const pos = Number(r.rank_pos ?? 100);
-      const currentCtr = getCtrForPosition(pos, ctrBuckets, assumptions.floor_ctr_over30);
-      const currentTraffic = vol * currentCtr;
-      const targetTraffic = vol * conservativeTargetCtr;
-      const deltaTraffic = Math.max(0, targetTraffic - currentTraffic);
-      const effectiveCrMid = assumptions.cr_used_mid ?? (assumptions.cr_used_min + assumptions.cr_used_max) / 2;
-      const effectiveAcvMid = assumptions.acv_used_mid ?? (assumptions.acv_used_min + assumptions.acv_used_max) / 2;
-      return {
-        ...r,
-        delta_revenue_low: deltaTraffic * assumptions.cr_used_min * assumptions.acv_used_min,
-        delta_revenue_mid: deltaTraffic * effectiveCrMid * effectiveAcvMid,
-        delta_revenue_high: deltaTraffic * assumptions.cr_used_max * assumptions.acv_used_max,
-        delta_leads_low: deltaTraffic * assumptions.cr_used_min,
-        delta_leads_high: deltaTraffic * assumptions.cr_used_max,
-        delta_traffic: deltaTraffic,
-      };
-    });
-    clusterMap = buildClusterMap(fallbackRows);
-    console.log(`  [${label}] Fallback: ${fallbackRows.length} keywords evaluated, ${clusterMap.size} opportunity clusters`);
-  }
-
-  const nearMissCount = (kwRows ?? []).length;
+  const allKwCount = (kwRows ?? []).length;
+  const nearMissCount = (kwRows ?? []).filter((r: any) => r.is_near_miss === true).length;
+  console.log(`  [${label}] ${allKwCount} keywords with canonical_key, ${clusterMap.size} clusters, ${nearMissCount} near-miss`);
 
   const clusterRecords = Array.from(clusterMap.entries())
     .sort((a, b) => b[1].revHigh - a[1].revHigh)
@@ -2266,7 +2231,11 @@ async function main() {
   console.log('\nSync complete.');
 }
 
-main().catch((err) => {
-  console.error('Fatal error:', err);
-  process.exit(1);
-});
+// Only run CLI when executed directly (not when imported by run-canonicalize.ts etc.)
+const isDirectRun = process.argv[1]?.replace(/\.ts$/, '').endsWith('sync-to-dashboard');
+if (isDirectRun) {
+  main().catch((err) => {
+    console.error('Fatal error:', err);
+    process.exit(1);
+  });
+}

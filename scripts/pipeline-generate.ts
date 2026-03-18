@@ -4191,7 +4191,11 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error('Fatal:', err.message ?? err);
-  process.exit(1);
-});
+// Only run CLI when executed directly (not when imported by run-canonicalize.ts etc.)
+const isDirectRun = process.argv[1]?.replace(/\.ts$/, '').endsWith('pipeline-generate');
+if (isDirectRun) {
+  main().catch((err) => {
+    console.error('Fatal:', err.message ?? err);
+    process.exit(1);
+  });
+}
