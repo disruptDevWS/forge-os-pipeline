@@ -37,6 +37,7 @@ export const PHASE_MAX_TOKENS: Record<string, number> = {
   brief: 16384,
   content: 16384,
   qa: 4096,
+  prospect_narrative: 2048,
   default: 8192,
 };
 

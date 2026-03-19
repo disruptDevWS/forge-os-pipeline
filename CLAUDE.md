@@ -48,9 +48,10 @@ Each pipeline phase (Dwight, Jim, Michael, etc.) is a **prompt template**, not a
 ### Pipeline Phase Order
 
 ```
-Phase 0  Scout           (prospect mode only, exits after)
+Phase 0  Scout           (prospect mode only, exits after + prospect-narrative.md)
 Phase 1  Dwight          Technical crawl + audit report
 Phase 1b Strategy Brief  Synthesize Dwight + Scout + client profile → strategic framing
+     ── Review Gate ──  (opt-in: if review_gate_enabled=true, pauses with awaiting_review)
 Phase 2  KeywordResearch Service × city × intent keyword matrix
 Phase 3  Jim             DataForSEO research + narrative
 Phase 3b sync-jim        Keywords → Supabase (revenue modeling)
@@ -191,9 +192,15 @@ Service × city × intent keyword matrix (Phase 2) → DataForSEO research + nar
 
 ### Scout (Phase 0)
 
-Prospect qualification at $2/run. DataForSEO ranked keywords + bulk volume → Haiku topic extraction → Sonnet report. Produces `scope.json` (Jim-compatible seed data) that persists through conversion. No crawl — Dwight handles that in Phase 1.
+Prospect qualification at $2/run. DataForSEO ranked keywords + bulk volume → Haiku topic extraction → Sonnet report. Produces `scope.json` (Jim-compatible seed data) that persists through conversion. No crawl — Dwight handles that in Phase 1. Generates `prospect-narrative.md` — a plain-language outreach document (3 sections) written for business owners, not SEO professionals. Narrative generation is non-fatal.
 
-**Key decisions**: Scout uses `prospects` table (not `audits`). Prospect mode exits after Scout. scope.json consumed as optional priors by KeywordResearch (gap keywords pre-seeded at priority 0).
+**Key decisions**: Scout uses `prospects` table (not `audits`). Prospect mode exits after Scout. scope.json consumed as optional priors by KeywordResearch (gap keywords pre-seeded at priority 0). Narrative uses Sonnet (tone calibration + persuasive framing), wrapped in try/catch so Scout succeeds even if narrative fails.
+
+### Pipeline Review Gate (opt-in)
+
+Opt-in pause after Phase 1b (Strategy Brief) for full-mode audits. When `audits.review_gate_enabled = true`, pipeline sets status to `awaiting_review` and exits. User reviews strategy_brief.md, adds annotations, resumes via `pipeline-controls` edge function (`resume_pipeline` action, triggers with `start_from: '1b'`). Annotations appended to `client_context.out_of_scope`.
+
+**Key decisions**: Opt-in (defaults false) — most audits run unattended. Full-mode only (sales mode runs too fast for review overhead). Uses `update-pipeline-status.ts check-review-gate` for the query (natural extension of existing status script). Resume starts from Phase 1b onward (uses existing `--start-from` flag).
 
 ### Content Factory (Pam + Oscar)
 

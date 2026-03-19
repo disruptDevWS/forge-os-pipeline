@@ -65,6 +65,10 @@ Phase 1b (Strategy Brief)
   PRODUCES:  strategy_brief.md (disk — research/{date}/)
              Supabase → agent_runs (agent_name='strategy_brief')
       │
+      ▼ (review gate: if audits.review_gate_enabled=true AND mode=full,
+         pipeline pauses with status='awaiting_review'. Resume via
+         pipeline-controls edge function → start_from='1b')
+      │
       ▼
 Phase 2 (KeywordResearch)
   READS:     AUDIT_REPORT.md (Dwight), internal_all.csv (Dwight, for service expansion),
@@ -179,6 +183,7 @@ Phase 6d (Local Presence)
 **Output files** (relative to `audits/{domain}/`):
 - `scout/{date}/scout-{domain}-{date}.md` — Full scout report (7 sections)
 - `scout/{date}/scope.json` — Jim-compatible seed matrix
+- `scout/{date}/prospect-narrative.md` — Plain-language outreach document (3 sections: Where You're Winning, Where Demand Is Escaping You, What a Full Analysis Would Reveal). Generated via Sonnet after the scout report. Non-fatal — Scout succeeds even if narrative generation fails.
 
 **Supabase writes:** `prospects` (INSERT or UPDATE status/scout_run_at/scout_output_path)
 
@@ -231,6 +236,8 @@ Phase 6d (Local Presence)
 **Graceful degradation:** Runs with whatever inputs exist. No AUDIT_REPORT.md + no scope.json = skip. Missing Scout = posture based on Dwight crawl only. Missing client_context = technical-only framing.
 
 **Supabase writes:** `agent_runs` (agent_name='strategy_brief')
+
+**Review Gate (opt-in):** If `audits.review_gate_enabled = true` and mode is `full`, the pipeline pauses after Phase 1b with `audits.status = 'awaiting_review'`. The user can review `strategy_brief.md`, add annotations (appended to `client_context.out_of_scope`), then resume via the `pipeline-controls` edge function (`action: 'resume_pipeline'`). Resume triggers with `start_from: '1b'` (Phase 2 onward). The review gate is opt-in and defaults to false — most audits run unattended.
 
 ---
 

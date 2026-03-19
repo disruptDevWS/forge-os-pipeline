@@ -173,6 +173,16 @@ echo "--- Phase 1b: Strategy Brief ---"
 npx tsx scripts/strategy-brief.ts --domain "$DOMAIN" --user-email "$EMAIL" --force
 else echo "  [SKIP] Phase 1b: Strategy Brief"; fi
 
+# ─── Review Gate (opt-in pause after Phase 1b) ──────────────
+if should_run_phase 1b && [ "$MODE" = "full" ]; then
+  REVIEW_GATE=$(npx tsx scripts/update-pipeline-status.ts "$DOMAIN" "$EMAIL" check-review-gate 2>/dev/null)
+  if [ "$REVIEW_GATE" = "pause" ]; then
+    echo "[Pipeline] Pausing for Strategy Brief review — status → awaiting_review"
+    npx tsx scripts/update-pipeline-status.ts "$DOMAIN" "$EMAIL" awaiting_review
+    exit 0
+  fi
+fi
+
 # ─── Phase 2: Keyword Research ───────────────────────────────
 if should_run_phase 2; then
 echo ""

@@ -183,7 +183,7 @@ async function handleScoutConfig(req: http.IncomingMessage, res: http.ServerResp
 async function handleScoutReport(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   if (!checkAuth(req, res)) return;
 
-  let payload: { domain?: string };
+  let payload: { domain?: string; file?: string };
   try {
     payload = JSON.parse(await readBody(req));
   } catch {
@@ -191,7 +191,7 @@ async function handleScoutReport(req: http.IncomingMessage, res: http.ServerResp
     return;
   }
 
-  const { domain } = payload;
+  const { domain, file: requestedFile } = payload;
   if (!domain) {
     json(res, 400, { error: 'domain is required' });
     return;
@@ -218,6 +218,23 @@ async function handleScoutReport(req: http.IncomingMessage, res: http.ServerResp
   const latestDate = dateDirs[dateDirs.length - 1];
   const latestDir = path.join(scoutBase, latestDate);
 
+  // If a specific file is requested, serve it directly
+  if (requestedFile) {
+    if (requestedFile.includes('/') || requestedFile.includes('\\') || requestedFile.startsWith('.')) {
+      json(res, 400, { error: 'Invalid file name' });
+      return;
+    }
+    const filePath = path.join(latestDir, requestedFile);
+    if (!fs.existsSync(filePath)) {
+      json(res, 404, { error: `File not found: ${requestedFile}` });
+      return;
+    }
+    console.log(`Scout file served: ${domain}/${requestedFile} (${latestDate})`);
+    json(res, 200, { content: fs.readFileSync(filePath, 'utf-8') });
+    return;
+  }
+
+  // Default: return full scout report + scope
   const mdFiles = fs.readdirSync(latestDir).filter((f) => f.startsWith('scout-') && f.endsWith('.md'));
   let markdown = '';
   if (mdFiles.length > 0) {
@@ -232,8 +249,15 @@ async function handleScoutReport(req: http.IncomingMessage, res: http.ServerResp
     } catch {}
   }
 
+  // Include narrative if it exists (avoids edge function needing a second request)
+  let narrative = '';
+  const narrativePath = path.join(latestDir, 'prospect-narrative.md');
+  if (fs.existsSync(narrativePath)) {
+    narrative = fs.readFileSync(narrativePath, 'utf-8');
+  }
+
   console.log(`Scout report served: ${domain} (${latestDate})`);
-  json(res, 200, { markdown, scope, date: latestDate });
+  json(res, 200, { markdown, scope, date: latestDate, narrative });
 }
 
 async function handleTrackRankings(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {

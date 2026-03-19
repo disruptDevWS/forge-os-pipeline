@@ -3969,11 +3969,90 @@ REMINDER: Your response IS the report — start with "# Scout Report". No preamb
     })
     .eq('id', prospect.id);
 
+  // Generate prospect narrative (non-fatal — Scout succeeds even if this fails)
+  try {
+    await generateProspectNarrative(domain, reportContent, scopeData, scoutDir);
+  } catch (err: any) {
+    console.warn(`  [WARN] Prospect narrative generation failed: ${err.message}`);
+  }
+
   console.log(`\n=== Scout Complete ===`);
   console.log(`  Report: ${path.relative(process.cwd(), reportPath)}`);
   console.log(`  Scope:  ${path.relative(process.cwd(), scopePath)}`);
   console.log(`  Cost:   $${sessionCost.toFixed(2)}`);
   console.log(`  Status: prospects.${prospect.id} → scouted`);
+}
+
+// ============================================================
+// Prospect Narrative — Plain-language outreach document
+// ============================================================
+
+function buildProspectNarrativePrompt(scoutReport: string, scopeJson: Record<string, any>): string {
+  const businessName = scopeJson.business_type || scopeJson.domain || 'the business';
+  const topGap = scopeJson.gap_summary?.top_opportunities?.[0];
+  const totalOpportunityVolume = scopeJson.total_opportunity_volume ?? 0;
+  const gapSummary = scopeJson.gap_summary ?? {};
+  const defending = gapSummary.defending ?? 0;
+  const weak = gapSummary.weak ?? 0;
+  const gaps = gapSummary.gaps ?? 0;
+
+  let gapHighlight = '';
+  if (topGap) {
+    gapHighlight = `Top gap keyword: "${topGap.keyword}" (${topGap.volume} monthly searches, $${topGap.cpc?.toFixed(2) ?? '0.00'} CPC)`;
+  }
+
+  return `You are a digital marketing consultant writing a brief, compelling outreach document for a business owner who is NOT technical. This is NOT an SEO report — it's a conversation starter.
+
+YOUR ENTIRE RESPONSE IS THE NARRATIVE. Output ONLY the markdown content — start with "# Where ${businessName} Stands Online". No preamble, no narration.
+
+## Business Context
+- Business: ${businessName}
+- Domain: ${scopeJson.domain || 'unknown'}
+- Services: ${(scopeJson.services || []).slice(0, 8).join(', ')}
+- Markets: ${(scopeJson.locales || []).slice(0, 5).join(', ')}
+
+## Key Data Points
+- Defending keywords (page 1): ${defending}
+- Weak positions (page 2-3): ${weak}
+- Not ranking at all: ${gaps}
+- Total untapped search volume: ${totalOpportunityVolume.toLocaleString()} monthly searches
+${gapHighlight ? `- ${gapHighlight}` : ''}
+
+## Full Scout Report (for reference — do NOT reproduce this)
+${scoutReport}
+
+## Output Format — Follow this structure exactly:
+
+# Where ${businessName} Stands Online
+
+## Where You're Winning
+[2-3 short paragraphs highlighting what they're doing well. Reference specific keywords they rank for on page 1. Be genuine — don't patronize. Use plain language a business owner would understand. If they have few wins, acknowledge what they have and frame it positively.]
+
+## Where Demand Is Escaping You
+[2-3 short paragraphs about search demand they're missing. Translate keyword gaps into business language — "people searching for X in Y aren't finding you." Quantify with monthly search numbers. Don't use SEO jargon like "SERP" or "canonical" — say "search results" and "topics." Make it concrete: name specific services and cities.]
+
+## What a Full Analysis Would Reveal
+[2-3 short paragraphs positioning the full audit as the logical next step. Mention what a deeper analysis covers (technical health, competitor landscape, content architecture) without overselling. End with a forward-looking statement about their growth opportunity.]
+
+REMINDER: Your response IS the narrative — start with "# Where ${businessName} Stands Online". No preamble, no narration. Write for a business owner, not an SEO professional.`;
+}
+
+async function generateProspectNarrative(
+  domain: string,
+  scoutReport: string,
+  scopeJson: Record<string, any>,
+  outputDir: string,
+): Promise<void> {
+  console.log('\n--- Prospect Narrative ---');
+
+  const prompt = buildProspectNarrativePrompt(scoutReport, scopeJson);
+  const narrative = await callClaude(prompt, { model: 'sonnet', phase: 'prospect_narrative' });
+
+  const outputPath = path.join(outputDir, 'prospect-narrative.md');
+  fs.writeFileSync(outputPath, narrative, 'utf-8');
+
+  validateArtifact(outputPath, 'Prospect narrative', 300);
+  console.log(`  Prospect narrative: ${(fs.statSync(outputPath).size / 1024).toFixed(1)}KB`);
 }
 
 // ============================================================

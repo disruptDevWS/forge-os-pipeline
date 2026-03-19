@@ -54,11 +54,26 @@ async function main() {
     process.exit(1);
   }
 
+  // Special: check-review-gate queries the flag and outputs pause/continue (no update)
+  if (status === 'check-review-gate') {
+    const { data: auditData } = await sb
+      .from('audits')
+      .select('review_gate_enabled')
+      .eq('id', audit.id)
+      .single();
+
+    const enabled = auditData?.review_gate_enabled === true;
+    console.log(enabled ? 'pause' : 'continue');
+    process.exit(0);
+  }
+
   const updateFields: Record<string, any> = { agent_pipeline_status: status };
   if (status === 'complete') {
     updateFields.status = 'completed';
   } else if (status === 'failed') {
     updateFields.status = 'failed';
+  } else if (status === 'awaiting_review') {
+    updateFields.status = 'awaiting_review';
   } else {
     updateFields.status = 'running';
   }
