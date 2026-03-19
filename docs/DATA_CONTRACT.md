@@ -440,9 +440,15 @@ Written by Phase 6d (LocalPresence). One row per directory.
 | `status` | Both | Both | `discovery` → `running` → `qualified` / `converted` |
 | `scout_run_at`, `scout_output_path` | Pipeline | Dashboard |
 | `converted_to_audit_id` | Dashboard | Dashboard |
+| `share_token` | Edge fn (generate_share_token) | Edge fn (get_share_report) | UUID, unique partial index |
+| `share_token_created_at` | Edge fn | Dashboard | |
+| `brand_favicon_url` | Pipeline (Scout) | Edge fn (get_share_report) | Google favicon URL |
+| `scout_markdown` | Pipeline (Scout) | Edge fn (get_share_report) | Full scout report markdown |
+| `scout_scope_json` | Pipeline (Scout) | Edge fn (get_share_report) | scope.json JSONB |
+| `prospect_narrative` | Pipeline (Scout) | Edge fn (get_share_report) | Plain-language outreach doc |
 
 **Dashboard reads**: `useProspects()`, `useProspect()`, `useProspectStatus()` (2s poll while running)
-**Pipeline writes**: Scout updates status, scout_run_at, scout_output_path, prospect_narrative, scope_data, session_cost
+**Pipeline writes**: Scout updates status, scout_run_at, scout_output_path, brand_favicon_url, scout_markdown, scout_scope_json, prospect_narrative
 
 ---
 
@@ -516,6 +522,8 @@ Server-side view computing position changes from `ranking_snapshots`.
 | `scout-config` | `write_config` | `/scout-config` | `{domain, config}` | `{ok}` |
 | `scout-config` | `trigger_scout` | `/trigger-pipeline` | `{domain}` | `{ok}` or `{status:'pipeline_already_running'}` |
 | `scout-config` | `read_report` | `/scout-report` | `{domain}` | `{markdown, scope, date, narrative}` |
+| `scout-config` | `generate_share_token` | (Supabase-only) | `{prospect_id}` | `{token, share_url, domain, name}` |
+| `scout-config` | `get_share_report` | (Supabase-only, **no auth**) | `{token}` | `{prospect, markdown, scope, narrative}` |
 | `pipeline-controls` | `recanonicalize` | `/recanonicalize` | `{domain, email}` | `{ok}` |
 | `pipeline-controls` | `track_rankings` | `/track-rankings` | `{domain, email}` | `{ok}` |
 | `pipeline-controls` | `rerun_pipeline` | `/trigger-pipeline` | `{domain, email}` | `{ok}` |
@@ -527,7 +535,7 @@ Server-side view computing position changes from `ranking_snapshots`.
 | `run-competitor-dominance` | (default) | (Supabase-only) | `{audit_id}` | rebuilt view |
 
 **Auth patterns**:
-- `validateSuperAdmin`: JWT → `has_role('super_admin')` — used by `pipeline-controls`, `scout-config`, `manage-users`
+- `validateSuperAdmin`: JWT → `has_role('super_admin')` — used by `pipeline-controls`, `scout-config` (except `get_share_report`), `manage-users`
 - `resolveAuthContext`: JWT → user lookup + audit ownership check — used by `cluster-action`, `share-audit`
 
 ---

@@ -3958,7 +3958,18 @@ REMINDER: Your response IS the report — start with "# Scout Report". No preamb
   fs.writeFileSync(reportPath, reportContent, 'utf-8');
   console.log(`  Scout report: ${(fs.statSync(reportPath).size / 1024).toFixed(1)}KB`);
 
-  // Update prospect record
+  // Favicon URL (deterministic — no HTTP call)
+  const brandFaviconUrl = `https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=64`;
+
+  // Generate prospect narrative (non-fatal)
+  let narrativeContent: string | null = null;
+  try {
+    narrativeContent = await generateProspectNarrative(domain, reportContent, scopeData, scoutDir);
+  } catch (err: any) {
+    console.warn(`  [WARN] Prospect narrative generation failed: ${err.message}`);
+  }
+
+  // Single UPDATE — all scout data in one write
   await sb
     .from('prospects')
     .update({
@@ -3966,21 +3977,19 @@ REMINDER: Your response IS the report — start with "# Scout Report". No preamb
       scout_output_path: path.relative(process.cwd(), scoutDir),
       status: 'scouted',
       updated_at: new Date().toISOString(),
+      brand_favicon_url: brandFaviconUrl,
+      scout_markdown: reportContent,
+      scout_scope_json: scopeData,
+      prospect_narrative: narrativeContent,
     })
     .eq('id', prospect.id);
-
-  // Generate prospect narrative (non-fatal — Scout succeeds even if this fails)
-  try {
-    await generateProspectNarrative(domain, reportContent, scopeData, scoutDir);
-  } catch (err: any) {
-    console.warn(`  [WARN] Prospect narrative generation failed: ${err.message}`);
-  }
 
   console.log(`\n=== Scout Complete ===`);
   console.log(`  Report: ${path.relative(process.cwd(), reportPath)}`);
   console.log(`  Scope:  ${path.relative(process.cwd(), scopePath)}`);
   console.log(`  Cost:   $${sessionCost.toFixed(2)}`);
   console.log(`  Status: prospects.${prospect.id} → scouted`);
+  if (narrativeContent) console.log(`  Narrative: stored (${(Buffer.byteLength(narrativeContent) / 1024).toFixed(1)}KB)`);
 }
 
 // ============================================================
@@ -4042,7 +4051,7 @@ async function generateProspectNarrative(
   scoutReport: string,
   scopeJson: Record<string, any>,
   outputDir: string,
-): Promise<void> {
+): Promise<string> {
   console.log('\n--- Prospect Narrative ---');
 
   const prompt = buildProspectNarrativePrompt(scoutReport, scopeJson);
@@ -4053,6 +4062,8 @@ async function generateProspectNarrative(
 
   validateArtifact(outputPath, 'Prospect narrative', 300);
   console.log(`  Prospect narrative: ${(fs.statSync(outputPath).size / 1024).toFixed(1)}KB`);
+
+  return narrative;
 }
 
 // ============================================================
