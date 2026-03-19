@@ -232,3 +232,9 @@ Automatic GBP lookup + citation scan across 11 directories, runs at end of every
 Pipeline server (`pipeline-server-standalone.ts`) on port 3847, 9 endpoints. Supabase Edge Functions as auth layer (2 patterns: `validateSuperAdmin` for admin ops, `resolveAuthContext` for user ops). DataForSEO OnPage API replaced Screaming Frog. Anthropic SDK replaced Claude CLI binary. `loadEnv()` falls through to `process.env` for Railway deployment.
 
 **Key decisions**: 409 from pipeline server = success in edge function (already running). `PIPELINE_BASE_URL` secret serves all endpoints. Public IP exposure is temporary — Cloudflare Tunnel recommended.
+
+### Pre-Audit Client Context Intake
+
+Two-step audit creation flow: Create Draft → Configure on Settings → Start Pipeline. `useCreateAudit` no longer auto-triggers `run-audit`; audit stays as `draft`. User redirected to Settings page for client context entry, then clicks "Start Pipeline" (draft banner). `loadClientContextAsync(domain, sb, auditId)` in `client-context.ts` bridges the dual-store: tries `prospect-config.json` first (Scout path), falls back to `audits.client_context` JSONB with field mapping (`core_services` → `services[]`, `differentiators` → `competitive_advantage`). Dashboard-only fields (`service_area`, `notes`) returned as `DashboardExtras` for Phase 1b. All 5 pipeline callers updated to use async version. Convert-prospect path unaffected (independent hook, auto-triggers).
+
+**Key decisions**: Settings reuse over new intermediate page (already has context form + pipeline trigger). Disk file takes priority over DB so Scout data isn't overwritten. `loadClientContextAsync` checks both sources on every run (no caching) so skip → fill later → re-run works.

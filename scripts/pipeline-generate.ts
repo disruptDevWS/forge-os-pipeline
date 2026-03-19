@@ -1007,7 +1007,7 @@ All other formatting rules still apply.\n`
     ? `\nNOTE: No upstream data from Dwight or KeywordResearch is available. Using seed keyword fallback for supplementation.\n`
     : '';
   // Load client context for full-mode prompt injection
-  const jimClientCtx = loadClientContext(domain);
+  const { context: jimClientCtx } = await loadClientContextAsync(domain, sb, auditId);
   const jimClientContextBlock = jimClientCtx ? `\n${buildClientContextPrompt(jimClientCtx, 'jim')}\n` : '';
 
   const narrativePrompt = `You are Jim, The Scout — a foundational search intelligence analyst. You have full DataForSEO data for ${domain}.
@@ -1490,7 +1490,7 @@ ${semanticSummary.rows}`;
   }
 
   // --- Client context (full-mode only) ---
-  const michaelClientCtx = loadClientContext(domain);
+  const { context: michaelClientCtx } = await loadClientContextAsync(domain, sb, auditId);
   const michaelClientContextBlock = michaelClientCtx ? buildClientContextPrompt(michaelClientCtx, 'michael') : '';
   if (michaelClientCtx) {
     console.log(`  Client context loaded: ${michaelClientCtx.services?.length ?? 0} services, ${michaelClientCtx.out_of_scope?.length ?? 0} out-of-scope items`);
@@ -2175,7 +2175,7 @@ async function runGap(sb: SupabaseClient, auditId: string, domain: string) {
     : 'No architecture plan exists yet.';
 
   // Load client context for full-mode prompt injection
-  const gapClientCtx = loadClientContext(domain);
+  const { context: gapClientCtx } = await loadClientContextAsync(domain, sb, auditId);
   const gapClientContextBlock = gapClientCtx ? `\n${buildClientContextPrompt(gapClientCtx, 'gap')}\n` : '';
 
   const prompt = `You are a Content Gap Analyst. Given the competitive landscape data for ${domain}, produce a JSON analysis identifying where competitors rank but the client is absent or weak.
@@ -2962,7 +2962,7 @@ ${reportContent}`;
   }
 
   // --- Inject client context services (full mode) ---
-  const kwClientCtx = loadClientContext(domain);
+  const { context: kwClientCtx } = await loadClientContextAsync(domain, sb, auditId);
   if (kwClientCtx?.services?.length) {
     const existingLower = new Set(services.map((s) => s.toLowerCase()));
     let added = 0;
@@ -3467,7 +3467,7 @@ function buildCoverageValidationMd(domain: string, validation: { coverage: any[]
 // Client context — re-exported from shared utility
 // ============================================================
 
-import { loadClientContext, buildClientContextPrompt } from './client-context.js';
+import { loadClientContext, loadClientContextAsync, buildClientContextPrompt } from './client-context.js';
 import type { ClientContext } from './client-context.js';
 
 interface ProspectConfig {

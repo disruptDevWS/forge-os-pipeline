@@ -18,7 +18,8 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { callClaude, initAnthropicClient } from './anthropic-client.js';
-import { loadClientContext, buildClientContextPrompt } from './client-context.js';
+import { loadClientContextAsync, buildClientContextPrompt } from './client-context.js';
+import type { DashboardExtras } from './client-context.js';
 
 const AUDITS_BASE = path.resolve(process.cwd(), 'audits');
 
@@ -163,6 +164,7 @@ interface BriefInputs {
   scoutMarkdown: string | null;
   clientContext: string | null;
   clientProfile: Record<string, any> | null;
+  dashboardExtras: DashboardExtras;
   geoMode: string;
   marketGeos: any;
   serviceKey: string;
@@ -213,11 +215,11 @@ async function gatherInputs(sb: SupabaseClient, audit: any, domain: string): Pro
     }
   }
 
-  // 4. Client context from prospect-config.json
-  const clientCtx = loadClientContext(domain);
+  // 4. Client context (disk first, then Supabase fallback)
+  const { context: clientCtx, extras: dashboardExtras } = await loadClientContextAsync(domain, sb, audit.id);
   const clientContext = clientCtx ? buildClientContextPrompt(clientCtx, 'michael') : null;
   if (clientContext) {
-    console.log('  Client context: loaded from prospect-config.json');
+    console.log('  Client context: loaded');
   }
 
   // 5. client_profiles row (optional)
@@ -240,6 +242,7 @@ async function gatherInputs(sb: SupabaseClient, audit: any, domain: string): Pro
     scoutMarkdown,
     clientContext,
     clientProfile,
+    dashboardExtras,
     geoMode: audit.geo_mode || 'city',
     marketGeos: audit.market_geos || {},
     serviceKey: audit.service_key || audit.custom_service_label || '',
@@ -268,6 +271,18 @@ function buildPrompt(inputs: BriefInputs): string {
 
   if (inputs.clientContext) {
     sections.push(inputs.clientContext);
+  }
+
+  // Dashboard-only fields useful for strategic framing
+  const extraLines: string[] = [];
+  if (inputs.dashboardExtras.service_area) {
+    extraLines.push(`Service area: ${inputs.dashboardExtras.service_area}`);
+  }
+  if (inputs.dashboardExtras.notes) {
+    extraLines.push(`Additional context: ${inputs.dashboardExtras.notes}`);
+  }
+  if (extraLines.length > 0) {
+    sections.push(extraLines.join('\n'));
   }
 
   if (inputs.clientProfile) {

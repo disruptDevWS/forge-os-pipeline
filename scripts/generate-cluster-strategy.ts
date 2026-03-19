@@ -15,7 +15,7 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { callClaude, initAnthropicClient } from './anthropic-client.js';
-import { loadClientContext, buildClientContextPrompt } from './client-context.js';
+import { loadClientContextAsync, buildClientContextPrompt } from './client-context.js';
 
 // ============================================================
 // CLI argument parsing
@@ -211,7 +211,7 @@ async function main() {
     .limit(20);
 
   // 7. Client context
-  const clientCtx = loadClientContext(args.domain);
+  const { context: clientCtx } = await loadClientContextAsync(args.domain, sb, auditId);
   const clientCtxPrompt = clientCtx ? buildClientContextPrompt(clientCtx, 'cluster-strategy') : '';
 
   // 8. Load research_summary.md for strategic context (striking distance, key takeaways)
