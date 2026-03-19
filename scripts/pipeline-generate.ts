@@ -3477,7 +3477,6 @@ interface ProspectConfig {
   target_geos: Array<{ state: string; metros: string[] }>;
   topic_patterns: string[];
   state: string;
-  client_context?: ClientContext;
 }
 
 interface ProspectRecord {
@@ -3541,9 +3540,29 @@ async function runScout(sb: SupabaseClient, domain: string, prospectConfigPath: 
   if (!fs.existsSync(prospectConfigPath)) {
     throw new Error(`Prospect config not found: ${prospectConfigPath}`);
   }
-  const config: ProspectConfig = JSON.parse(fs.readFileSync(prospectConfigPath, 'utf-8'));
-  if (!config.name || !config.domain || !config.target_geos?.length || !config.topic_patterns?.length) {
-    throw new Error('Prospect config must have name, domain, target_geos[], and topic_patterns[]');
+  const rawConfig = JSON.parse(fs.readFileSync(prospectConfigPath, 'utf-8'));
+
+  // Normalize target_geos: accept both object {state,cities} and array [{state,metros}]
+  if (rawConfig.target_geos && !Array.isArray(rawConfig.target_geos)) {
+    const geo = rawConfig.target_geos;
+    const metros = geo.metros || geo.cities || [];
+    rawConfig.target_geos = geo.state ? [{ state: geo.state, metros }] : [];
+  } else if (Array.isArray(rawConfig.target_geos)) {
+    rawConfig.target_geos = rawConfig.target_geos.map((g: any) => ({
+      state: g.state || '',
+      metros: g.metros || g.cities || [],
+    }));
+  }
+
+  const config: ProspectConfig = rawConfig;
+  if (!config.name || !config.domain) {
+    throw new Error(`Prospect config missing required fields: name=${!!config.name}, domain=${!!config.domain}`);
+  }
+  if (!config.target_geos?.length) {
+    throw new Error(`Prospect config target_geos is empty or missing (got: ${JSON.stringify(rawConfig.target_geos)})`);
+  }
+  if (!config.topic_patterns?.length) {
+    throw new Error(`Prospect config topic_patterns is empty or missing (got: ${JSON.stringify(rawConfig.topic_patterns)})`);
   }
 
   // Resolve or create prospect in Supabase
