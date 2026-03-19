@@ -4,15 +4,54 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Session Start
 
-**At the start of every new session**, read these two documents before doing any work:
+**At the start of every new session**, read these documents before doing any work:
 1. [docs/PIPELINE.md](docs/PIPELINE.md) — authoritative phase contract (who owns what data, trigger paths, Supabase table ownership)
 2. [docs/DECISIONS.md](docs/DECISIONS.md) — why non-obvious choices were made (check here before "fixing" something)
+3. [docs/DATA_CONTRACT.md](docs/DATA_CONTRACT.md) — every Supabase table, who writes it (pipeline), who reads it (dashboard), column-level ownership, edge function contracts, and known mismatches
 
-These documents are the source of truth. If a phase responsibility changes, update PIPELINE.md in the same commit. If a non-obvious choice is made, add an entry to DECISIONS.md.
+These documents are the source of truth. If a phase responsibility changes, update PIPELINE.md in the same commit. If a non-obvious choice is made, add an entry to DECISIONS.md. If a table, column, edge function, or sync pattern changes, update DATA_CONTRACT.md in the same commit.
+
+## Session End
+
+Before ending a session, update these documents if significant changes were made:
+- **MEMORY.md** — project state, decisions, and context for next session
+- **DECISIONS.md** — any non-obvious architectural choices
+- **DATA_CONTRACT.md** — any new/changed tables, columns, edge functions, or sync patterns
+- **PIPELINE.md** — any phase responsibility changes
 
 ## Quick Context
 
 NanoClaw is an **SEO audit pipeline toolkit**. Dashboard buttons trigger Supabase Edge Functions, which POST to a Node.js HTTP server on Railway, which spawns a shell orchestrator that runs TypeScript phase generators, then syncs results back to Supabase tables for the dashboard to display.
+
+## Project Structure
+
+- This is a multi-repo project. Primary repos: NanoClaw pipeline (TypeScript/Shell agents), Forge OS dashboard (Next.js/Supabase), and a WordPress marketing site.
+- Key agents: Dwight (audit), Scout (research), Oscar (content), Pam (SERP enrichment), Michael (architecture).
+- Always confirm which repo context you're working in before making changes.
+
+## Workflow Mode
+
+- When I say 'plan' or ask for a plan, stay in planning mode. Do NOT begin implementation unless I explicitly say 'implement', 'build it', 'do it', or similar. Always confirm before switching from planning to implementation.
+
+## Git Discipline
+
+- Always commit and push completed work before ending a session. Never wait to be asked.
+- After committing, confirm the commit hash and branch name.
+
+## Debugging Approach
+
+- When diagnosing a bug, ask the user to confirm the root cause hypothesis before implementing a fix. Do not assume the first plausible explanation is correct.
+- When a user redirects the debugging direction, fully abandon the prior hypothesis.
+
+## SQL & Database Changes
+
+- Before writing any SQL migration, verify that all referenced enums, tables, columns, and functions actually exist in the current schema. Use `\dt`, `\dT`, `\df` or query `information_schema` to confirm.
+- Never assume database objects exist from a plan — always verify against the live schema first.
+
+## TypeScript Conventions
+
+- Always run `npx tsc --noEmit` after making TypeScript changes to catch compilation errors before committing.
+- Watch for: curly quote characters in strings, non-existent column/enum references in Supabase types, and invalid status enum values.
 
 ## Architecture
 
