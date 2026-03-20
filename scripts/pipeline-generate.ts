@@ -3705,8 +3705,13 @@ ${kwList}
 Topic patterns: ${config.topic_patterns.join(', ')}
 
 Return a JSON array of 5–15 canonical topics. Each topic:
-- key: lowercase slug (e.g., "emt-training")
-- label: Title Case display name (e.g., "EMT Training")
+- key: lowercase slug (e.g., "water-damage-restoration")
+- label: Title Case display name (e.g., "Water Damage Restoration")
+
+IMPORTANT: Topics must be geo-agnostic — strip ALL city, state, and region names.
+Example: keywords "water damage restoration boise", "water damage restoration nampa"
+→ single topic { "key": "water-damage-restoration", "label": "Water Damage Restoration" }
+The geo dimension is handled separately. Do NOT include any geographic terms in keys or labels.
 
 Group related keywords into single topics. YOUR ENTIRE RESPONSE IS RAW JSON — no markdown, no code fences. Start with [`;
 
@@ -3881,7 +3886,6 @@ Group related keywords into single topics. YOUR ENTIRE RESPONSE IS RAW JSON — 
         .map((g) => ({ keyword: g.keyword, topic: g.topic, volume: g.volume, cpc: g.cpc })),
     },
     total_opportunity_volume: opportunityMap.reduce((sum, o) => sum + o.volume, 0),
-    dataforseo_cost: sessionCost,
     generated_at: new Date().toISOString(),
   };
 
@@ -3903,8 +3907,6 @@ YOUR ENTIRE RESPONSE IS THE REPORT. Output ONLY the markdown content — start w
 **Prospect:** ${config.name} (${domain})
 **Geo Type:** ${config.geo_type}
 **Target Geos:** ${geoDescription}
-**DataForSEO Cost:** $${sessionCost.toFixed(2)}
-
 ### Canonical Topics (${canonicalTopics.length})
 ${topicListText}
 
@@ -3935,15 +3937,13 @@ ${gapTable || '| (no gap data) | | | | | |'}
 ## ${domain}
 **Scout Date:** ${date}
 **Agent:** Scout (Forge Growth)
-**DataForSEO Budget Used:** $${sessionCost.toFixed(2)} / $${SCOUT_SESSION_BUDGET.toFixed(2)}
-
 ---
 
 ## 1. Prospect Overview
 [2-3 sentences about the prospect, their industry, and geographic scope]
 
 ## 2. Canonical Topic Set
-[Table of canonical topics with key and label, brief description of each]
+[Table of geo-agnostic service category topics with key and label, brief description of each. Topics are service categories (e.g., "Water Damage Restoration"), NOT geo-specific variants.]
 
 ## 3. Current Ranking Profile
 [Table of top ranked keywords with analysis of strengths/weaknesses]
