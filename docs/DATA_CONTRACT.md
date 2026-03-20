@@ -235,15 +235,17 @@ Written by syncDwight + syncMichael. Tracks agent execution history.
 
 ### `audit_coverage_validation`
 
-Written by Phase 6.5 (Validator). Cross-checks gap analysis vs blueprint.
+Written by Phase 6.5 (Validator, Sonnet). Cross-checks gap analysis vs architecture blueprint.
 
 | Column | Notes |
 |--------|-------|
-| `gap_identifier` | Reference to gap analysis item |
-| `gap_type` | `authority` / `format` |
-| `addressed_by_silo` | Which silo covers it |
-| `addressed_by_page_slug` | Which page covers it |
-| `coverage_status` | `covered` / `partial` / `uncovered` |
+| `gap_topic` | Gap topic string from gap analysis |
+| `gap_type` | `authority` / `format` / `unaddressed` |
+| `estimated_volume` | Monthly search volume (integer, nullable) — carried from gap analysis |
+| `revenue_signal` | `high` / `medium` / `low` / `unknown` — CPC × volume threshold |
+| `blueprint_page` | URL slug of addressing page, or null |
+| `status` | `addressed` / `partially_addressed` / `unaddressed` |
+| `notes` | Required for unaddressed/partially_addressed gaps |
 
 **Dashboard reads**: Not currently consumed by UI (available for future use)
 

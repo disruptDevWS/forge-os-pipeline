@@ -352,16 +352,25 @@ Then write 2-3 sentences explaining WHY this label fits based on the data: curre
 ### Section 2: Keyword Research Directive
 Provide explicit instructions for keyword matrix construction. Address:
 1. What keyword buckets to target, in priority order (e.g., "national unmodified terms," "state-level variants," "city-level terms")
-2. What NOT to optimize around (e.g., "do not target local rankings in non-service-area cities")
+2. What NOT to optimize around — be specific to this business's situation
 3. Whether the current ranking footprint is a valid signal or a misleading anchor
 4. Any specific term patterns to include or exclude based on the business model
 
+GEO MODE GUIDANCE:
+- If geoMode is "local" or "single_market": flag any tendency to target national head terms the site cannot yet compete for; anchor recommendations to the primary service area.
+- If geoMode is "multi_state" or "regional": explicitly warn against anchoring the keyword matrix to the current ranking footprint if it is geographically narrow (e.g., one city). The current rankings are a baseline signal only — the expansion markets represent the primary opportunity and must be seeded independently. Direct the keyword matrix to treat expansion geos as first-class targets, not afterthoughts.
+
 ### Section 3: Architecture Directive
-List 3-5 structural requirements for the site architecture. Examples:
+List 3-5 structural requirements for the site architecture. Format as a numbered list. Each item must follow this structure:
+[Requirement statement] — [one sentence explaining why this is required based on the data]
+
+Examples:
 - "State landing pages required before topical cluster build"
 - "Service hub pages should be geo-agnostic; location pages link to hubs"
 - "Brand entity resolution is prerequisite — consolidate name variants"
 - "Existing thin pages should be merged, not supplemented"
+
+REQUIRED CHECK: Review Scout's ranking profile for misrouted pages — pages ranking for commercial or transactional queries that the page's content and structure cannot convert (e.g., an About page ranking for "EMT training boise", a service area page absorbing all geo-modified queries). If misrouted pages exist, include a requirement addressing the content-intent realignment needed. This is one of the highest-leverage architecture interventions available and must not be omitted when the data supports it.
 
 ### Section 4: Risk Flags
 List risks that will degrade downstream output if not surfaced. Use severity labels:
@@ -369,7 +378,16 @@ List risks that will degrade downstream output if not surfaced. Use severity lab
 - [WARNING] — will reduce output quality if ignored
 - [INFO] — context that improves downstream decisions
 
-YOUR ENTIRE RESPONSE IS THE STRATEGY BRIEF. Output ONLY the markdown content starting with "## Visibility Posture". No preamble, no code fences, no narration.`);
+REQUIRED: Before listing flags, check for conflicts between Dwight's crawl findings and Scout's ranking data. Common conflict pattern: Dwight reports a page as technically clean while Scout shows it ranking for wrong-intent queries — the page is not broken, it is misaligned. Surface these conflicts explicitly as [WARNING] flags with a one-line description of the conflict and its implication for the architecture phase.
+
+Also flag: any technical issue Dwight identified as Priority 1 or 2 that has not already been addressed in Section 3 must appear here as [BLOCKING] or [WARNING]. Do not let critical technical findings from Dwight disappear between sections.
+
+YOUR ENTIRE RESPONSE IS THE STRATEGY BRIEF. Output ONLY the markdown content. Start with the first section header. Use ## (H2) for all four section headers. Section headers must be exactly:
+## Visibility Posture
+## Keyword Research Directive
+## Architecture Directive
+## Risk Flags
+No preamble, no code fences, no narration. Do not include "Section 1:", "Section 2:" etc. in the output headers — those labels are instructions only.`);
 
   return sections.join('\n\n');
 }

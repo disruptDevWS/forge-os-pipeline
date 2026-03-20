@@ -1029,18 +1029,16 @@ ${allUrls.join('\n')}
 - Total keywords tracked: ${totalKeywords}
 - Total competitors found: ${rawCompetitors.length}
 
-## REQUIRED OUTPUT FORMAT — EXACT SECTION HEADINGS AND TABLE SCHEMAS
-You MUST use these exact section headings and table column orders. The downstream parser depends on them.
+## REQUIRED OUTPUT FORMAT — SECTION HEADINGS AND CONTENT RULES
 
-### Section 1:
-\`\`\`
+Every section heading in your output MUST use exactly this format: ## N. Section Name
+Do not use ### Section N: or any other variant. The validator and parser key on ## N. format.
+
 ## 1. Executive Summary
-[2-3 paragraphs — current search visibility, competitive position, biggest opportunities]
-\`\`\`
+[2-3 paragraphs. Current organic footprint, primary structural problem, primary opportunity. Be specific — reference actual keywords, positions, and revenue signals from the data.]
 
-### Section 2 — use this EXACT table format:
-\`\`\`
 ## 2. Keyword Overview
+[Required | Metric | Value | table. These exact metric names are required — sync-jim parses this table by name. Include all six rows in this order:]
 | Metric | Value |
 |---|---|
 | Total ranked keywords | [number] |
@@ -1049,11 +1047,9 @@ You MUST use these exact section headings and table column orders. The downstrea
 | Estimated traffic value | $[number]/mo |
 | Keywords in top 10 | [number] |
 | Near-miss keywords (pos 11-20) | [number] |
-\`\`\`
 
-### Section 3 — use this EXACT table format:
-\`\`\`
 ## 3. Position Distribution
+[SPARSE DATA: If fewer than 30 ranked keywords, write one sentence noting the thin dataset and what the distribution implies (e.g., "All 32 keywords rank between positions 14–98, indicating the site has visibility but no page-one authority on any term.") then include the table. Do not omit this section.]
 | Range | Count | Pct |
 |---|---|---|
 | 1-3 | [n] | [n]% |
@@ -1061,39 +1057,31 @@ You MUST use these exact section headings and table column orders. The downstrea
 | 11-20 | [n] | [n]% |
 | 21-50 | [n] | [n]% |
 | 51-100 | [n] | [n]% |
-\`\`\`
 
-### Section 4 — use this EXACT table format:
-\`\`\`
 ## 4. Branded vs Non-Branded Analysis
+[SPARSE DATA: If branded traffic is negligible or undetectable in the dataset, state that explicitly in one sentence. Do not omit this section.]
 | Segment | Count | Volume | Avg Position |
 |---|---|---|---|
 | Branded | [n] | [n]/mo | [n] |
 | Non-branded | [n] | [n]/mo | [n] |
-\`\`\`
 
-### Section 5 — use this EXACT table format:
-\`\`\`
 ## 5. Search Intent Breakdown
+[SPARSE DATA: If the dataset is thin, note the dominant intent pattern in one sentence. Do not omit this section.]
 | Intent | Count | Volume | Pct Volume |
 |---|---|---|---|
 | Navigational | [n] | [n] | [n]% |
 | Commercial | [n] | [n] | [n]% |
 | Transactional | [n] | [n] | [n]% |
 | Informational | [n] | [n] | [n]% |
-\`\`\`
 
-### Section 6 — use this EXACT table format:
-\`\`\`
 ## 6. Top Ranking URLs
+[If all traffic concentrates on 1-2 URLs, call that out explicitly as the primary structural finding.]
 | URL | Keywords | Volume |
 |---|---|---|
 | [full url] | [n] | [n] |
-\`\`\`
 
-### Section 7 — use these EXACT sub-headings and table format:
-\`\`\`
 ## 7. Competitor Deep Dive
+[AGGREGATOR RULE: Include aggregators (Yelp, Angi, HomeAdvisor, BBB, etc.) as rows in the raw Top 15 Competitors table — they represent real displacement data. Exclude them from the narrative analysis and the direct competitor comparison table. After the comparison table, add a one-paragraph "Displacement Threats" note identifying which aggregators dominate and on which query types.]
 ### Top 15 Competitors
 | # | Domain | Overlap % | Shared Keywords | Total Keywords | Avg Position | ETV |
 |---|---|---|---|---|---|---|
@@ -1103,41 +1091,35 @@ You MUST use these exact section headings and table column orders. The downstrea
 | Metric | ${domain} | [competitor1] | [competitor2] | [competitor3] |
 |---|---|---|---|---|
 [comparison rows]
-\`\`\`
 
-### Section 8 — use this EXACT table format:
-\`\`\`
 ## 8. Striking Distance Keywords (Positions 11-20)
+[Core definition: positions 11-20 — keywords one sustained push away from page one.
+GEO MODE ADDITION: For multi-state or regional clients where the current ranking footprint is geographically narrow, also include a separate ### Expansion Opportunity subsection flagging high-volume keywords at positions 21-100 where a dedicated content investment in expansion markets could yield material movement. Label these clearly as distinct from striking-distance terms. Do not mix them into the 11-20 table.]
 | # | Keyword | Position | Volume | CPC | Intent |
 |---|---|---|---|---|---|
 | 1 | [keyword] | [n] | [n] | $[n] | Commercial |
-\`\`\`
 
-### Section 9 — use numbered bold headings:
-\`\`\`
 ## 9. Content Gap Observations
+[Numbered observations with bold headings. Cross-reference the ## Keyword Opportunities section above if present — reference service gaps and zero-volume services identified there rather than re-deriving independently. Add observations that the raw keyword analysis surfaces that Phase 2 did not catch.]
 1. **[Gap title]** — [explanation with specific keywords, URLs, competitors]
 2. **[Gap title]** — [explanation]
 [5-8 observations]
-\`\`\`
 
-### Section 10 — use bracketed section labels:
-\`\`\`
 ## 10. Key Takeaways & Recommendations
+[Bracketed section labels in ALL CAPS (e.g., [EMERGENCY PLUMBING PAGE]). Each recommendation must reference at least one specific keyword, position, volume, or CPC data point from the report. Maximum 8 recommendations. Prioritize by revenue signal (CPC × volume), not by ease of implementation.]
 **[SECTION LABEL — e.g. SERVICE PAGES]**
 [recommendation with specific keywords and data]
-[6-8 items total]
-\`\`\`
 
 ## IMPORTANT RULES
 - Use plain numbers (no tildes ~) in table cells. Round to whole numbers.
 - Use /mo suffix for volume in Keyword Overview and Branded tables.
 - Use $ prefix for dollar values.
-- Do NOT add extra columns or change column order.
-- Exclude aggregator/directory sites (Yelp, HomeAdvisor, Angi, BBB, Thumbtack, social media, Wikipedia, Reddit) from competitor analysis. Focus ONLY on direct business competitors.
+- In the competitor table: include aggregators/directories (Yelp, Angi, HomeAdvisor, BBB, Thumbtack, social media, Wikipedia, Reddit) as rows — they represent real displacement data. Exclude them from the narrative analysis and comparison table. Add a separate "Displacement Threats" paragraph after the comparison table.
 - Be specific — reference actual keywords, URLs, and competitor domains from the data.
 - Add analysis commentary BELOW tables, not inside them.
-- This is a professional deliverable, not a summary of summaries.`;
+- This is a professional deliverable, not a summary of summaries.
+- SPARSE DATA RULE: Never omit a required section due to thin data. For sections that cannot be meaningfully populated, write 1-2 sentences acknowledging the data constraint and what it implies. Compress — do not omit.
+- COLUMN INTEGRITY RULE: Do not add extra columns or change column order in any table. Sync parsers key on exact column schemas.`;
 
   let summaryMd = await callClaude(narrativePrompt, { model: 'sonnet', phase: 'jim' });
   const summaryPath = path.join(researchDir, 'research_summary.md');
@@ -1471,15 +1453,17 @@ ${semanticSummary.rows}`;
   const michaelBriefPath = resolveArtifactPath(domain, 'research', 'strategy_brief.md');
   if (michaelBriefPath) {
     const briefContent = fs.readFileSync(michaelBriefPath, 'utf-8');
-    // Extract Architecture Directive + Risk Flags + Keyword Research Directive (drop Visibility Posture)
+    // Extract all four Strategy Brief sections for Michael (including Visibility Posture for geo-mode prioritization)
     const extractSection = (heading: string) => {
       const re = new RegExp(`## ${heading}\\n([\\s\\S]*?)(?=\\n## |\\n---\\s*$|$)`);
       return re.exec(briefContent)?.[1]?.trim() ?? '';
     };
+    const visibilityPosture = extractSection('Visibility Posture');
     const kwDirective = extractSection('Keyword Research Directive');
     const archDirective = extractSection('Architecture Directive');
     const riskFlags = extractSection('Risk Flags');
     const parts: string[] = [];
+    if (visibilityPosture) parts.push(`## Visibility Posture\n${visibilityPosture}`);
     if (kwDirective) parts.push(`## Keyword Research Directive\n${kwDirective}`);
     if (archDirective) parts.push(`## Architecture Directive\n${archDirective}`);
     if (riskFlags) parts.push(`## Risk Flags\n${riskFlags}`);
@@ -1538,7 +1522,7 @@ You MUST produce output in this EXACT format. The parser depends on these headin
 ### Start with:
 \`\`\`
 ## Executive Summary
-[2-3 paragraphs analyzing current state and recommended architecture. Reference Jim's findings, crawl issues from Dwight, and gaps identified by the Gap agent.]
+[2-3 paragraphs. Paragraph 1: current organic state — what the site ranks for, where authority is concentrated, what the primary structural problem is (reference specific keywords and positions). Paragraph 2: the primary architectural decision — what silo structure was chosen and why, what the highest-priority content gap is. Paragraph 3 (if platform constraints exist): how the platform limits or shapes implementation, and what must be done before new pages go live. Pam reads this for every page brief — make it specific enough to inform page-level decisions, not just site-level framing.]
 \`\`\`
 
 ### Then (only if Platform Constraints were provided above):
@@ -1560,27 +1544,36 @@ You MUST produce output in this EXACT format. The parser depends on these headin
 ### Then:
 \`\`\`
 ## Cannibalization Warnings
-[Any keyword cannibalization issues between pages — use semantic similarity data if available]
+[For each cannibalization risk: name the competing pages, the keyword they compete on, and the specific resolution (which page owns the keyword, what the other page should do). If misrouted pages exist, include them here with remediation instructions. If no cannibalization risks exist, write one sentence confirming clean topical separation across silos.]
 
 ## Internal Linking Strategy
-[Silo-based linking recommendations]
+[Minimum requirements: (1) identify the pillar-to-cluster linking pattern for each silo, (2) identify any cross-silo links that reinforce topical authority without creating cannibalization, (3) note any pages that currently have no internal links pointing to them (orphan risk). Be specific — name the pages and the recommended anchor text patterns.]
 \`\`\`
 
 ## Rules
 1. URL slugs: lowercase, hyphenated, no leading slash (e.g. "plumber-boise" not "/plumber-boise")
 2. Status: "new" for pages to create, "exists" for pages already on the site (match against existing URLs / crawl data)
-3. Each silo needs exactly 1 pillar page + 2-8 cluster/support pages
+3. Each silo: 1 pillar + 2-8 cluster or support pages. Role column vocabulary is locked to exactly these values:
+     - "pillar" — the primary page for a silo; targets the highest-volume head term for that service category
+     - "cluster" — a focused page targeting a specific keyword variant, intent, or sub-service within the silo
+     - "support" — an informational or FAQ page that supports the pillar and cluster pages without competing with them
+     Do not use any other Role values. sync-michael parses on these exact strings.
 4. 3-7 silos total, organized by service category and intent
-5. Primary keyword must come from the keyword data — use exact keyword text
+4b. Total new pages (Action: "create") should be proportional to the client's current site size and realistic execution capacity. As a guideline: for sites with fewer than 10 existing pages, recommend no more than 15 new pages; for sites with 10-30 pages, no more than 25 new pages; for sites with 30+ pages, scale as needed. If the gap analysis warrants more pages than this ceiling, note the excess as a "Phase 2 expansion" in the Executive Summary rather than including all pages in the initial blueprint.
+5. Primary keyword from actual keyword data where available. If the keyword matrix does not contain a suitable primary keyword for a page (common on sparse datasets), use the best-fit keyword from Jim's research narrative and note the Volume cell as "est." to indicate the figure is inferred rather than validated. Do not leave Primary Keyword blank or use a near-me variant as fallback.
 6. Volume must match the keyword data
 7. Action: "create" for new pages, "optimize" for existing pages
 8. Every high-volume cluster topic should map to at least one page
 9. Group related keywords into silos by semantic similarity and service category
-10. Prioritize near-miss keywords (positions 11-20) — these have the fastest ROI
+10. Keyword prioritization depends on the Visibility Posture from the Strategy Brief:
+    - "Local Authority with Gaps" or "New Market Entry": prioritize near-miss keywords (positions 11-20) — these are the fastest path to page-one wins
+    - "Multi-State Scaling" or "National Brand Building": prioritize expansion geo coverage over near-miss optimization — new market pages that don't exist yet are higher priority than moving existing rankings from position 15 to position 8. Near-miss keywords in the primary market are secondary.
+    - "Established Presence — Topical Expansion": balance both — near-miss wins in core market plus new topic cluster pages
 11. If Content Gap Intelligence is provided above, ensure every authority gap and unaddressed gap maps to at least one page in your architecture
+11b. MISROUTED PAGES: If the Strategy Brief or Jim's research identifies pages ranking for queries they cannot convert (e.g., an About page ranking for commercial keywords), the architecture must: (a) include a new dedicated page that correctly targets those queries, (b) note the misrouted page in Cannibalization Warnings with a specific remediation instruction (strip commercial signals, add internal link to the new dedicated page), and (c) set the new dedicated page as Action: "create" with the misrouted keywords as its Primary Keyword.
 12. If crawl data shows technical issues (broken pages, redirects), note them alongside affected URL slugs
 13. If Platform Constraints are provided, validate all URL slugs against CMS limitations. Flag any pattern not natively achievable with the workaround required.
-14. Do NOT use near-me keyword variants as primary_keyword for any page. Use the geographic variant instead (e.g. "plumber boise" not "plumber near me").
+14. Do NOT use near-me keywords as primary_keyword. If the only available keyword for a page is a near-me variant, derive the location-modified equivalent (e.g., "commercial plumbing service near me" → "commercial plumbing boise") and use that as the primary keyword. Note the near-me variant as a secondary keyword in the Executive Summary or Cannibalization Warnings if relevant.
 
 REMINDER: Your response IS the blueprint content — start with "## Executive Summary" and output the full architecture. No preamble, no narration, no summary of what you did.`;
 
@@ -1753,14 +1746,18 @@ RULES:
 - Merge synonyms and word-order variants (e.g., "ac repair" and "air conditioning repair" → same group)
 - canonical_key: lowercase with underscores, NO geo modifiers, NO state/city codes (e.g., "water_heater_repair" NOT "id:boise:water_heater_repair")
 - canonical_topic: Title Case, NO geo modifiers (e.g., "Water Heater Repair" NOT "Boise Water Heater Repair")
-- Target 10-30 groups total
+- Target approximately 1 group per 5-8 keywords. Minimum 5 groups, maximum 40 groups. For batches of 150 keywords, aim for 18-30 groups. Do not merge semantically distinct service topics just to stay under a ceiling — accurate grouping is more important than a low group count.
 - Mark branded keywords (company names, brand terms) with is_brand: true
 - Classify intent_type for each keyword using standard SEO intent taxonomy:
   * "commercial" = researching/comparing services or providers. IMPORTANT: "[service] [city]" keywords like "basement remodeling naperville" or "plumber boise" are COMMERCIAL — the searcher is evaluating options, not yet committing. Most local service keywords fall here.
-  * "transactional" = ready to act NOW with an explicit action verb like "hire", "book", "schedule", "buy", "order", "get quote". Without an action verb, it is NOT transactional.
-  * "informational" = seeking knowledge — cost questions, how-to, guides (e.g., "basement finishing cost", "how to unclog drain")
-  * "navigational" = looking for a specific brand/company BY NAME (e.g., "talon construction group", "ross dress for less boise"). ONLY use navigational when the keyword contains a recognizable brand name. Generic service keywords like "hvac contractors boise" or "air conditioning repair meridian" are NEVER navigational — they are commercial.
+  * "transactional" = ready to act NOW. Includes: keywords with explicit action verbs (hire, book, schedule, buy, order, get quote) AND "near me" keywords — "[service] near me" signals immediate local intent and should always be classified transactional.
+  * "informational" = seeking knowledge — cost questions, how-to, guides, what-is, certification requirements (e.g., "basement finishing cost", "how to unclog drain")
+  * "navigational" = looking for a specific brand/company BY NAME (e.g., "talon construction group", "ross dress for less boise"). ONLY use navigational when the keyword contains a recognizable brand name. This includes competitor brand names, not just the client's brand — if a keyword appears to be a competitor's name or branded phrase, classify as navigational and set is_brand: true. Generic service keywords like "hvac contractors boise" or "air conditioning repair meridian" are NEVER navigational — they are commercial.
 - Reference keywords by their number (index), not by string
+
+UNCLASSIFIABLE KEYWORDS: If a keyword does not clearly map to any service topic (e.g., ambiguous queries, pure competitor brand navigational leaks, non-service terms), assign it to a special group:
+{ "canonical_key": "other", "canonical_topic": "Other / Unclassified" }
+Use this group sparingly — only for keywords that genuinely resist classification. Most branded competitor keywords belong in navigational groups, not "other".
 
 KEYWORDS:
 ${kwList}
@@ -1781,7 +1778,7 @@ JSON schema:
 }`;
 
     try {
-      const result = await callClaude(prompt, { model: 'haiku', phase: 'canonicalize' });
+      const result = await callClaude(prompt, { model: 'sonnet', phase: 'canonicalize' });
       const parsed = JSON.parse(stripCodeFences(result));
       const groups: GroupResult[] = parsed.groups ?? [];
 
@@ -2030,12 +2027,14 @@ async function runCompetitors(sb: SupabaseClient, auditId: string, domain: strin
     const classifyPrompt = `You are classifying competitor domains found in search results for a ${serviceKey} business in ${market || 'the US'}.
 
 Client domain: ${clientDomain}
+If the client domain (${clientDomain}) appears in the domains list, omit it from the output entirely — do not classify it.
 
 Classify each domain into exactly ONE category:
-- "industry_competitor" — a business in the same industry (${serviceKey}) that competes for the same customers
-- "aggregator" — a directory, review site, marketplace, or platform (e.g., yelp.com, angi.com, homeadvisor.com, bbb.org, thumbtack.com, youtube.com, facebook.com, mapquest.com, yellowpages.com)
-- "brand_confusion" — a different business that shares a name fragment with the client but is NOT in the ${serviceKey} industry, OR a navigational result for a different company entirely
-- "unrelated" — a business in a different industry that is not competing for ${serviceKey} customers
+- "industry_competitor" — a business in the same industry (${serviceKey}) that competes for the same customers in a commercial context
+- "aggregator" — a directory, review site, marketplace, lead-gen platform, or social platform that aggregates listings or reviews rather than providing services directly. Characteristics: the site lists or reviews multiple businesses, accepts paid listings, or generates leads for third parties. Examples: yelp.com, angi.com, homeadvisor.com, bbb.org, thumbtack.com, youtube.com, facebook.com, mapquest.com, yellowpages.com, schools.com, niche.com, collegefactual.com. Apply this classification to any domain that exhibits these characteristics even if not in the examples list.
+- "authority_site" — a government agency, regulatory body, professional association, or accredited educational institution that ranks for industry keywords but is not a commercial competitor. Examples: .gov domains, .edu domains, national certification bodies (e.g., nremt.org), state licensing boards, professional associations.
+- "brand_confusion" — a different business that shares a name fragment with the client but is NOT in the ${serviceKey} industry
+- "unrelated" — a business in a completely different industry with no overlap in target keywords or customers
 
 Domains to classify:
 ${domainList}
@@ -2174,6 +2173,17 @@ async function runGap(sb: SupabaseClient, auditId: string, domain: string) {
     ? plannedPages.map((p) => `${p.url_slug} (${p.silo_name}/${p.role}) → "${p.primary_keyword}" [${p.action_required}]`).join('\n')
     : 'No architecture plan exists yet.';
 
+  // 6. Crawled page inventory (from Dwight's sync) — for format gap grounding
+  const { data: crawledPages } = await sb
+    .from('agent_technical_pages')
+    .select('url, title, h1, status_code')
+    .eq('audit_id', auditId)
+    .eq('status_code', 200);
+  const crawledUrls = (crawledPages ?? []) as any[];
+  const crawledInventory = crawledUrls.length > 0
+    ? crawledUrls.slice(0, 100).map((p) => `${p.url} — ${p.title || p.h1 || '(no title)'}`).join('\n')
+    : 'No crawled page inventory available.';
+
   // Load client context for full-mode prompt injection
   const { context: gapClientCtx } = await loadClientContextAsync(domain, sb, auditId);
   const gapClientContextBlock = gapClientCtx ? `\n${buildClientContextPrompt(gapClientCtx, 'gap')}\n` : '';
@@ -2197,17 +2207,34 @@ ${weakTopics || 'None identified.'}
 ## Michael's Planned Architecture Pages
 ${plannedSummary}
 
+## Client's Existing Page Inventory (from Dwight's crawl, top 100)
+${crawledInventory}
+
 ## Output — JSON with these keys:
 
-1. "authority_gaps": Array of objects with { topic, client_status ("absent"|"weak"|"behind"), client_position (null if absent), top_competitor, competitor_position, estimated_volume, revenue_opportunity, data_source ("SERP dominance"|"keyword overlap") }. Use "SERP dominance" for gaps identified from the Dominance Scores or Absent/Weak Topics sections; use "keyword overlap" for gaps from Client Clusters by Revenue Opportunity. Topics where competitors dominate and client is absent or ranking 50+. Max 15.
+1. "authority_gaps": Array of objects with { topic, client_status, client_position, top_competitor, competitor_position, estimated_volume, revenue_opportunity, data_source }. Topics where competitors dominate and client is absent or ranking 50+. Max 15.
+
+Field rules:
+- topic: geo-agnostic service phrase, Title Case
+- client_status: "absent" | "weak" | "present-underperforming"
+- client_position: integer position or null if not ranking
+- top_competitor: domain string (exclude authority_site domains — government, regulatory bodies, .edu, professional associations — even if they rank #1; use the top-ranking industry_competitor instead)
+- competitor_position: integer
+- estimated_volume: integer monthly search volume
+- revenue_opportunity: MUST be one of two formats only — (a) dollar range: "$X–$Y/mo est." using revenue table data if available, or (b) if no revenue data exists: "No revenue estimate — [competitor domain] holds [X]% share". Do NOT mix formats. Do NOT put competitive share narratives in a dollar range field or vice versa.
+- data_source: "SERP dominance" | "keyword overlap" | "keyword matrix". Use "SERP dominance" for gaps from Dominance Scores or Absent/Weak Topics; "keyword overlap" for gaps from Client Clusters; "keyword matrix" for gaps from the keyword research phase.
 
 2. "format_gaps": Array of objects with { format, description, examples, competitor_using }. Content types competitors have that client lacks (e.g., FAQs, comparison pages, location pages, service+city pages, guides, cost calculators). Max 8.
 
-3. "unaddressed_gaps": Array of objects with { topic, gap_type, reason }. Gaps from authority_gaps NOT covered by Michael's planned architecture pages. If no architecture exists, list all authority_gaps here. Max 10.
+3. "unaddressed_gaps": Array of objects with { topic, gap_type, reason }. Gaps from authority_gaps NOT covered by Michael's planned architecture pages. Max 10.
+
+CONDITIONAL: If Michael's Planned Architecture Pages section above is empty or contains fewer than 3 pages, set "unaddressed_gaps" to an empty array [] and add a note in the "summary" field that architecture has not yet been generated. Do not populate unaddressed_gaps with duplicates of authority_gaps — it is meaningless to flag gaps as "unaddressed" when there is no architecture to address them against.
 
 4. "priority_recommendations": Array of objects with { rank, action, target_keyword, estimated_volume, rationale }. Top 8 actionable items sorted by revenue opportunity.
 
-5. "summary": 2-3 sentence executive summary of the competitive gap landscape. Note which data source (SERP dominance vs keyword overlap) drove the majority of identified gaps.
+Ranking criterion: order by estimated revenue opportunity — use CPC × volume where both are available from the keyword matrix, or competitive share gap magnitude where revenue data is absent. The highest-revenue gap gets rank 1 regardless of implementation difficulty. The rationale field must reference the specific data point driving the ranking (e.g., "260 monthly searches at $3.68 CPC with 0% client share vs. idahomedicalacademy.com at 13%").
+
+5. "summary": 2-3 sentence executive summary written for Michael (the architecture agent) and the Validator. Must include: (1) the dominant competitor domain by name and what makes them the primary threat, (2) the single highest-revenue gap topic by name, and (3) if unaddressed_gaps is empty due to missing architecture, note that here. Do not restate array contents — synthesize the competitive situation in terms that directly inform architecture decisions.
 
 ## QUALITY RULES for authority_gaps topics:
 - Each topic must be a COMPLETE, meaningful service phrase (e.g., "AC repair", "furnace installation"). Never use truncated fragments like "boise heating and" or "repair boise".
@@ -2217,6 +2244,8 @@ ${plannedSummary}
 - Topics should be service-category level ("AC repair", "furnace installation"), not raw keyword strings.
 - If two topics differ only by city name, merge into the service topic and note the city in revenue_opportunity.
 - Do NOT use near-me keywords for revenue_opportunity estimates — near-me volume is national, not locally actionable.
+- In the top_competitor field: exclude authority_site domains (government agencies, regulatory bodies, .edu institutions, professional associations such as nremt.org, state licensing boards). Use the highest-ranking industry_competitor domain instead. If no industry_competitor ranks in the top 10 for a topic, note "No industry competitor in top 10" in the top_competitor field.
+- In format_gaps: base the analysis on what content formats competitors have that are absent from the client's crawled page inventory (see "Client's Existing Page Inventory" section above) — do not flag a format gap for a format type that already exists on the client's site even if individual pages are underperforming.
 
 CRITICAL: Respond with raw JSON only. No markdown code fences. Just the bare JSON object starting with {.
 
@@ -2668,12 +2697,18 @@ ${semanticSection}
 ---
 
 ## Section 1: Status Code Integrity
-[Analyze status codes from the crawl data. Report 200s, 3xx redirects, 4xx/5xx errors with specific URLs.]
+[Analyze status codes from the crawl data. Report 200s, 3xx redirects, 4xx/5xx errors with specific URLs.
+
+TRIAGE: 4xx errors are only a material issue when the affected URL is (a) indexed or previously indexed, (b) linked internally from a page that ranks, or (c) in the site's sitemap. 404s on query parameter variants, URL fragments, or URLs with no inbound internal links are noise — note them only in aggregate if the count is high. Do not list individual non-indexable 404s in the Priority fix list.
+
+Response time: Report TTFB figures as a diagnostic data point only. Frame as "investigate if Core Web Vitals are failing" — raw TTFB numbers are not a ranking signal in isolation. Do not place response time in Priority 1 or 2 unless you have evidence of CWV failure.]
 
 ---
 
 ## Section 2: URL Identity
-[Check for uppercase URLs, trailing slashes, duplicate URL variants. Report as a table.]
+[Check for uppercase URLs, trailing slashes, duplicate URL variants. Report as a table.
+
+TRIAGE: Flag duplicate URL variants only when BOTH conditions are true: (1) both variants return 200 and are independently indexable, AND (2) no canonical tag resolves the ambiguity. Trailing slash inconsistency alone is not a material issue if canonicals are consistent. Uppercase URL variants are only material if they are actively linked or indexed.]
 
 ---
 
@@ -2683,20 +2718,20 @@ ${semanticSection}
 ---
 
 ## Section 4: Page Titles
-### 4.1 Over-Length Titles
-[Table: URL | Title | Length | Status for titles > 60 chars]
+### 4.1 Page Titles
+[Table: URL | Title | Length | PixelWidth | Status — but populate the table with titles that are (a) missing entirely, (b) duplicated across multiple pages, or (c) misaligned with the page's target keyword intent. Include length as a data column but do NOT use length alone as the filter criterion. Over-length titles (>60 chars) should only appear if they also have one of the three issues above. Title truncation is a CTR aesthetic, not a ranking signal — do NOT place title length issues in Priority 1 or 2.]
 
 ### 4.2 Meta Descriptions
-[Table: URL | Length for descriptions > 155 chars]
+[Table: URL | Length for meta descriptions that are (a) missing entirely across the site, or (b) duplicated across multiple pages. Length over 155 chars is a display truncation issue only — do NOT flag individual over-length descriptions as SEO problems or place them in the priority fix list.]
 
 ---
 
 ## Section 5: Heading Structure
 ### 5.1 Missing H1
-[Table of pages with no H1]
+[Flag pages missing an H1 only when the page is intended to rank for a commercial or transactional keyword. An H1 is a topical relevance signal — its absence matters when the page needs to rank, not as a universal rule. If a page has no ranking intent (e.g., privacy policy, thank-you page), note the missing H1 but do not include it in Priority 1 or 2.]
 
 ### 5.2 Multiple H1
-[Table of pages with >1 H1, showing H1-1 and H1-2]
+[Flag multiple H1s only when the competing H1s send conflicting topical signals on a page with ranking intent. Multiple H1s on a well-structured page where one clearly leads and others are subheadings in practice is not a material issue. Do not flag this as a problem unless the page is ranking poorly and H1 conflict is a plausible contributing factor.]
 
 ---
 
@@ -2706,21 +2741,25 @@ ${semanticSection}
 ---
 
 ## Section 7: Sitemap Health
-[Analyze sitemap coverage vs crawled pages using sitemaps data.]
+[Analyze sitemap coverage vs crawled pages. The primary question is not "how many pages are in the sitemap" but "are any pages that should rank either missing from the sitemap AND missing from internal link structure?" Pages absent from both are orphan-risk — they may not be discovered or re-crawled after an update. Report the sitemap coverage gap with that framing. A missing sitemap is a Priority 1 issue for sites with weak internal linking. A missing sitemap on a well-internally-linked site is Priority 3.]
 
 ---
 
 ## Section 8: Image Health
-[Missing alt text, oversized images — use images export data.]
+[Missing alt text and oversized images — use images export data.
+
+TRIAGE: Oversized images are a material issue only when they are likely contributing to Largest Contentful Paint (LCP) failure — specifically large above-the-fold images on mobile. Flag these as a CWV diagnostic. Images below the fold or in non-LCP positions should be noted but not prioritized.
+
+Missing alt text is an accessibility issue and affects image search indexing. It does not directly affect page ranking for non-image-search queries. Report missing alt text in aggregate (e.g., "47 of 52 images missing alt text") and place it in Priority 3 unless the site has explicit image search value.]
 
 ---
 
 ## Section 9: Security & Link Health
-### 9.1 Cross-Origin Links
-[Unsafe cross-origin links without rel="noopener"]
+### 9.1 Internal Link Health
+[Flag broken internal links (links on indexed pages that point to 4xx/5xx URLs) — these are material because they waste crawl budget and break user navigation on pages that rank. Broken external links (outbound links to third-party 4xx pages) are NOT a ranking issue and should not appear in the priority fix list. Note them only in aggregate if the count is unusually high.]
 
-### 9.2 Referrer-Policy
-[Missing or weak referrer policy]
+### 9.2 Security & Headers
+[Report HTTPS/mixed content issues on indexed pages — these can trigger browser warnings that affect conversion. Referrer-Policy and other security headers are operational security concerns, not SEO issues. Note them as informational only; do not include in Priority 1 or 2.]
 
 ---
 
@@ -2749,6 +2788,13 @@ ${semanticReport ? `\n---\n\n## Section 12: Content Similarity & Cannibalization
 
 ## Prioritized Fix List
 
+TIER DEFINITIONS — enforce these strictly:
+- Priority 1 — Critical: Issues that directly prevent Google or LLM crawlers from discovering, crawling, or correctly indexing pages that should rank. Examples: noindex on commercial pages, canonical pointing to wrong URL, 4xx on indexed pages with inbound links, critical duplicate page with no canonical resolution, sitemap missing on a site with weak internal links.
+- Priority 2 — High: Issues that materially reduce ranking potential or conversion path functionality on pages that exist and are indexed. Examples: missing structured data on pages where rich results are achievable, broken internal links on ranking pages, duplicate H1s causing topical signal conflict on target pages, page speed issues with evidence of CWV failure.
+- Priority 3 — Medium: Genuine issues that have real-world consequences but low direct SEO impact. Examples: title truncation, missing alt text, meta description length, external broken links, missing secondary schema types. These should be addressed after Priority 1 and 2 are resolved.
+
+Do NOT include the following in Priority 1 or 2: title tag character counts, meta description character counts, missing alt text on non-LCP images, broken external links, response time without CWV evidence, missing secondary schema types (BreadcrumbList, WebSite/SearchAction) when primary schema is also absent.
+
 ### Priority 1 — Critical
 | # | Issue | Affected Pages | Fix |
 |---|-------|---------------|-----|
@@ -2767,7 +2813,8 @@ IMPORTANT:
 - Every issue must reference specific URLs from the crawl data
 - The Agentic Readiness Scorecard (Section 10.4) is mandatory
 - Priority tables must use numbered rows (| 1 |, | 2 |, etc.)
-- Be thorough but factual — only report what you can verify from the data
+- IMPACT TRIAGE RULE: Report only issues that materially affect (a) whether Google and LLM crawlers can discover and index the right pages, (b) whether indexed pages load fast enough to pass Core Web Vitals on mobile, or (c) whether links and functionality work correctly in the conversion path. Do NOT flag issues that are commonly reported by SEO tools but have no direct ranking or crawlability impact. When you encounter such items (e.g., title tag character counts, meta description length, external link status, missing breadcrumb schema on small sites), note them briefly under Priority 3 or omit them. Never let cosmetic or low-signal items displace critical crawlability and indexability issues in the priority list.
+- Only report what you can verify from the crawl data provided.
 - Your response IS the file content — start with "# Technical SEO & Agentic Readiness Audit" and output the full report. No preamble, no narration, no summary of what you did.`;
 
   console.log(`  Prompt size: ${reportPrompt.length} chars`);
@@ -2883,17 +2930,14 @@ Rules for scout priors:
 
 Extract two lists from the report below:
 
-1. SERVICES: All distinct services the business offers. Extract from:
-   - Service page URLs (residential/commercial paths)
-   - H1 headings and title tags on service pages
-   - Structured data (Service schema, hasOfferCatalog)
-   - Any service mentions in the executive summary
+1. SERVICES: All distinct services the business offers. Extract using this priority order:
+   PRIMARY: Read the ## Site Inventory section at the top of the report. If present, the "Detected Services:" line contains a structured comma-separated list — use it directly as your services base.
+   SECONDARY (if Site Inventory is absent): Extract from service page URLs, H1 headings and title tags on service pages, structured data (Service schema, hasOfferCatalog), and executive summary mentions.
+   EXPANSION: After extracting the base service list, expand each high-level service category into specific sub-services using industry knowledge for a ${industryLabel} business. Example: "Residential Plumbing" → add "Drain Cleaning, Water Heater Repair, Leak Detection, Pipe Repair, Fixture Installation". Include the sub-services in the services array alongside the parent categories. This ensures the keyword matrix seed covers specific high-intent service terms, not just generic category labels.
 
-2. LOCATIONS: All cities, counties, or regions the business serves. Extract from:
-   - areaServed schema markup
-   - Service area page URLs and slugs
-   - City names in page titles or H1s
-   - Footer or contact information mentions
+2. LOCATIONS: All cities, counties, or regions the business serves. Extract using this priority order:
+   PRIMARY: Read the ## Site Inventory section. If present, the "Detected Locations:" line contains a structured list — use it directly.
+   SECONDARY (if Site Inventory is absent): Extract from areaServed schema markup, service area page URLs and slugs, city names in page titles or H1s, and footer or contact information mentions.
 
 Rules:
 - Normalize services to clean labels (e.g., "Kitchen Remodeling" not "/residential/kitchen-remodeling/")
@@ -2908,8 +2952,10 @@ Respond with raw JSON only:
 {
   "services": ["Kitchen Remodeling", "Bathroom Remodeling"],
   "locations": ["St. Charles", "Naperville"],
-  "platform": "Squarespace|WordPress|Wix|unknown"
+  "platform": "WordPress|Squarespace|Wix|Shopify|Webflow|PHP-flat-file|custom-HTML|unknown"
 }
+
+Platform detection guidance: Use Dwight's Section 11 Platform Observations as the primary source. Map Dwight's language to these values: custom PHP or index.php exposed → "PHP-flat-file"; hand-coded HTML → "custom-HTML"; no CMS fingerprint detected → "unknown".
 
 REMINDER: Your response IS the JSON — start with { and end with }. No preamble.
 
@@ -3185,6 +3231,8 @@ ${reportContent}`;
 ${strategyDirective}
 
 Use this directive to inform your prioritization and analysis. The directive specifies which keyword buckets matter most and what to avoid.
+
+IMPORTANT: If the Keyword Research Directive above instructs you NOT to anchor to the current ranking footprint (typically for multi-state or regional clients), apply that constraint to your gap analysis. Do not flag absence of pages in expansion markets as service_gaps — those are architecture decisions, not keyword research gaps. Focus service_gaps on the primary service area only unless the directive explicitly instructs otherwise.
 ` : '';
 
   const synthesisPrompt = `You are a Keyword Research Analyst for a ${industryLabel} business in ${kwGeo.label || 'unknown'}.
@@ -3203,9 +3251,14 @@ ${validatedTable}
 Analyze this keyword opportunity matrix and produce a JSON response:
 
 1. Top opportunities by revenue signal (CPC × estimated achievable volume)
-2. Flag any service the site claims to offer that has ZERO keyword volume in this market
+2. Distinguish two different gap types:
+   - zero_volume_services: Services the site offers for which NO keywords in the validated matrix have measurable search volume. This is a market signal failure — the service may not have search demand in this geo, or the seed terms were too generic. Flag these explicitly.
+   - service_gaps (already in output schema): Services OR sub-services with measurable keyword volume in the matrix but NO existing page on the site. This is a content gap — the demand exists but the site is not positioned to capture it. These are build opportunities.
+   Do not conflate these two categories. A zero-volume service is not the same as a missing page.
 3. Identify gaps: services with strong volume that have no existing page on the site
 4. Score each keyword with priority_score: (cpc * volume) / 1000, rounded to 2 decimals
+
+DATA QUALITY CHECK: If the validated keyword matrix contains fewer than 15 keywords, include a "data_quality_flag" field in your JSON output with a brief description of the coverage gap. Example: "Matrix contains only 3 keywords across 2 generic service categories — sub-service expansion and additional DataForSEO seed terms recommended before treating this analysis as complete." Do not suppress findings — produce the best analysis possible from the available data and surface the coverage gap explicitly.
 
 YOUR ENTIRE RESPONSE IS RAW JSON. Output ONLY the JSON object starting with {. No markdown, no code fences, no narration.
 
@@ -3228,7 +3281,7 @@ Respond with raw JSON only:
   "service_gaps": [
     { "service": "string", "total_volume": 1000, "top_keyword": "string", "has_page": false }
   ],
-  "summary": "2-3 sentence executive summary"
+  "summary": "2-3 sentence executive summary that: (1) characterizes the overall opportunity landscape (strong/moderate/thin demand signal), (2) names the single highest-priority gap or opportunity by keyword and volume, and (3) notes any significant data quality or coverage concern. This summary is read by Michael and Pam — make it directionally useful, not a restatement of what the matrix contains."
 }
 
 REMINDER: Your response IS the JSON — start with { and end with }. No preamble.`;
@@ -3362,24 +3415,34 @@ ${blueprintContent}
 ## Task
 For each gap identified in the analysis (authority_gaps, format_gaps, unaddressed_gaps), determine whether it is addressed by a page in the architecture blueprint.
 
-A gap is "addressed" if a blueprint page's primary keyword, URL slug, or silo clearly targets the gap topic.
-A gap is "partially_addressed" if a related page exists but doesn't directly target the gap.
-A gap is "unaddressed" if no blueprint page covers it.
+Coverage status definitions — apply strictly:
+- "addressed": A specific page exists in the blueprint (not just a silo) whose primary keyword directly targets the gap topic, OR whose URL slug contains the gap topic's key terms. A silo name alone does not constitute "addressed" — there must be a specific page row.
+- "partially_addressed": A related page exists that would capture some of the gap's search demand, but no page directly targets the gap topic as its primary keyword. Example: a general "EMT Training" page partially addresses an "EMT Certification Idaho" gap.
+- "unaddressed": No page in the blueprint targets the gap topic directly or partially.
+
+EMPTY INPUT HANDLING:
+- If the gap analysis contains no authority_gaps, format_gaps, or unaddressed_gaps (e.g., because architecture had not yet been generated when gap analysis ran), set coverage to [] and note this in the summary.
+- If the architecture blueprint contains no silo tables (e.g., blueprint generation failed or is incomplete), set all gaps to status "unaddressed" with notes: "Blueprint unavailable — cannot validate coverage."
 
 YOUR ENTIRE RESPONSE IS RAW JSON. Output ONLY the JSON object starting with {. No markdown, no code fences, no narration.
 
 Respond with raw JSON only. Schema:
 {
   "coverage": [
-    { "gap_topic": "string", "gap_type": "authority|format|unaddressed", "blueprint_page": "url-slug or null", "status": "addressed|partially_addressed|unaddressed", "notes": "string" }
+    { "gap_topic": "string", "gap_type": "authority|format|unaddressed", "estimated_volume": "integer or null", "revenue_signal": "high|medium|low|unknown", "blueprint_page": "url-slug or null", "status": "addressed|partially_addressed|unaddressed", "notes": "string" }
   ],
-  "summary": "2-3 sentence summary of coverage quality"
+  "summary": "2-3 sentence summary that must include: (1) overall coverage rate as a fraction (e.g., '7 of 11 gaps addressed'), (2) the highest-revenue unaddressed or partially_addressed gap by name, and (3) a clear PASS or FAIL signal — PASS if all high-revenue gaps are addressed, FAIL if any high-revenue gap is unaddressed or partially_addressed."
 }
+
+Field rules:
+- estimated_volume: carry through from gap analysis if available, null if not
+- revenue_signal: "high" if CPC × volume implies >$500/mo opportunity, "medium" if $100-500/mo, "low" if <$100/mo, "unknown" if no revenue data available
+- notes: REQUIRED for any gap with status "unaddressed" or "partially_addressed" — must explain why the gap is not fully addressed and what specific action would resolve it. Optional for "addressed" gaps.
 
 REMINDER: Your response IS the JSON — start with { and end with }. No preamble.`;
 
-  console.log('  Running coverage validation via Anthropic API (haiku)...');
-  const result = await callClaude(prompt, { model: 'haiku', phase: 'validator' });
+  console.log('  Running coverage validation via Anthropic API (sonnet)...');
+  const result = await callClaude(prompt, { model: 'sonnet', phase: 'validator' });
   let validation: { coverage: any[]; summary: string };
   try {
     validation = JSON.parse(stripCodeFences(result));
@@ -3412,6 +3475,8 @@ REMINDER: Your response IS the JSON — start with { and end with }. No preamble
         audit_id: auditId,
         gap_topic: c.gap_topic,
         gap_type: c.gap_type,
+        estimated_volume: typeof c.estimated_volume === 'number' ? c.estimated_volume : null,
+        revenue_signal: c.revenue_signal ?? null,
         blueprint_page: c.blueprint_page ?? null,
         status: c.status,
         notes: c.notes ?? null,
@@ -3439,20 +3504,20 @@ function buildCoverageValidationMd(domain: string, validation: { coverage: any[]
   const unaddressed = (validation.coverage ?? []).filter((c) => c.status === 'unaddressed' || c.status === 'partially_addressed');
   if (unaddressed.length > 0) {
     lines.push('## Unaddressed / Partially Addressed Gaps\n');
-    lines.push('| Gap Topic | Gap Type | Status | Blueprint Page | Notes |');
-    lines.push('|-----------|----------|--------|---------------|-------|');
+    lines.push('| Gap Topic | Gap Type | Est. Volume | Revenue Signal | Status | Blueprint Page | Notes |');
+    lines.push('|-----------|----------|-------------|----------------|--------|---------------|-------|');
     for (const c of unaddressed) {
-      lines.push(`| ${c.gap_topic} | ${c.gap_type} | ${c.status} | ${c.blueprint_page ?? 'N/A'} | ${c.notes ?? ''} |`);
+      lines.push(`| ${c.gap_topic} | ${c.gap_type} | ${c.estimated_volume ?? '—'} | ${c.revenue_signal ?? 'unknown'} | ${c.status} | ${c.blueprint_page ?? 'N/A'} | ${c.notes ?? ''} |`);
     }
   }
 
   const addressed = (validation.coverage ?? []).filter((c) => c.status === 'addressed');
   if (addressed.length > 0) {
     lines.push('\n## Addressed Gaps\n');
-    lines.push('| Gap Topic | Gap Type | Blueprint Page | Notes |');
-    lines.push('|-----------|----------|---------------|-------|');
+    lines.push('| Gap Topic | Gap Type | Est. Volume | Revenue Signal | Blueprint Page | Notes |');
+    lines.push('|-----------|----------|-------------|----------------|---------------|-------|');
     for (const c of addressed) {
-      lines.push(`| ${c.gap_topic} | ${c.gap_type} | ${c.blueprint_page ?? 'N/A'} | ${c.notes ?? ''} |`);
+      lines.push(`| ${c.gap_topic} | ${c.gap_type} | ${c.estimated_volume ?? '—'} | ${c.revenue_signal ?? 'unknown'} | ${c.blueprint_page ?? 'N/A'} | ${c.notes ?? ''} |`);
     }
   }
 
@@ -3713,6 +3778,8 @@ Example: keywords "water damage restoration boise", "water damage restoration na
 → single topic { "key": "water-damage-restoration", "label": "Water Damage Restoration" }
 The geo dimension is handled separately. Do NOT include any geographic terms in keys or labels.
 
+If the keyword list contains fewer than 20 keywords or fewer than 4 clearly distinct service categories, return only the topics that are genuinely supported by the data — do not pad to reach 5 topics. Quality over count.
+
 Group related keywords into single topics. YOUR ENTIRE RESPONSE IS RAW JSON — no markdown, no code fences. Start with [`;
 
     try {
@@ -3951,20 +4018,20 @@ ${gapTable || '| (no gap data) | | | | | |'}
 |---------|----------|--------|-----|--------|
 
 ## 4. Opportunity Map
-[Table of high-volume keyword opportunities sorted by volume]
+[If opportunityTable is empty: render this section as a single sentence — 'Opportunity map data will be populated during the full pipeline run.' Do NOT include an explanation of why the data is absent, do NOT reference DataForSEO geo-scoping constraints or API behaviors, and do NOT include a table with placeholder rows. Then continue to Section 5 without further comment.]
 | Keyword | Volume | CPC | Competition |
 |---------|--------|-----|-------------|
 
 ## 5. Gap Matrix
-[Table showing defending/weak/gap status per keyword-topic combination]
+[Map each keyword to a topic using ONLY the exact topic keys provided in the Canonical Topics list above. If a keyword does not clearly match any provided topic key, use 'other'. Do not invent new topic keys.]
 | Keyword | Topic | Status | Position | Volume | CPC |
 |---------|-------|--------|----------|--------|-----|
 
 ## 6. LP Opportunity Summary
-[Analysis of landing page opportunities — which topics need pages, which existing pages could be optimized]
+[For geo_type 'local': lead with optimization priorities for existing pages, then new local service pages. For geo_type 'multi_state' or 'regional': lead with the expansion footprint gap — the prospect has zero ranking presence in their target markets. Frame LP creation as the foundational infrastructure needed before any ranking is possible in expansion geos, and treat defending local positions as a secondary (not primary) priority in this section.]
 
-## 7. Recommended Scope for Jim
-[JSON block with recommended seed data for a full pipeline run]
+## 7. Recommended Scope for Research
+[This section is a human-readable recommendation document formatted as JSON for clarity. It is NOT a pipeline configuration file and will NOT be parsed programmatically. Include whatever fields are analytically useful — seed_topics, expansion_geos, flags, estimated_addressable_volume, etc. Label the JSON block with a comment at the top: // Recommended Jim run scope — human review required before pipeline execution]
 \`\`\`json
 {scope_json}
 \`\`\`
@@ -4144,7 +4211,10 @@ const QA_RUBRICS: Record<string, QARubric> = {
     artifactSubdir: 'architecture',
     checks: [
       { name: 'silo_structure', weight: 'critical', description: '3-7 silos with page tables containing required columns' },
+      { name: 'slug_integrity', weight: 'critical', description: "No duplicate URL slugs across all silo tables. No URL slugs containing spaces, uppercase letters, or leading slashes. Validates Michael's Rule 1 and Rule 2." },
+      { name: 'pillar_completeness', weight: 'critical', description: "Every silo defined in the blueprint contains exactly one page with Role: 'pillar'. A silo with zero pillars or multiple pillars is a structural failure." },
       { name: 'keyword_coverage', weight: 'high', description: '60%+ of top-20 Jim keywords appear as primary keywords' },
+      { name: 'primary_keyword_present', weight: 'high', description: "No Action: 'create' pages have a blank or missing Primary Keyword. Pages with Action: 'optimize' may have estimated volumes noted as 'est.' but must still have a keyword value." },
       { name: 'gap_coverage', weight: 'high', description: 'If gap analysis exists, 80%+ of gaps have corresponding pages' },
       { name: 'page_actions', weight: 'medium', description: 'Each page has clear action: create, optimize, or merge' },
     ],
