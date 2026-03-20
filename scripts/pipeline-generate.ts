@@ -593,6 +593,85 @@ function buildSyntheticRankedKeywords(volumeResults: BulkVolumeResult[]): any {
 }
 
 // ============================================================
+// ── Site Inventory builder (shared by Jim + KeywordResearch) ──
+
+function buildSiteInventory(domain: string): string {
+  const auditorDir = findLatestAuditorDir(domain);
+  if (!auditorDir) {
+    console.log('  Warning: No auditor directory found — Dwight has not run');
+    return '';
+  }
+
+  const auditReportPath = path.join(auditorDir, 'AUDIT_REPORT.md');
+  if (!fs.existsSync(auditReportPath)) {
+    console.log('  Warning: AUDIT_REPORT.md not found — Dwight may not have run');
+    return '';
+  }
+
+  const reportContent = fs.readFileSync(auditReportPath, 'utf-8');
+
+  // Extract service pages — URLs under residential/commercial paths with H1/title
+  const servicePageLines: string[] = [];
+  const csvPath = path.join(auditorDir, 'internal_all.csv');
+  if (fs.existsSync(csvPath)) {
+    const csvContent = readCsvSafe(csvPath, false);
+    const csvLines = csvContent.split('\n');
+    const header = csvLines[0] ?? '';
+    const cols = header.split(',').map((c) => c.replace(/"/g, '').trim().toLowerCase());
+    const addrIdx = cols.indexOf('address');
+    const h1Idx = cols.findIndex((c) => c === 'h1-1');
+    const titleIdx = cols.findIndex((c) => c === 'title 1');
+
+    for (const line of csvLines.slice(1)) {
+      if (!line.trim()) continue;
+      const parts: string[] = [];
+      let cur = '';
+      let inQuote = false;
+      for (let i = 0; i < line.length; i++) {
+        const ch = line[i];
+        if (ch === '"') { inQuote = !inQuote; cur += ch; }
+        else if (ch === ',' && !inQuote) { parts.push(cur); cur = ''; }
+        else { cur += ch; }
+      }
+      parts.push(cur);
+
+      const addr = (parts[addrIdx] ?? '').replace(/"/g, '').trim();
+      if (addr && /\/(service|residential|commercial|what-we-do)/i.test(addr)) {
+        const h1 = (parts[h1Idx] ?? '').replace(/"/g, '').trim();
+        const title = (parts[titleIdx] ?? '').replace(/"/g, '').trim();
+        servicePageLines.push(`${addr} | H1: ${h1 || 'N/A'} | Title: ${title || 'N/A'}`);
+      }
+    }
+  }
+
+  // Extract location signals from the report
+  const locationMatch = reportContent.match(/areaServed[^\n]*\n([\s\S]*?)(?=\n##|\n#|$)/i);
+  const locationSignals = locationMatch ? locationMatch[1].trim().slice(0, 500) : '';
+
+  // Extract platform
+  const platformMatch = reportContent.match(/##[^#\n]*Platform\s+Observations[^\n]*\n([\s\S]*?)(?=\n##\s|\n#\s|$)/i);
+  const platformInfo = platformMatch ? platformMatch[1].trim().slice(0, 300) : '';
+
+  if (servicePageLines.length > 0 || locationSignals || platformInfo) {
+    let inventory = `## Site Inventory (from Dwight's Crawl)\n`;
+    if (servicePageLines.length > 0) {
+      inventory += `### Service Pages (${servicePageLines.length} found)\nURL | H1 | Title\n${servicePageLines.join('\n')}\n\n`;
+    }
+    if (locationSignals) {
+      inventory += `### Location Signals\n${locationSignals}\n\n`;
+    }
+    if (platformInfo) {
+      inventory += `### Platform\n${platformInfo}\n\n`;
+    }
+    console.log(`  Site inventory from Dwight: ${servicePageLines.length} service pages, location signals: ${locationSignals ? 'yes' : 'no'}, platform: ${platformInfo ? 'yes' : 'no'}`);
+    return inventory;
+  }
+
+  console.log('  Warning: Dwight\'s report produced no usable service pages, location signals, or platform info');
+  return '';
+}
+
+// ============================================================
 // Phase 3: Jim — DataForSEO calls → research artifacts → Claude narrative
 // ============================================================
 
@@ -603,81 +682,7 @@ async function runJim(sb: SupabaseClient, auditId: string, domain: string, audit
   fs.mkdirSync(researchDir, { recursive: true });
 
   // --- Read Dwight's site inventory (if available) ---
-  let siteInventory = '';
-  const auditorDir = findLatestAuditorDir(domain);
-  if (auditorDir) {
-    const auditReportPath = path.join(auditorDir, 'AUDIT_REPORT.md');
-    if (fs.existsSync(auditReportPath)) {
-      const reportContent = fs.readFileSync(auditReportPath, 'utf-8');
-
-      // Extract service pages — URLs under residential/commercial paths with H1/title
-      const servicePageLines: string[] = [];
-      const csvPath = path.join(auditorDir, 'internal_all.csv');
-      if (fs.existsSync(csvPath)) {
-        const csvContent = readCsvSafe(csvPath, false);
-        const csvLines = csvContent.split('\n');
-        const header = csvLines[0] ?? '';
-        const cols = header.split(',').map((c) => c.replace(/"/g, '').trim().toLowerCase());
-        const addrIdx = cols.indexOf('address');
-        const h1Idx = cols.findIndex((c) => c === 'h1-1');
-        const titleIdx = cols.findIndex((c) => c === 'title 1');
-
-        for (const line of csvLines.slice(1)) {
-          if (!line.trim()) continue;
-          // Simple CSV parse for the columns we need
-          const parts: string[] = [];
-          let cur = '';
-          let inQuote = false;
-          for (let i = 0; i < line.length; i++) {
-            const ch = line[i];
-            if (ch === '"') { inQuote = !inQuote; cur += ch; }
-            else if (ch === ',' && !inQuote) { parts.push(cur); cur = ''; }
-            else { cur += ch; }
-          }
-          parts.push(cur);
-
-          const addr = (parts[addrIdx] ?? '').replace(/"/g, '').trim();
-          if (addr && /\/(service|residential|commercial|what-we-do)/i.test(addr)) {
-            const h1 = (parts[h1Idx] ?? '').replace(/"/g, '').trim();
-            const title = (parts[titleIdx] ?? '').replace(/"/g, '').trim();
-            servicePageLines.push(`${addr} | H1: ${h1 || 'N/A'} | Title: ${title || 'N/A'}`);
-          }
-        }
-      }
-
-      // Extract location signals from the report
-      const locationMatch = reportContent.match(/areaServed[^\n]*\n([\s\S]*?)(?=\n##|\n#|$)/i);
-      const locationSignals = locationMatch ? locationMatch[1].trim().slice(0, 500) : '';
-
-      // Extract platform
-      const platformMatch = reportContent.match(/##[^#\n]*Platform\s+Observations[^\n]*\n([\s\S]*?)(?=\n##\s|\n#\s|$)/i);
-      const platformInfo = platformMatch ? platformMatch[1].trim().slice(0, 300) : '';
-
-      if (servicePageLines.length > 0 || locationSignals || platformInfo) {
-        siteInventory = `## Site Inventory (from Dwight's Crawl)\n`;
-        if (servicePageLines.length > 0) {
-          siteInventory += `### Service Pages (${servicePageLines.length} found)\nURL | H1 | Title\n${servicePageLines.join('\n')}\n\n`;
-        } else {
-          console.log('  Warning: No service pages found in Dwight\'s crawl data');
-        }
-        if (locationSignals) {
-          siteInventory += `### Location Signals\n${locationSignals}\n\n`;
-        } else {
-          console.log('  Warning: No location signals found in Dwight\'s audit report');
-        }
-        if (platformInfo) {
-          siteInventory += `### Platform\n${platformInfo}\n\n`;
-        }
-        console.log(`  Site inventory from Dwight: ${servicePageLines.length} service pages, location signals: ${locationSignals ? 'yes' : 'no'}, platform: ${platformInfo ? 'yes' : 'no'}`);
-      } else {
-        console.log('  Warning: Dwight\'s report produced no usable service pages, location signals, or platform info');
-      }
-    } else {
-      console.log('  Warning: AUDIT_REPORT.md not found — Dwight may not have run');
-    }
-  } else {
-    console.log('  Warning: No auditor directory found — Dwight has not run');
-  }
+  const siteInventory = buildSiteInventory(domain);
 
   // --- Read KeywordResearch opportunities (if available) ---
   let kwResearchSection = '';
@@ -2913,6 +2918,9 @@ async function runKeywordResearch(sb: SupabaseClient, auditId: string, domain: s
   const kwGeo = resolveGeoScope(auditRow);
   const industryLabel = customLabel || serviceKey.replace(/_/g, ' ') || 'local service';
 
+  // --- Build site inventory for extraction prompt ---
+  const kwSiteInventory = buildSiteInventory(domain);
+
   // --- Step 1: Extract services + locations via LLM ---
   const scopeContext = scopeData ? `
 ## Prior Scout Discovery (validate against crawl data)
@@ -2959,7 +2967,7 @@ Platform detection guidance: Use Dwight's Section 11 Platform Observations as th
 
 REMINDER: Your response IS the JSON — start with { and end with }. No preamble.
 
-## AUDIT REPORT
+${kwSiteInventory ? `${kwSiteInventory}\n` : ''}## AUDIT REPORT
 ${reportContent}`;
 
   console.log('  Extracting services + locations from AUDIT_REPORT.md via Haiku...');
