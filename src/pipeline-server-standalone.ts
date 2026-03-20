@@ -585,6 +585,55 @@ async function handleDeactivateCluster(req: http.IncomingMessage, res: http.Serv
   json(res, 200, { status: 'deactivated', domain, canonical_key });
 }
 
+async function handleStrategyBrief(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  if (!checkAuth(req, res)) return;
+
+  let payload: { domain?: string };
+  try {
+    payload = JSON.parse(await readBody(req));
+  } catch {
+    json(res, 400, { error: 'Invalid JSON' });
+    return;
+  }
+
+  const { domain } = payload;
+  if (!domain) {
+    json(res, 400, { error: 'domain is required' });
+    return;
+  }
+  if (!DOMAIN_RE.test(domain)) {
+    json(res, 400, { error: 'Invalid domain format' });
+    return;
+  }
+
+  const researchBase = path.join(AUDITS_BASE, domain, 'research');
+  if (!fs.existsSync(researchBase)) {
+    json(res, 404, { error: 'No research directory found' });
+    return;
+  }
+
+  const dateDirs = fs.readdirSync(researchBase)
+    .filter((e) => /^\d{4}-\d{2}-\d{2}$/.test(e))
+    .sort();
+  if (dateDirs.length === 0) {
+    json(res, 404, { error: 'No research runs found' });
+    return;
+  }
+
+  // Scan from latest date backward to find strategy_brief.md
+  for (let i = dateDirs.length - 1; i >= 0; i--) {
+    const briefPath = path.join(researchBase, dateDirs[i], 'strategy_brief.md');
+    if (fs.existsSync(briefPath)) {
+      const content = fs.readFileSync(briefPath, 'utf-8');
+      console.log(`Strategy brief served: ${domain} (${dateDirs[i]})`);
+      json(res, 200, { content, date: dateDirs[i] });
+      return;
+    }
+  }
+
+  json(res, 404, { error: 'Strategy brief not found' });
+}
+
 async function handleArtifact(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   if (!checkAuth(req, res)) return;
 
@@ -679,6 +728,8 @@ const server = http.createServer((req, res) => {
     handleActivateCluster(req, res);
   } else if (req.method === 'POST' && req.url === '/deactivate-cluster') {
     handleDeactivateCluster(req, res);
+  } else if (req.method === 'POST' && req.url === '/strategy-brief') {
+    handleStrategyBrief(req, res);
   } else {
     json(res, 404, { error: 'Not found' });
   }
