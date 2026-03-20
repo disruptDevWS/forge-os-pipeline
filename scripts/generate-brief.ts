@@ -70,6 +70,16 @@ function todayStr(): string {
 // ============================================================
 
 function extractMetadataField(md: string, field: string): string | null {
+  // New format: **Field:** value on the same line
+  const boldRegex = new RegExp(`\\*\\*${field}:\\*\\*\\s*(.+)`, 'i');
+  const boldMatch = md.match(boldRegex);
+  if (boldMatch) {
+    const val = boldMatch[1].trim();
+    // Skip template placeholders like [≤60 chars...]
+    if (val && !val.startsWith('[')) return val;
+  }
+
+  // Old format: ## Field\n\nvalue
   const regex = new RegExp(`##\\s*${field}[\\s\\S]*?\\n\\n([^#]+?)(?=\\n##|\\n#|$)`, 'i');
   const match = md.match(regex);
   if (!match) return null;
@@ -555,22 +565,6 @@ function buildSerpSection(serp: SerpEnrichment | null): string {
     }
   }
 
-  // Competitive context generation instructions
-  parts.push(`
-## Competitive Context Generation Instructions
-
-When generating the content outline, you MUST also produce a Competitive Context section at the end of the outline (inside the ---OUTLINE_START--- / ---OUTLINE_END--- block). This section uses the SERP data above.
-
-Rules:
-1. Separate PAA questions into three categories:
-   a. Questions answered by competitor pages (standard snippets) — table-stakes content the page MUST address
-   b. Questions answered by AI Overview — content opportunities (ownable whitespace where direct answers can displace AI-generated responses)
-   c. Second-tier questions (seed_question not null) — deeper intent patterns worth monitoring
-2. List People Also Search queries, noting which align with brief keywords vs. new territory
-3. Synthesize Content Gap Opportunities — actionable insights, not just restated data
-4. Write a Differentiation Summary referencing this client's specific competitive advantage relative to THIS keyword's SERP
-5. Format as structured prose and tables, not raw data dumps`);
-
   return parts.join('\n');
 }
 
@@ -653,37 +647,33 @@ function buildPrompt(
       ].join('\n')
     : 'No sibling pages found for this silo.';
 
+  const domain = auditMeta.domain;
+  const service_key = auditMeta.service_key;
+  const market_city = auditMeta.market_city;
+  const market_state = auditMeta.market_state;
+
   return `You are Pam, The Synthesizer — a content engineering agent for Forge Growth.
 
-## Your Task
-Generate a complete content brief for the page /${slug} on ${auditMeta.domain}.
+Your job is strategic content engineering. You are not producing a document template — you are making decisions about what this page needs to be, who it serves, how it builds topical authority, and what Oscar needs to know to write content that is genuinely useful to the reader and correctly optimized by construction.
 
-## Action Type: ${actionType === 'create' ? 'CREATE — This is a brand new page. Write from scratch.' : 'OPTIMIZE — This page already exists. Improve and restructure the existing content.'}
+## Action Type: ${actionType === 'create' ? 'CREATE — brand new page' : 'OPTIMIZE — existing page'}
 
-## Domain Context
-- Domain: ${auditMeta.domain}
-- Service category: ${auditMeta.service_key}
-- Market: ${auditMeta.market_city}, ${auditMeta.market_state}
-
-## Page Context
+## Page Identity
+- Domain: ${domain}
 - URL: /${slug}
 - Silo: ${siloName ?? 'Unknown'}
 - Role: ${pageRole}
-- Page status: ${pageStatus}
+- Service category: ${service_key}
+- Market: ${market_city}, ${market_state}
 
 ## Target Keywords
 ${keywordTable}
 
 ## Sibling Pages in This Silo
 ${siblingsTable}
-IMPORTANT: Your content outline MUST include internal links to/from these sibling pages. Each link should use descriptive anchor text matching the target page's primary keyword, not generic text like "learn more."
 
-${strategyContext ? `## Strategy Brief (Phase 1b)
-${strategyContext}
-` : ''}${marketContext ? `## Market Context
-Use striking distance keywords to identify where the client has existing ranking momentum that this page can accelerate. Reference key takeaways when writing competitive differentiation and content direction for each section.
-
-${marketContext}` : ''}
+${strategyContext ? `## Strategy Brief (Phase 1b)\n${strategyContext}\n` : ''}
+${marketContext ? `## Market Context\n${marketContext}\n` : ''}
 ## Architecture Blueprint Context
 ${blueprintExcerpt || 'No architecture blueprint available.'}
 
@@ -693,29 +683,113 @@ ${buildSerpSection(ctx.serpEnrichment)}
 
 ${buildClientProfileSection(clientProfile)}
 
+---
+
 ## Output Format
-You MUST produce exactly three sections, delimited by sentinel markers:
+
+Produce exactly three sentinel-delimited sections. The sentinel markers are parsed programmatically — they must appear exactly as shown.
 
 ---METADATA_START---
-[Full metadata.md — include: Meta Title with character count and Fact-Feel-Proof breakdown, Meta Description with character count and Fact-Feel-Proof breakdown, H1 Tag Recommendation with rationale and differentiation from other pages, Intent Classification with explanation, Keyword-to-Element Mapping table, Implementation Notes for the CMS]
+
+**Primary Keyword:** [the single keyword this page targets as its primary ranking signal]
+**Intent:** commercial | transactional | informational
+**Buyer Journey Stage:** awareness | consideration | decision | retention
+
+**Meta Title:** [≤60 chars — primary keyword near front, brand at end if space permits]
+Rationale: [one sentence — why this title serves both the user and the ranking goal]
+
+**Meta Description:** [≤155 chars — expands on title, includes a secondary keyword or geo modifier, ends with implicit or explicit CTA]
+Rationale: [one sentence]
+
+**H1:** [matches or closely mirrors meta title intent — this is what the user reads first, not a keyword insertion exercise]
+Rationale: [one sentence]
+
+**Keyword-to-Element Mapping:**
+| Keyword | Target Element | Notes |
+|---------|---------------|-------|
+
+**Implementation Notes:** [anything Oscar or a human editor needs to know before writing — e.g., OPTIMIZE: do not rewrite hero section, update FAQ block only; or CREATE: this is a pillar page, tone is authoritative, conversion-focused]
+
 ---METADATA_END---
 
 ---SCHEMA_START---
-[Complete JSON-LD @graph with Organization, WebSite, WebPage, Service, and FAQPage entities. Use REPLACE placeholders for unknown values like phone, address, images. Include areaServed cities from the silo context.]
+
+[Complete JSON-LD @graph. This schema is infrastructure — it contributes to the site's entity graph, not just individual page rich results.
+
+ENTITY GRAPH PHILOSOPHY: Every page's schema should tell a coherent machine-readable story: this Organization, operating in this location, offers this Service, described on this WebPage. The @graph on each page extends the site-wide entity model — it does not start from scratch.
+
+REQUIRED ENTITIES (all pages):
+- Organization: consistent @id (https://${domain}/#organization), name, url, telephone, address — use [PLACEHOLDER: field] for any unknown values, never omit required fields
+- WebPage: @id (https://${domain}/${slug}/#webpage), @type based on intent (ServicePage for commercial/transactional, Article for informational), name, url, isPartOf pointing to WebSite @id
+
+CONDITIONAL ENTITIES (add when appropriate):
+- Service: when the page targets a specific service — include name (must match canonical cluster topic), provider pointing to Organization @id, areaServed
+- FAQPage: when the page includes Q&A content — include Question/Answer pairs that match the FAQ section in the outline exactly. This is an opportunity surface (featured snippets, PAA, AI Overviews), not the primary schema goal.
+- HowTo: when the page includes sequential instructional content
+- BreadcrumbList: on all non-homepage pages — reinforces site hierarchy for machine readers
+
+@id IRI PATTERN (use consistently across all pages for this domain):
+- Organization: https://${domain}/#organization
+- WebSite: https://${domain}/#website
+- WebPage: https://${domain}/${slug}/#webpage
+- Service: https://${domain}/${slug}/#service
+
+PLACEHOLDER PROTOCOL: Use [PLACEHOLDER: field_name] for any unknown client data. Do not fabricate values. Do not omit fields — placeholder them so human editors know what requires completion.]
+
 ---SCHEMA_END---
 
 ---OUTLINE_START---
-[Full content_outline.md — include: keyword targets table with volume/position/target, section-by-section outline with H2/H3 structure, word count targets per section, content direction for each section, keywords to use naturally per section, internal linking map (links FROM and TO this page), content differentiation table showing how this page differs from siblings, total word count estimate]
+
+[Strategic content brief for Oscar. This is direction, not a script. Oscar has craft and judgment — give him what he needs to make good decisions, not a line-by-line prescription.
+
+**Page Purpose:**
+One paragraph. What is this page for? Who is reading it, at what stage of the buyer journey, and what do they need to leave with? How does this page build topical authority for the ${siloName ?? 'Unknown'} cluster?
+
+**Content Strategy:**
+- Primary angle: what makes this page's treatment of the topic distinct from generic competitor coverage
+- Tone: derived from intent — commercial pages are confident and authoritative, transactional pages are direct and conversion-focused, informational pages are thorough and educational
+- Depth signal: cover the topic completely for the user's intent — a transactional page should be concise and conversion-focused, an informational page should be comprehensive. Let intent drive length, not a word count target.
+
+**Required Content Coverage:**
+What this page must address to fully serve user intent and compete for the target keyword. List the topics, questions, and angles that must be covered — not the sections and their word counts. Oscar decides structure; Pam decides what must be in it.
+
+Include:
+- Core service/topic coverage (what the user came to understand or do)
+- Trust and proof signals relevant to this business and market (license, insurance, years, certifications, reviews — whatever applies)
+- PAA and query fan-out coverage: list the questions from SERP enrichment this page should answer. Mark each as: [TABLE STAKES] — must answer, competitors all cover this; [OPPORTUNITY] — answer with a clear extractable response for AI Overview / featured snippet capture; [DEPTH SIGNAL] — address if space permits, signals topical completeness
+- Geo and local signals: how this page establishes local relevance for ${market_city}, ${market_state}
+
+**Agentic and Voice Search Targets:**
+2–3 queries this page should win in AI Overviews, voice results, or PAA. For each: the query, why this page should answer it, and the structural note that maximizes capture (direct answer in first sentence, list format, table, etc.).
+
+**Internal Linking:**
+| Link To | Anchor Text | Placement Context | Direction |
+|---------|-------------|------------------|-----------|
+Direction: outbound (this page links out) or inbound (sibling should link here — flag for human).
+Pillar pages receive links from clusters. Cluster pages link up to pillar. Support pages link to both.
+Use descriptive, contextual anchor text — not "click here" or "learn more."
+
+**Cluster Expansion Opportunities:**
+Based on the keyword data, PAA questions, and gap analysis, identify 1–3 adjacent topic pages that would strengthen this cluster if they don't already exist in the architecture. Format as:
+| Suggested Page | Target Keyword | Buyer Stage | Rationale |
+These are recommendations for Michael and the content queue — not part of this page's brief.
+
+${actionType === 'optimize' ? `**OPTIMIZE MODE — Change Specification:**
+This is an existing page. Do not produce a full content brief. Produce a change specification:
+For each content area: KEEP (no change needed and why), UPDATE (what to change, why, and what the updated version should accomplish), ADD (new content to insert — describe what and why), or REMOVE (what to cut and why).
+Only provide full content direction for ADD items.` : ''}]
+
 ---OUTLINE_END---
 
-## Quality Standards (match the /plumber-boise benchmark)
-1. Every meta element must have a Fact-Feel-Proof breakdown table
-2. Content outline sections must have specific word count targets that sum to the total
-3. Each section must have explicit "Keywords to use naturally" guidance
-4. Internal linking must be contextual with descriptive anchor text
-5. Content differentiation must explain how this page avoids cannibalization with siblings
-6. FAQs must match the FAQPage schema entities exactly
-7. For OPTIMIZE pages: acknowledge what exists and specify what to change, not rewrite
+## Quality Standards
+1. Metadata rationale must justify each element in terms of both user intent and ranking signal — not just describe what it says
+2. Schema must be a coherent @graph contribution — consistent @id IRIs, correct @type for page intent, all required entities present with placeholders for unknown values
+3. FAQPage and HowTo schema are opportunities to be added when content warrants them — not required on every page
+4. Required content coverage must address PAA questions with explicit [TABLE STAKES] / [OPPORTUNITY] / [DEPTH SIGNAL] classification
+5. Internal linking map must specify direction and placement context — not just destination URLs
+6. Cluster expansion opportunities are mandatory — minimum 1 suggestion per brief
+7. For OPTIMIZE pages: change specification only, not a full rewrite brief
+8. The brief should give Oscar strategic direction and content requirements — not prescribe structure or word counts
 `;
 }
 
@@ -783,8 +857,8 @@ async function upsertExecutionPage(
 
   const metaTitle = extractMetadataField(parsed.metadataMd, 'Meta Title');
   const metaDesc = extractMetadataField(parsed.metadataMd, 'Meta Description');
-  const h1 = extractMetadataField(parsed.metadataMd, 'H1 Tag');
-  const intent = extractMetadataField(parsed.metadataMd, 'Intent Classification');
+  const h1 = extractMetadataField(parsed.metadataMd, 'H1 Tag') ?? extractMetadataField(parsed.metadataMd, 'H1');
+  const intent = extractMetadataField(parsed.metadataMd, 'Intent Classification') ?? extractMetadataField(parsed.metadataMd, 'Intent');
   const wordCount = extractWordCountTarget(parsed.outlineMd);
 
   const pamFields = {
@@ -841,9 +915,11 @@ async function processRequest(sb: SupabaseClient, req: PamRequest) {
     // 2. Build prompt
     const prompt = buildPrompt(req, ctx);
 
-    // 3. Call claude --print (async spawn to avoid timeout on large prompts)
-    console.log('  Running claude --print...');
-    const result = await callClaudeAsync(prompt);
+    // 3. Call Claude — Opus for pillar pages (strategic depth), Sonnet for all others
+    const pageRole = req.page_role ?? ctx.brief?.role ?? 'service page';
+    const pamModel = pageRole === 'pillar' ? 'opus' : 'sonnet';
+    console.log(`  Running Pam via Anthropic API (${pamModel}, role: ${pageRole})...`);
+    const result = await callClaudeAsync(prompt, { model: pamModel, phase: 'pam' });
 
     // Save raw output for debugging
     const debugFile = path.join(AUDITS_BASE, req.domain, 'content', '_debug', `${slug}-raw.md`);
