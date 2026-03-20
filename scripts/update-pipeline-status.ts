@@ -10,15 +10,20 @@ import { createClient } from '@supabase/supabase-js';
 import fs from 'fs';
 import path from 'path';
 
-function readEnv(): Record<string, string> {
+function loadEnv(): void {
   const envPath = path.resolve(process.cwd(), '.env');
-  const lines = fs.readFileSync(envPath, 'utf8').split('\n');
-  const env: Record<string, string> = {};
-  for (const line of lines) {
-    const match = line.match(/^([^#=]+)=(.*)$/);
-    if (match) env[match[1].trim()] = match[2].trim();
+  try {
+    const lines = fs.readFileSync(envPath, 'utf8').split('\n');
+    for (const line of lines) {
+      const match = line.match(/^([^#=]+)=(.*)$/);
+      if (match) {
+        const key = match[1].trim();
+        if (!process.env[key]) process.env[key] = match[2].trim();
+      }
+    }
+  } catch {
+    // No .env file — fall through to process.env (Railway deployment)
   }
-  return env;
 }
 
 async function main() {
@@ -28,8 +33,11 @@ async function main() {
     process.exit(1);
   }
 
-  const env = readEnv();
-  const sb = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY);
+  loadEnv();
+  const sb = createClient(
+    process.env.SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+  );
 
   // Resolve user
   const { data: userData } = await sb.auth.admin.listUsers();
