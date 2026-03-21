@@ -2,22 +2,18 @@
 
 ## Source Code Changes
 
-**Accepted:** Bug fixes, security fixes, simplifications, reducing code.
+**Accepted:** Bug fixes, security fixes, simplifications, performance improvements.
 
-**Not accepted:** Features, capabilities, compatibility, enhancements. These should be skills.
+## Pipeline Phase Guidelines
 
-## Skills
+When adding or modifying a pipeline phase:
 
-A [skill](https://code.claude.com/docs/en/skills) is a markdown file in `.claude/skills/` that teaches Claude Code how to transform a NanoClaw installation.
+1. Follow the single-shot prompt template pattern in `scripts/pipeline-generate.ts`
+2. Use "YOUR ENTIRE RESPONSE IS THE [ARTIFACT]" framing to prevent narration
+3. Validate output with `validateArtifact()` before writing to disk
+4. If the phase writes to Supabase, add a sync function in `scripts/sync-to-dashboard.ts`
+5. Update `docs/PIPELINE.md` — this is a contract, not optional documentation
 
-A PR that contributes a skill should not modify any source files.
+## Testing
 
-Your skill should contain the **instructions** Claude follows to add the feature—not pre-built code. See `/convert-to-docker` for a good example.
-
-### Why?
-
-Every user should have clean and minimal code that does exactly what they need. Skills let users selectively add features to their fork without inheriting code for features they don't want.
-
-### Testing
-
-Test your skill by running it on a fresh clone before submitting.
+Run `npx tsc --noEmit` and `npx vitest run` before submitting.

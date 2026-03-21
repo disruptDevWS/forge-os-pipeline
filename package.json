@@ -1,5 +1,5 @@
 {
-  "name": "nanoclaw",
+  "name": "forge-os-pipeline",
   "version": "1.0.0",
   "description": "SEO audit pipeline toolkit. Dashboard → Supabase Edge Functions → HTTP server → shell orchestrator → TypeScript phase generators → Supabase.",
   "type": "module",

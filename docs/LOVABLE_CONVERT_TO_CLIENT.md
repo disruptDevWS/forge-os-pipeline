@@ -7,7 +7,7 @@ Wire the prospect-to-client conversion flow in the Forge Growth dashboard. When 
 - `prospects` table exists with `status`, `converted_to_audit_id` columns
 - `audits` table exists with all required fields
 - `run-audit` Edge Function deployed (thin trigger → pipeline server)
-- Pipeline server running on NanoClaw host
+- Pipeline server running
 
 ---
 

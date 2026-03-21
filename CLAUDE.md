@@ -21,11 +21,11 @@ Before ending a session, update these documents if significant changes were made
 
 ## Quick Context
 
-NanoClaw is an **SEO audit pipeline toolkit**. Dashboard buttons trigger Supabase Edge Functions, which POST to a Node.js HTTP server on Railway, which spawns a shell orchestrator that runs TypeScript phase generators, then syncs results back to Supabase tables for the dashboard to display.
+Forge OS is an **SEO audit pipeline toolkit**. Dashboard buttons trigger Supabase Edge Functions, which POST to a Node.js HTTP server on Railway, which spawns a shell orchestrator that runs TypeScript phase generators, then syncs results back to Supabase tables for the dashboard to display.
 
 ## Project Structure
 
-- This is a multi-repo project. Primary repos: NanoClaw pipeline (TypeScript/Shell agents), Forge OS dashboard (Next.js/Supabase), and a WordPress marketing site.
+- This is a multi-repo project. Primary repos: Forge OS pipeline (TypeScript/Shell agents), Forge OS dashboard (Next.js/Supabase), and a WordPress marketing site.
 - Key agents: Dwight (audit), Scout (research), Oscar (content), Pam (SERP enrichment), Michael (architecture).
 - Always confirm which repo context you're working in before making changes.
 

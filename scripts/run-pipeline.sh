@@ -45,7 +45,7 @@
 # Phase 6c: sync dwight — internal_all.csv + AUDIT_REPORT.md → Supabase
 # Phase 6d: local presence — GBP lookup + SERP citation scan → gbp_snapshots, citation_snapshots
 #
-# All phases run synchronously. No NanoClaw, Docker, or WhatsApp dependency.
+# All phases run synchronously.
 #
 # Usage:
 #   ./scripts/run-pipeline.sh <domain> <email> [seed_matrix.json] [competitor_urls] [--mode sales|full|prospect] [--prospect-config <path>]

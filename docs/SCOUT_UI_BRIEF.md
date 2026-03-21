@@ -330,7 +330,7 @@ Content-Type: application/json
 
 ## 6. New Edge Function: `scout-config`
 
-**Why**: The frontend needs to (a) write `prospect-config.json` to the NanoClaw filesystem, (b) trigger the pipeline server, and (c) read the scout report markdown back. All three require access to the NanoClaw host, which the browser cannot reach directly. A single edge function proxies all three operations to the pipeline server.
+**Why**: The frontend needs to (a) write `prospect-config.json` to the pipeline server filesystem, (b) trigger the pipeline server, and (c) read the scout report markdown back. All three require access to the pipeline server host, which the browser cannot reach directly. A single edge function proxies all three operations to the pipeline server.
 
 **File**: `supabase/functions/scout-config/index.ts`
 
@@ -626,7 +626,7 @@ prospects: {
 
 ## 11. Definition of Done
 
-### Backend (NanoClaw side)
+### Backend (Pipeline side)
 
 - [ ] `pipeline-server.ts` accepts `mode` and `prospect_config` in request body
 - [ ] `pipeline-server.ts` has `POST /scout-config` endpoint (write prospect config to disk)

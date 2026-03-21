@@ -1,4 +1,4 @@
-# Data Contract: NanoClaw Pipeline ↔ Forge OS Dashboard
+# Data Contract: Forge OS Pipeline ↔ Forge OS Dashboard
 
 > **Purpose**: Authoritative map of every Supabase table, who writes it (pipeline), who reads it (dashboard), and which columns matter. Use this before adding columns, changing sync logic, or building new UI components.
 >

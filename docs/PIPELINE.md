@@ -5,9 +5,9 @@
 Orchestrator: `./scripts/run-pipeline.sh <domain> <email> [seed_matrix.json] [competitor_urls] [--mode sales|full|prospect] [--prospect-config <path>]`
 
 Trigger paths:
-- **New audit:** Dashboard `useCreateAudit` → `run-audit` Edge Function → HTTP POST to NanoClaw pipeline server → `run-pipeline.sh`
+- **New audit:** Dashboard `useCreateAudit` → `run-audit` Edge Function → HTTP POST to Forge OS pipeline server → `run-pipeline.sh`
 - **Prospect conversion:** Dashboard `useConvertProspect` → creates audit + assumptions → `run-audit` Edge Function → same pipeline path
-- **Scout:** Dashboard Scout UI → `scout-config` Edge Function → NanoClaw pipeline server (`/scout-config` + `/trigger-pipeline` with `--mode prospect`)
+- **Scout:** Dashboard Scout UI → `scout-config` Edge Function → Forge OS pipeline server (`/scout-config` + `/trigger-pipeline` with `--mode prospect`)
 - **Re-canonicalize:** Settings page → `pipeline-controls` Edge Function → `/recanonicalize` → `run-canonicalize.ts` (Phase 3c+3d only)
 - **Refresh rankings:** Settings page → `pipeline-controls` Edge Function → `/track-rankings` → `track-rankings.ts`
 - **Re-run pipeline:** Settings page → `run-audit` Edge Function → `/trigger-pipeline` → `run-pipeline.sh`
@@ -827,7 +827,7 @@ The pipeline server currently runs on a residential ISP connection. Supabase Edg
 
 **Known risk:** ISP may reassign the public IP on DHCP lease renewal or router reboot. If the pipeline stops triggering:
 
-1. **Diagnose:** `curl -s ifconfig.me` on the NanoClaw host — compare against the `PIPELINE_BASE_URL` secret
+1. **Diagnose:** `curl -s ifconfig.me` on the pipeline server host — compare against the `PIPELINE_BASE_URL` secret
 2. **Quick fix:** Update the Supabase secret: `supabase secrets set PIPELINE_BASE_URL=http://<new-ip>:3847 --project-ref hohuimkcpihdufunrzvg`
 3. **Permanent fix:** Replace the public IP with a Cloudflare Tunnel for a stable hostname:
    ```bash
@@ -837,11 +837,11 @@ The pipeline server currently runs on a residential ISP connection. Supabase Edg
 
    # Create tunnel (one-time)
    cloudflared tunnel login
-   cloudflared tunnel create nanoclaw-pipeline
-   cloudflared tunnel route dns nanoclaw-pipeline pipeline.forgegrowth.ai
+   cloudflared tunnel create forge-os-pipeline
+   cloudflared tunnel route dns forge-os-pipeline pipeline.forgegrowth.ai
 
    # Run tunnel (point to local pipeline server)
-   cloudflared tunnel run --url http://localhost:3847 nanoclaw-pipeline
+   cloudflared tunnel run --url http://localhost:3847 forge-os-pipeline
    ```
    Then update the secret to `PIPELINE_BASE_URL=https://pipeline.forgegrowth.ai` — stable across IP changes, reboots, and ISP migrations.
 

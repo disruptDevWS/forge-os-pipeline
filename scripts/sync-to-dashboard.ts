@@ -1,6 +1,6 @@
 #!/usr/bin/env npx tsx
 /**
- * sync-to-dashboard.ts — Sync NanoClaw agent outputs to the Market Position Dashboard (Supabase).
+ * sync-to-dashboard.ts — Sync Forge OS pipeline agent outputs to the Market Position Dashboard (Supabase).
  *
  * Usage:
  *   npx tsx scripts/sync-to-dashboard.ts --domain veteransplumbingcorp.com --user-email you@example.com
@@ -62,7 +62,7 @@ function parseArgs(): CliArgs {
 }
 
 // ============================================================
-// .env loader (reuse nanoclaw pattern — never touch process.env)
+// .env loader (reuse Forge OS pattern — never touch process.env)
 // ============================================================
 
 function loadEnv(): Record<string, string> {
