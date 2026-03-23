@@ -2,7 +2,7 @@
 
 > **Purpose**: Authoritative map of every Supabase table, who writes it (pipeline), who reads it (dashboard), and which columns matter. Use this before adding columns, changing sync logic, or building new UI components.
 >
-> **Last updated**: 2026-03-19
+> **Last updated**: 2026-03-23
 
 ---
 
@@ -99,11 +99,14 @@
 | `canonical_topic` | Pipeline | Dashboard | Display name |
 | `topic` | Pipeline | Dashboard | Legacy (= canonical_topic) |
 | `near_miss_positions` | Pipeline | Dashboard | |
-| `total_volume` | Pipeline | Dashboard | |
-| `est_new_leads_low/high` | Pipeline | Dashboard | |
-| `est_revenue_low/mid/high` | Pipeline | Dashboard | |
+| `total_volume` | Pipeline | Dashboard | SUM of keyword search_volume in cluster (fixed from MAX in 2026-03-23) |
+| `keyword_count` | Pipeline | Dashboard | Number of keywords in cluster |
+| `est_new_leads_low/high` | Pipeline | Dashboard | Near-miss leads |
+| `est_revenue_low/mid/high` | Pipeline | Dashboard | Near-miss revenue (secondary) |
+| `tar_revenue_low/mid/high` | Pipeline | Dashboard | Total Addressable Revenue at target visibility (primary) |
 | `sample_keywords` | Pipeline | Dashboard | JSON array |
-| `status` | Edge fn (cluster-action) | Dashboard | null / `active` / `inactive` |
+| `status` | Edge fn / Dashboard | Dashboard | TEXT: `inactive` / `active` / `complete` / `hidden` |
+| `hidden_reason` | Dashboard | Dashboard | Free-text explanation when status = `hidden` |
 | `activated_at` | Edge fn | Dashboard | |
 | `activated_by` | Edge fn | Dashboard | |
 | `target_publish_date` | Edge fn | Dashboard | |
@@ -111,9 +114,9 @@
 | `authority_score` | Pipeline (track-rankings) | Dashboard | 0-100, position-weighted |
 | `authority_score_updated_at` | Pipeline | Dashboard | |
 
-**Pipeline writes**: Phase 3b (initial), Phase 3d (rebuild with canonical keys, preserves status/activation)
-**Dashboard reads**: `useAuditClusters()`, `useAudit()` relation, ClustersPage, StrategyPage
-**Dashboard writes**: Via `cluster-action` edge function (status, activation fields)
+**Pipeline writes**: Phase 3b (initial), Phase 3d (rebuild with canonical keys, preserves status/activation/hidden)
+**Dashboard reads**: `useAuditClusters()`, `useAudit()` relation, ClustersPage, StrategyPage, OverviewPage
+**Dashboard writes**: Via `cluster-action` edge function (status, activation fields), direct update (hidden status/reason)
 
 ---
 
@@ -125,10 +128,12 @@
 | `total_volume_analyzed` | Pipeline | Dashboard | |
 | `near_miss_keyword_count` | Pipeline | Dashboard | |
 | `opportunity_topics_count` | Pipeline | Dashboard | |
-| `monthly_revenue_low/mid/high` | Pipeline | Dashboard | mid = headline number |
+| `monthly_revenue_low/mid/high` | Pipeline | Dashboard | Near-miss revenue (secondary) |
+| `tar_revenue_low/mid/high` | Pipeline | Dashboard | Total Addressable Revenue at target visibility (primary) |
+| `total_keyword_count` | Pipeline | Dashboard | SUM of keyword_count across clusters |
 
 **Pipeline writes**: Phase 3b (initial), Phase 3d (rebuild)
-**Dashboard reads**: `useAudits()` relation, `useAudit()` relation, ResearchPage
+**Dashboard reads**: `useAudits()` relation, `useAudit()` relation, ResearchPage, OverviewPage
 
 ---
 
@@ -144,10 +149,11 @@
 | `target_ctr` | Dashboard | Pipeline | |
 | `near_miss_min_pos/max_pos` | Dashboard | Pipeline | Position range |
 | `min_volume` | Dashboard | Pipeline | Minimum search volume |
+| `tar_position` | Dashboard | Pipeline | Target visibility position for TAR CTR (default 5) |
 
 **Pipeline writes**: `ensureAssumptions()` auto-creates from benchmarks if missing at sync time
-**Dashboard writes**: `useUpdateAssumptions()` on Settings page
-**Dashboard reads**: `useAuditAssumptions()`, `useAudit()` relation, revenue recalculation
+**Dashboard writes**: `useUpdateAssumptions()` on Settings page (includes `tar_position`)
+**Dashboard reads**: `useAuditAssumptions()`, `useAudit()` relation, revenue recalculation, TAR preview
 
 ---
 

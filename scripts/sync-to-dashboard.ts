@@ -297,6 +297,29 @@ function calculateKeywordOpportunity(
   };
 }
 
+function calculateClusterTAR(
+  totalClusterVolume: number,
+  tarPosition: number,
+  ctrBuckets: CtrBuckets,
+  floorCtr: number,
+  crMin: number,
+  crMax: number,
+  acvMin: number,
+  acvMax: number,
+  crMid?: number,
+  acvMid?: number,
+) {
+  const tarCtr = getCtrForPosition(tarPosition, ctrBuckets, floorCtr);
+  const tarTraffic = totalClusterVolume * tarCtr;
+  const effectiveCrMid = crMid ?? (crMin + crMax) / 2;
+  const effectiveAcvMid = acvMid ?? (acvMin + acvMax) / 2;
+  return {
+    tar_revenue_low: tarTraffic * crMin * acvMin,
+    tar_revenue_mid: tarTraffic * effectiveCrMid * effectiveAcvMid,
+    tar_revenue_high: tarTraffic * crMax * acvMax,
+  };
+}
+
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
@@ -595,7 +618,7 @@ type ClusterAgg = {
   revHigh: number;
   leadsLow: number;
   leadsHigh: number;
-  volMax: number;
+  volSum: number;
   kwTotal: number;
   kwEligible: number;
 };
@@ -626,7 +649,7 @@ function buildClusterMap(rows: any[]): Map<string, ClusterAgg> {
       existing.leadsLow += Number(r.delta_leads_low ?? 0);
       existing.leadsHigh += Number(r.delta_leads_high ?? 0);
       existing.kwEligible++;
-      existing.volMax = Math.max(existing.volMax, vol);
+      existing.volSum += vol;
       existing.kwTotal++;
     } else {
       map.set(key, {
@@ -638,7 +661,7 @@ function buildClusterMap(rows: any[]): Map<string, ClusterAgg> {
         revHigh: Number(r.delta_revenue_high ?? 0),
         leadsLow: Number(r.delta_leads_low ?? 0),
         leadsHigh: Number(r.delta_leads_high ?? 0),
-        volMax: vol,
+        volSum: vol,
         kwTotal: 1,
         kwEligible: 1,
       });
@@ -674,10 +697,13 @@ export async function rebuildClustersAndRollups(sb: SupabaseClient, auditId: str
 
   const ctrBuckets = ctrModel.buckets as CtrBuckets;
 
-  // Preserve cluster activation status before delete
+  // Read tar_position from assumptions (default 5 for pre-migration audits)
+  const tarPosition = (assumptions as any).tar_position ?? 5;
+
+  // Preserve cluster activation + hidden status before delete
   const { data: existingStatuses } = await sb
     .from('audit_clusters')
-    .select('canonical_key, status, activated_at, activated_by, target_publish_date, notes')
+    .select('canonical_key, status, activated_at, activated_by, target_publish_date, notes, hidden_reason')
     .eq('audit_id', auditId);
   const statusMap = new Map(
     (existingStatuses ?? [])
@@ -710,18 +736,34 @@ export async function rebuildClustersAndRollups(sb: SupabaseClient, auditId: str
     .map(([canonicalKey, c]) => {
       const minPos = Math.min(...c.positions);
       const maxPos = Math.max(...c.positions);
+      const tar = calculateClusterTAR(
+        c.volSum,
+        tarPosition,
+        ctrBuckets,
+        assumptions.floor_ctr_over30,
+        assumptions.cr_used_min,
+        assumptions.cr_used_max,
+        assumptions.acv_used_min,
+        assumptions.acv_used_max,
+        assumptions.cr_used_mid ?? undefined,
+        assumptions.acv_used_mid ?? undefined,
+      );
       return {
         audit_id: auditId,
         canonical_key: canonicalKey,
         canonical_topic: c.topic,
         topic: c.topic,
         near_miss_positions: minPos === maxPos ? `${minPos}` : `${minPos}-${maxPos}`,
-        total_volume: c.volMax,
+        total_volume: c.volSum,
+        keyword_count: c.kwTotal,
         est_new_leads_low: round2(c.leadsLow),
         est_new_leads_high: round2(c.leadsHigh),
         est_revenue_low: round2(c.revLow),
         est_revenue_mid: round2(c.revMid),
         est_revenue_high: round2(c.revHigh),
+        tar_revenue_low: round2(tar.tar_revenue_low),
+        tar_revenue_mid: round2(tar.tar_revenue_mid),
+        tar_revenue_high: round2(tar.tar_revenue_high),
         sample_keywords: c.keywords.slice(0, 5),
       };
     });
@@ -743,6 +785,7 @@ export async function rebuildClustersAndRollups(sb: SupabaseClient, auditId: str
             activated_by: (prev as any).activated_by,
             target_publish_date: (prev as any).target_publish_date,
             notes: (prev as any).notes,
+            hidden_reason: (prev as any).hidden_reason,
           }).eq('audit_id', auditId).eq('canonical_key', canonicalKey);
           restored++;
         }
@@ -787,6 +830,11 @@ export async function rebuildClustersAndRollups(sb: SupabaseClient, auditId: str
   const totalRevMid = clusterRecords.reduce((s, c) => s + c.est_revenue_mid, 0);
   const totalRevHigh = clusterRecords.reduce((s, c) => s + c.est_revenue_high, 0);
 
+  const totalTarLow = clusterRecords.reduce((s, c) => s + (c.tar_revenue_low ?? 0), 0);
+  const totalTarMid = clusterRecords.reduce((s, c) => s + (c.tar_revenue_mid ?? 0), 0);
+  const totalTarHigh = clusterRecords.reduce((s, c) => s + (c.tar_revenue_high ?? 0), 0);
+  const totalKeywordCount = clusterRecords.reduce((s, c) => s + (c.keyword_count ?? 0), 0);
+
   const { error: rollupErr } = await sb.from('audit_rollups').insert({
     audit_id: auditId,
     total_volume_analyzed: totalVol,
@@ -795,10 +843,15 @@ export async function rebuildClustersAndRollups(sb: SupabaseClient, auditId: str
     monthly_revenue_low: round2(totalRevLow),
     monthly_revenue_mid: round2(totalRevMid),
     monthly_revenue_high: round2(totalRevHigh),
+    tar_revenue_low: round2(totalTarLow),
+    tar_revenue_mid: round2(totalTarMid),
+    tar_revenue_high: round2(totalTarHigh),
+    total_keyword_count: totalKeywordCount,
   });
   if (rollupErr) throw new Error(`rollup insert failed: ${rollupErr.message}`);
 
-  console.log(`  [${label}] Revenue range: $${round2(totalRevLow)} / $${round2(totalRevMid)} / $${round2(totalRevHigh)} per mo (low/mid/high)`);
+  console.log(`  [${label}] Near-miss revenue: $${round2(totalRevLow)} / $${round2(totalRevMid)} / $${round2(totalRevHigh)} per mo`);
+  console.log(`  [${label}] TAR (pos ${tarPosition}): $${round2(totalTarLow)} / $${round2(totalTarMid)} / $${round2(totalTarHigh)} per mo`);
   return { clusterCount: clusterRecords.length, nearMissCount };
 }
 
