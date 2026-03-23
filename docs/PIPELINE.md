@@ -12,12 +12,14 @@ Trigger paths:
 - **Refresh rankings:** Settings page → `pipeline-controls` Edge Function → `/track-rankings` → `track-rankings.ts`
 - **Re-run pipeline:** Settings page → `run-audit` Edge Function → `/trigger-pipeline` → `run-pipeline.sh`
 - **Cluster activation:** Clusters page → `cluster-action` Edge Function → `/activate-cluster` → `generate-cluster-strategy.ts`
+- **Export audit:** Settings page → `export-audit` Edge Function → `/export-audit` → ZIP stream of all `audits/{domain}/` artifacts
 
 Edge Functions (deployed from [Lovable repo](https://github.com/disruptDevWS/market-position-audit-lovable)):
 - `run-audit` — validates audit, marks `running`, POSTs to `/trigger-pipeline`
 - `scout-config` — writes prospect config to disk, triggers scout, reads reports via `/scout-report` (auth: `validateSuperAdmin` + `has_role`)
 - `cluster-action` — proxies `/activate-cluster` and `/deactivate-cluster` (auth: `resolveAuthContext` + ownership check)
 - `pipeline-controls` — proxies `/recanonicalize` and `/track-rankings` for Settings page (auth: `validateSuperAdmin` + `has_role`)
+- `export-audit` — streams ZIP of all pipeline artifacts for a domain (auth: `validateSuperAdmin` + `has_role`)
 
 Core scripts:
 - `scripts/pipeline-generate.ts` — agent generation logic
@@ -806,6 +808,7 @@ The pipeline server (`src/pipeline-server-standalone.ts`) is an HTTP server that
 | POST | `/recanonicalize` | Re-run Phase 3c+3d with status preservation (async, 202) |
 | POST | `/activate-cluster` | Start cluster strategy generation (async, 202) |
 | POST | `/deactivate-cluster` | Deactivate a cluster (sync, 200) |
+| POST | `/export-audit` | Stream ZIP of all artifacts for a domain |
 
 **Auth:** All endpoints (except `/health`) require `Authorization: Bearer <PIPELINE_TRIGGER_SECRET>`.
 

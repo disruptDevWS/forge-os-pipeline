@@ -534,6 +534,7 @@ Server-side view computing position changes from `ranking_snapshots`.
 | `cluster-action` | `deactivate` | `/deactivate-cluster` | `{audit_id, canonical_key}` | cluster status |
 | `share-audit` | `status/create/revoke/verify` | (Supabase-only) | varies | varies |
 | `manage-users` | `list` | (Supabase-only) | `{action:'list'}` | `{users[]}` |
+| `export-audit` | (default) | `/export-audit` | `{domain}` | Binary ZIP stream |
 | `run-competitor-dominance` | (default) | (Supabase-only) | `{audit_id}` | rebuilt view |
 
 **Auth patterns**:

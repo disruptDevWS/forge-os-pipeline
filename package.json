@@ -18,9 +18,11 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
     "@supabase/supabase-js": "^2.97.0",
+    "archiver": "^7.0.1",
     "csv-parse": "^6.1.0"
   },
   "devDependencies": {
+    "@types/archiver": "^7.0.0",
     "@types/node": "^22.10.0",
     "@vitest/coverage-v8": "^4.0.18",
     "prettier": "^3.8.1",

@@ -9,6 +9,7 @@ import http from 'http';
 import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
+import archiver from 'archiver';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
 const PORT = parseInt(process.env.PORT || process.env.PIPELINE_SERVER_PORT || '3847', 10);
@@ -698,6 +699,66 @@ async function handleArtifact(req: http.IncomingMessage, res: http.ServerRespons
   json(res, 200, { domain, file: filename, content });
 }
 
+async function handleExportAudit(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  if (!checkAuth(req, res)) return;
+
+  let payload: { domain?: string };
+  try {
+    payload = JSON.parse(await readBody(req));
+  } catch {
+    json(res, 400, { error: 'Invalid JSON' });
+    return;
+  }
+
+  const { domain } = payload;
+  if (!domain) {
+    json(res, 400, { error: 'domain is required' });
+    return;
+  }
+  if (!DOMAIN_RE.test(domain)) {
+    json(res, 400, { error: 'Invalid domain format' });
+    return;
+  }
+
+  const domainDir = path.join(AUDITS_BASE, domain);
+  if (!fs.existsSync(domainDir)) {
+    json(res, 404, { error: 'Domain directory not found' });
+    return;
+  }
+
+  // Walk directory recursively, collect all files
+  const files: { abs: string; rel: string }[] = [];
+  const walk = (dir: string, prefix: string) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) walk(path.join(dir, entry.name), rel);
+      else files.push({ abs: path.join(dir, entry.name), rel });
+    }
+  };
+  walk(domainDir, '');
+
+  if (files.length === 0) {
+    json(res, 404, { error: 'No artifacts found' });
+    return;
+  }
+
+  console.log(`Export audit: ${domain} — ${files.length} files`);
+
+  res.writeHead(200, {
+    'Content-Type': 'application/zip',
+    'Content-Disposition': `attachment; filename="${domain}-audit-export.zip"`,
+  });
+
+  const archive = archiver('zip', { zlib: { level: 6 } });
+  archive.pipe(res);
+
+  for (const file of files) {
+    archive.file(file.abs, { name: file.rel });
+  }
+
+  archive.finalize();
+}
+
 const server = http.createServer((req, res) => {
   if (req.method === 'GET' && req.url === '/health') {
     json(res, 200, {
@@ -730,6 +791,8 @@ const server = http.createServer((req, res) => {
     handleDeactivateCluster(req, res);
   } else if (req.method === 'POST' && req.url === '/strategy-brief') {
     handleStrategyBrief(req, res);
+  } else if (req.method === 'POST' && req.url === '/export-audit') {
+    handleExportAudit(req, res);
   } else {
     json(res, 404, { error: 'Not found' });
   }
