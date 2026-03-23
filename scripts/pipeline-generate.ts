@@ -314,6 +314,83 @@ function resolveGeoScope(audit: any): GeoScope {
 }
 
 // ============================================================
+// US state → DataForSEO location codes (Google Ads Criteria IDs)
+// ============================================================
+
+const US_STATE_LOCATION_CODES: Record<string, number> = {
+  'Alabama': 21133, 'Alaska': 21132, 'Arizona': 21136, 'Arkansas': 21135,
+  'California': 21137, 'Colorado': 21138, 'Connecticut': 21139, 'Delaware': 21141,
+  'District of Columbia': 21140, 'Florida': 21142, 'Georgia': 21143, 'Hawaii': 21144,
+  'Idaho': 21146, 'Illinois': 21147, 'Indiana': 21148, 'Iowa': 21145,
+  'Kansas': 21149, 'Kentucky': 21150, 'Louisiana': 21151, 'Maine': 21154,
+  'Maryland': 21153, 'Massachusetts': 21152, 'Michigan': 21155, 'Minnesota': 21156,
+  'Mississippi': 21158, 'Missouri': 21157, 'Montana': 21160, 'Nebraska': 21162,
+  'Nevada': 21164, 'New Hampshire': 21163, 'New Jersey': 21165, 'New Mexico': 21166,
+  'New York': 21167, 'North Carolina': 21161, 'North Dakota': 21168, 'Ohio': 21169,
+  'Oklahoma': 21170, 'Oregon': 21171, 'Pennsylvania': 21172, 'Rhode Island': 21173,
+  'South Carolina': 21174, 'South Dakota': 21175, 'Tennessee': 21176, 'Texas': 21177,
+  'Utah': 21178, 'Vermont': 21181, 'Virginia': 21179, 'Washington': 21183,
+  'West Virginia': 21184, 'Wisconsin': 21185, 'Wyoming': 21186,
+  // Common abbreviations → full names handled by normalization below
+};
+
+// Abbreviation → full name for flexible matching
+const STATE_ABBREV_TO_FULL: Record<string, string> = {
+  'AL': 'Alabama', 'AK': 'Alaska', 'AZ': 'Arizona', 'AR': 'Arkansas',
+  'CA': 'California', 'CO': 'Colorado', 'CT': 'Connecticut', 'DE': 'Delaware',
+  'DC': 'District of Columbia', 'FL': 'Florida', 'GA': 'Georgia', 'HI': 'Hawaii',
+  'ID': 'Idaho', 'IL': 'Illinois', 'IN': 'Indiana', 'IA': 'Iowa',
+  'KS': 'Kansas', 'KY': 'Kentucky', 'LA': 'Louisiana', 'ME': 'Maine',
+  'MD': 'Maryland', 'MA': 'Massachusetts', 'MI': 'Michigan', 'MN': 'Minnesota',
+  'MS': 'Mississippi', 'MO': 'Missouri', 'MT': 'Montana', 'NE': 'Nebraska',
+  'NV': 'Nevada', 'NH': 'New Hampshire', 'NJ': 'New Jersey', 'NM': 'New Mexico',
+  'NY': 'New York', 'NC': 'North Carolina', 'ND': 'North Dakota', 'OH': 'Ohio',
+  'OK': 'Oklahoma', 'OR': 'Oregon', 'PA': 'Pennsylvania', 'RI': 'Rhode Island',
+  'SC': 'South Carolina', 'SD': 'South Dakota', 'TN': 'Tennessee', 'TX': 'Texas',
+  'UT': 'Utah', 'VT': 'Vermont', 'VA': 'Virginia', 'WA': 'Washington',
+  'WV': 'West Virginia', 'WI': 'Wisconsin', 'WY': 'Wyoming',
+};
+
+function resolveStateCode(name: string): number | undefined {
+  // Try full name first, then abbreviation
+  return US_STATE_LOCATION_CODES[name] ?? US_STATE_LOCATION_CODES[STATE_ABBREV_TO_FULL[name.toUpperCase()] ?? ''];
+}
+
+function resolveLocationCodes(geoScope: GeoScope): { codes: number[]; isGeoQualified: boolean } {
+  if (geoScope.mode === 'national') {
+    return { codes: [2840], isGeoQualified: false };
+  }
+
+  if (geoScope.mode === 'state') {
+    // Each locale is a state name — get one code per state
+    const codes: number[] = [];
+    for (const stateName of geoScope.locales) {
+      const code = resolveStateCode(stateName);
+      if (code) {
+        codes.push(code);
+      } else {
+        console.log(`  Warning: No DataForSEO location code for state "${stateName}"`);
+      }
+    }
+    if (codes.length === 0) {
+      console.log('  Warning: No state codes resolved — falling back to national');
+      return { codes: [2840], isGeoQualified: false };
+    }
+    return { codes, isGeoQualified: true };
+  }
+
+  // city or metro mode → use the parent state
+  if (geoScope.state) {
+    const code = resolveStateCode(geoScope.state);
+    if (code) {
+      return { codes: [code], isGeoQualified: true };
+    }
+    console.log(`  Warning: No DataForSEO location code for state "${geoScope.state}" — falling back to national`);
+  }
+  return { codes: [2840], isGeoQualified: false };
+}
+
+// ============================================================
 // Service keyword seeds — used for auto-supplementing thin ranked-keywords results
 // ============================================================
 
@@ -562,29 +639,24 @@ interface BulkVolumeResult {
   competition_level: string | null;
 }
 
-async function bulkKeywordVolume(
-  env: Record<string, string>,
+async function bulkKeywordVolumeForLocation(
+  authString: string,
   keywords: string[],
+  locationCode: number,
 ): Promise<BulkVolumeResult[]> {
-  const login = env.DATAFORSEO_LOGIN;
-  const password = env.DATAFORSEO_PASSWORD;
-  if (!login || !password) throw new Error('DATAFORSEO_LOGIN / DATAFORSEO_PASSWORD not set in .env');
-
-  const authString = Buffer.from(`${login}:${password}`).toString('base64');
   const results: BulkVolumeResult[] = [];
-
-  // DataForSEO allows up to 1000 keywords per request — chunk if needed
   const CHUNK_SIZE = 1000;
+
   for (let i = 0; i < keywords.length; i += CHUNK_SIZE) {
     const chunk = keywords.slice(i, i + CHUNK_SIZE);
-    console.log(`  Fetching volume for ${chunk.length} keywords (batch ${Math.floor(i / CHUNK_SIZE) + 1})...`);
+    console.log(`  Fetching volume for ${chunk.length} keywords (batch ${Math.floor(i / CHUNK_SIZE) + 1}, location ${locationCode})...`);
 
     const resp = await fetch('https://api.dataforseo.com/v3/keywords_data/google_ads/search_volume/live', {
       method: 'POST',
       headers: { Authorization: `Basic ${authString}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify([{ keywords: chunk, location_code: 2840, language_code: 'en' }]),
+      body: JSON.stringify([{ keywords: chunk, location_code: locationCode, language_code: 'en' }]),
     });
-    if (!resp.ok) throw new Error(`DataForSEO search_volume HTTP ${resp.status}`);
+    if (!resp.ok) throw new Error(`DataForSEO search_volume HTTP ${resp.status} (location ${locationCode})`);
     const data = await resp.json();
 
     for (const task of data?.tasks ?? []) {
@@ -603,6 +675,60 @@ async function bulkKeywordVolume(
   }
 
   return results;
+}
+
+async function bulkKeywordVolume(
+  env: Record<string, string>,
+  keywords: string[],
+  locationCodes?: number[],
+): Promise<BulkVolumeResult[]> {
+  const login = env.DATAFORSEO_LOGIN;
+  const password = env.DATAFORSEO_PASSWORD;
+  if (!login || !password) throw new Error('DATAFORSEO_LOGIN / DATAFORSEO_PASSWORD not set in .env');
+
+  const authString = Buffer.from(`${login}:${password}`).toString('base64');
+  const codes = locationCodes ?? [2840];
+
+  // Single location — delegate directly (identical to previous behavior)
+  if (codes.length === 1) {
+    return bulkKeywordVolumeForLocation(authString, keywords, codes[0]);
+  }
+
+  // Multi-location — call per state, aggregate: sum volume, max cpc, max competition
+  console.log(`  Geo-qualified volume: ${codes.length} locations × ${keywords.length} keywords`);
+  const aggregated = new Map<string, BulkVolumeResult>();
+  const totalDelay = (codes.length - 1) * 1;
+
+  for (let li = 0; li < codes.length; li++) {
+    const code = codes[li];
+    if (li > 0) {
+      // 1-second delay between locations (DataForSEO rate limit: ~12 req/min)
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+
+    const stateResults = await bulkKeywordVolumeForLocation(authString, keywords, code);
+    for (const sr of stateResults) {
+      const key = sr.keyword.toLowerCase();
+      const existing = aggregated.get(key);
+      if (existing) {
+        existing.volume += sr.volume;
+        existing.cpc = Math.max(existing.cpc, sr.cpc);
+        existing.competition = Math.max(existing.competition ?? 0, sr.competition ?? 0);
+        if (sr.competition_level && (!existing.competition_level || sr.competition_level > existing.competition_level)) {
+          existing.competition_level = sr.competition_level;
+        }
+      } else {
+        aggregated.set(key, { ...sr });
+      }
+    }
+    console.log(`  Location ${code}: ${stateResults.length} keywords with volume`);
+  }
+
+  const tasks = codes.length * Math.ceil(keywords.length / 1000);
+  const estimatedCost = 0.075 * tasks;
+  console.log(`  Geo-qualified totals: ${aggregated.size} unique keywords, ${tasks} API tasks (~$${estimatedCost.toFixed(3)}), ${totalDelay}s delay`);
+
+  return [...aggregated.values()];
 }
 
 function buildSyntheticRankedKeywords(volumeResults: BulkVolumeResult[]): any {
@@ -738,6 +864,13 @@ async function runJim(sb: SupabaseClient, auditId: string, domain: string, audit
   const competitorsFile = path.join(researchDir, 'competitors.json');
   let isSeedMode = false;
 
+  // Resolve geo scope + location codes for geo-qualified volume
+  const geoScope = resolveGeoScope(audit);
+  const { codes: locationCodes, isGeoQualified } = resolveLocationCodes(geoScope);
+  if (isGeoQualified) {
+    console.log(`  Geo-qualified mode: ${geoScope.label} → ${locationCodes.length} location(s)`);
+  }
+
   if (seedMatrixPath) {
     // ── Mode B: Synthetic keyword universe from seed matrix ──
     isSeedMode = true;
@@ -825,8 +958,8 @@ async function runJim(sb: SupabaseClient, auditId: string, domain: string, audit
       fs.writeFileSync(competitorsFile, JSON.stringify({ tasks: [{ result: [{ total_count: 0, items: [] }] }] }, null, 2), 'utf-8');
     }
 
-    // Get search volume data for all candidates
-    const volumeResults = await bulkKeywordVolume(env, candidates);
+    // Get search volume data for all candidates (geo-qualified if applicable)
+    const volumeResults = await bulkKeywordVolume(env, candidates, locationCodes);
     console.log(`  ${volumeResults.length} keywords with volume > 0 (of ${candidates.length} candidates)`);
 
     // Build synthetic ranked_keywords.json in DataForSEO format
@@ -890,7 +1023,7 @@ async function runJim(sb: SupabaseClient, auditId: string, domain: string, audit
     if (existingCount < MIN_RANKED_KEYWORDS_THRESHOLD) {
       const serviceKey = audit.service_key ?? '';
       const customLabel = audit.custom_service_label ?? '';
-      const geoScope = resolveGeoScope(audit);
+      // geoScope already hoisted to top of runJim()
 
       // Get service seed terms — try exact key, then custom label as fallback
       let serviceTerms = SERVICE_KEYWORD_SEEDS[serviceKey];
@@ -925,7 +1058,7 @@ async function runJim(sb: SupabaseClient, auditId: string, domain: string, audit
         console.log(`  ${newCandidates.length} new keyword candidates (${candidates.length} total, ${existingKeywords.size} already ranked)`);
 
         if (newCandidates.length > 0) {
-          const volumeResults = await bulkKeywordVolume(env, newCandidates);
+          const volumeResults = await bulkKeywordVolume(env, newCandidates, locationCodes);
           console.log(`  ${volumeResults.length} supplementary keywords with volume > 0`);
 
           if (volumeResults.length > 0) {
@@ -956,6 +1089,57 @@ async function runJim(sb: SupabaseClient, auditId: string, domain: string, audit
         console.log(`  Low keyword count (${existingCount}) but no service_key or geo metadata to supplement`);
       }
     }
+  }
+
+  // ── Geo-qualify volumes (Mode A only — Mode B already uses geo locationCodes) ──
+  if (isGeoQualified && !isSeedMode) {
+    // 1. Back up original artifact (national volumes preserved for audit trail)
+    const nationalBackup = rankedFile.replace('.json', '.national.json');
+    fs.copyFileSync(rankedFile, nationalBackup);
+    console.log(`  Backed up national volumes → ${path.basename(nationalBackup)}`);
+
+    // 2. Re-read ranked_keywords.json (may have been modified by auto-supplement)
+    const currentData = JSON.parse(fs.readFileSync(rankedFile, 'utf-8'));
+
+    // 3. Extract unique keywords
+    const uniqueKeywords = [...new Set<string>(
+      (currentData.tasks ?? []).flatMap((t: any) =>
+        (t.result ?? []).flatMap((r: any) =>
+          (r.items ?? []).map((i: any) => i.keyword_data?.keyword).filter(Boolean)
+        )
+      )
+    )];
+    console.log(`  Geo-qualifying ${uniqueKeywords.length} unique keywords across ${locationCodes.length} location(s)...`);
+
+    // 4. Geo-qualified volume lookup
+    const geoVolumes = await bulkKeywordVolume(env, uniqueKeywords, locationCodes);
+    const geoMap = new Map(geoVolumes.map((g) => [g.keyword.toLowerCase(), g]));
+
+    // 5. Replace volumes — ONLY when geo result exists, keep national otherwise
+    let replacedCount = 0;
+    let keptCount = 0;
+    for (const task of currentData.tasks ?? []) {
+      for (const result of task.result ?? []) {
+        for (const item of result.items ?? []) {
+          const kw = item.keyword_data?.keyword?.toLowerCase();
+          if (!kw) continue;
+          const geo = geoMap.get(kw);
+          if (geo) {
+            item.keyword_data.keyword_info.search_volume = geo.volume;
+            if (geo.cpc > 0) item.keyword_data.keyword_info.cpc = geo.cpc;
+            replacedCount++;
+          } else {
+            keptCount++;
+          }
+        }
+      }
+    }
+
+    // 6. Write to temp file first, then rename (atomic-ish write)
+    const tmpFile = rankedFile + '.geo-tmp';
+    fs.writeFileSync(tmpFile, JSON.stringify(currentData, null, 2), 'utf-8');
+    fs.renameSync(tmpFile, rankedFile);
+    console.log(`  Geo-qualified: ${replacedCount} replaced, ${keptCount} kept at national volume`);
   }
 
   // ── Common path: Parse JSON files and build rich prompt for Claude ──
@@ -3702,6 +3886,20 @@ async function runScout(sb: SupabaseClient, domain: string, prospectConfigPath: 
   }
   console.log(`  Target geos: ${allGeos.length / 2} metros across ${config.target_geos.length} state(s)`);
 
+  // Resolve geo-qualified location codes from prospect config states
+  const scoutStateCodes: number[] = [];
+  for (const geo of config.target_geos) {
+    if (geo.state) {
+      const code = resolveStateCode(geo.state);
+      if (code) scoutStateCodes.push(code);
+    }
+  }
+  const scoutLocationCodes = scoutStateCodes.length > 0 ? scoutStateCodes : [2840];
+  const scoutIsGeoQualified = scoutStateCodes.length > 0;
+  if (scoutIsGeoQualified) {
+    console.log(`  Geo-qualified mode: ${config.target_geos.map((g) => g.state).join(', ')} → ${scoutLocationCodes.length} location(s)`);
+  }
+
   let sessionCost = 0;
 
   // ── Step 1: Topic extraction (from rankings — no crawl needed) ──
@@ -3763,6 +3961,32 @@ async function runScout(sb: SupabaseClient, domain: string, prospectConfigPath: 
         }
       }
       console.log(`  ${rankedKeywords.length} ranked keywords found`);
+
+      // Geo-qualify ranked keyword volumes if applicable
+      if (scoutIsGeoQualified && rankedKeywords.length > 0) {
+        const rkKeywords = rankedKeywords.map((rk) => rk.keyword);
+        const geoVolCost = 0.075 * Math.ceil(rkKeywords.length / 1000) * scoutLocationCodes.length;
+        if (sessionCost + geoVolCost <= SCOUT_SESSION_BUDGET) {
+          console.log(`  Geo-qualifying ${rkKeywords.length} ranked keyword volumes...`);
+          const geoVolumes = await bulkKeywordVolume(env, rkKeywords, scoutLocationCodes);
+          const geoMap = new Map(geoVolumes.map((g) => [g.keyword.toLowerCase(), g]));
+          let replaced = 0;
+          for (const rk of rankedKeywords) {
+            const geo = geoMap.get(rk.keyword.toLowerCase());
+            if (geo) {
+              rk.volume = geo.volume;
+              if (geo.cpc > 0) rk.cpc = geo.cpc;
+              replaced++;
+            }
+            // Keep national volume for unmatched keywords
+          }
+          sessionCost += geoVolCost;
+          logDataForSeoCost('search_volume/live (geo-qualify rankings)', geoVolCost);
+          console.log(`  Geo-qualified: ${replaced} replaced, ${rankedKeywords.length - replaced} kept at national volume`);
+        } else {
+          console.log(`  Skipping geo-qualification of rankings — budget ($${sessionCost.toFixed(2)} + $${geoVolCost.toFixed(2)} > $${SCOUT_SESSION_BUDGET})`);
+        }
+      }
     } catch (err: any) {
       console.log(`  Warning: Ranked keywords fetch failed (${err.message})`);
     }
@@ -3777,9 +4001,10 @@ async function runScout(sb: SupabaseClient, domain: string, prospectConfigPath: 
         candidates.push(`${pattern} ${geo}`.toLowerCase());
       }
     }
-    const volumeResults = await bulkKeywordVolume(env, candidates.slice(0, 200));
-    sessionCost += 0.02;
-    logDataForSeoCost('search_volume/live (synthetic)', 0.02);
+    const volumeResults = await bulkKeywordVolume(env, candidates.slice(0, 200), scoutLocationCodes);
+    const syntheticCost = 0.075 * Math.ceil(Math.min(candidates.length, 200) / 1000) * scoutLocationCodes.length;
+    sessionCost += syntheticCost;
+    logDataForSeoCost('search_volume/live (synthetic)', syntheticCost);
 
     if (volumeResults.length > 0) {
       const synthetic = buildSyntheticRankedKeywords(volumeResults);
@@ -3877,11 +4102,11 @@ Group related keywords into single topics. YOUR ENTIRE RESPONSE IS RAW JSON — 
   const uniqueCandidates = [...new Set(candidates)];
   console.log(`  ${uniqueCandidates.length} keyword candidates (${canonicalTopics.length} topics × ${allGeos.length / 2} metros)`);
 
-  const volCost = 0.02 * Math.ceil(uniqueCandidates.length / 1000);
+  const volCost = 0.075 * Math.ceil(uniqueCandidates.length / 1000) * scoutLocationCodes.length;
   if (sessionCost + volCost > SCOUT_SESSION_BUDGET) {
     console.log(`  Budget exceeded ($${sessionCost.toFixed(2)} + $${volCost.toFixed(2)} > $${SCOUT_SESSION_BUDGET}) — skipping volume`);
   } else if (uniqueCandidates.length > 0) {
-    opportunityMap = await bulkKeywordVolume(env, uniqueCandidates);
+    opportunityMap = await bulkKeywordVolume(env, uniqueCandidates, scoutLocationCodes);
     sessionCost += volCost;
     logDataForSeoCost('search_volume/live (opportunity)', volCost);
     console.log(`  ${opportunityMap.length} keywords with volume > 0`);

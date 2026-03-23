@@ -60,7 +60,7 @@
 | `audit_id` | Pipeline | Both | FK |
 | `keyword` | Pipeline | Dashboard | |
 | `rank_pos` | Pipeline | Dashboard | 100 = synthetic (no ranking) |
-| `search_volume` | Pipeline | Dashboard | |
+| `search_volume` | Pipeline | Dashboard | Geo-qualified (sum across service-area states) when `geo_mode != 'national'`; national volume when `geo_mode = 'national'` or geo lookup suppressed |
 | `cpc` | Pipeline | Dashboard | |
 | `ranking_url` | Pipeline | Dashboard | |
 | `intent` | Pipeline | Dashboard | |
@@ -570,7 +570,8 @@ These files live on the pipeline server disk and are NOT in Supabase. They feed 
 | `audits/{domain}/auditor/{date}/*.csv` | Dwight | Supplementary crawl exports |
 | `audits/{domain}/research/{date}/strategy_brief.md` | Phase 1b | Strategic framing (4 sections) |
 | `audits/{domain}/research/{date}/keyword_research_matrix.json` | Phase 2 | Service × city × intent matrix |
-| `audits/{domain}/research/{date}/ranked_keywords.json` | Jim | DataForSEO ranked keywords |
+| `audits/{domain}/research/{date}/ranked_keywords.json` | Jim | DataForSEO ranked keywords (geo-qualified volumes when `geo_mode != 'national'`) |
+| `audits/{domain}/research/{date}/ranked_keywords.national.json` | Jim | Original national volumes backup (only created when geo-qualifying Mode A) |
 | `audits/{domain}/research/{date}/research_summary.md` | Jim | 10-section research narrative |
 | `audits/{domain}/research/{date}/content_gap_analysis.md` | Gap | Authority + format gaps |
 | `audits/{domain}/research/{date}/coverage_validation.md` | Validator | Gap vs blueprint cross-check |

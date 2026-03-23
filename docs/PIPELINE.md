@@ -166,8 +166,8 @@ Phase 6d (Local Presence)
 
 **Steps:**
 1. **Topic extraction** — Haiku extracts 5–15 canonical topics from ranked keywords + topic patterns. No crawl — Dwight handles comprehensive crawling in Phase 1 if the prospect converts.
-2. **Current rankings** — DataForSEO `ranked_keywords/live` for the domain. Falls back to `buildSyntheticRankedKeywords()` if <50 results.
-3. **Opportunity map** — DataForSEO bulk volume for `topic × geo` candidates.
+2. **Current rankings** — DataForSEO `ranked_keywords/live` for the domain. Falls back to `buildSyntheticRankedKeywords()` if <50 results. For multi-state prospects, ranked keyword volumes are geo-qualified via per-state `search_volume/live` calls (volumes summed across target states).
+3. **Opportunity map** — DataForSEO bulk volume for `topic × geo` candidates. Uses geo-qualified location codes when target_geos contains state data.
 4. **Gap matrix** — Cross-references rankings vs opportunity: defending (1–10), weak (11–30), gap (not ranking).
 5. **Report + scope.json** — Sonnet generates scout report (7 sections); scope.json is Jim-compatible seed data.
 
@@ -297,11 +297,14 @@ Phase 6d (Local Presence)
 **Client context:** If `prospect-config.json` has `client_context`, a `## Client Business Context` block is injected into the prompt (full mode only). Includes business model, target audience, core services, and out-of-scope reasoning constraints.
 
 **Modes:**
-- **Mode A (default):** Calls ranked-keywords + competitors for the domain. If <50 keywords returned, auto-supplements from `SERVICE_KEYWORD_SEEDS[service_key] × market_city locales` via bulk volume API.
-- **Mode B (seed matrix):** Generates keyword candidates from `services[] × locales[]` cross-product, fetches bulk volume, builds synthetic ranked_keywords.json with rank_group=100.
+- **Mode A (default):** Calls ranked-keywords + competitors for the domain. If <50 keywords returned, auto-supplements from `SERVICE_KEYWORD_SEEDS[service_key] × market_city locales` via bulk volume API. For geo-qualified audits (`geo_mode != 'national'`), after all ranked keywords are collected, a separate geo-qualified `search_volume/live` call replaces national volumes with state-level sums. Original national data is backed up to `ranked_keywords.national.json`.
+- **Mode B (seed matrix):** Generates keyword candidates from `services[] × locales[]` cross-product, fetches bulk volume (geo-qualified if applicable), builds synthetic ranked_keywords.json with rank_group=100.
+
+**Geo-qualified volume:** When `geo_mode` is `state`, `city`, or `metro`, `bulkKeywordVolume()` calls `search_volume/live` per service-area state and sums volumes. Rankings remain national (`ranked_keywords/live` uses `location_code: 2840`). City/metro modes use the parent state code (city-level codes return suppressed data). Unmatched keywords keep their national volume. Cost: +$0.075/state/task.
 
 **Output files** (relative to `audits/{domain}/`):
-- `research/{date}/ranked_keywords.json`
+- `research/{date}/ranked_keywords.json` (geo-qualified volumes when applicable)
+- `research/{date}/ranked_keywords.national.json` (backup, Mode A only, geo-qualified audits only)
 - `research/{date}/competitors.json`
 - `research/{date}/research_summary.md` (10 sections: executive summary, keyword overview, position distribution, branded analysis, intent breakdown, top URLs, competitor deep dive, striking distance, content gaps, key takeaways)
 
