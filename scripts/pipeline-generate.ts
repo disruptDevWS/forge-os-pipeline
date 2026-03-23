@@ -137,6 +137,46 @@ function stripCodeFences(text: string): string {
   return fenced ? fenced[1].trim() : text.trim();
 }
 
+/** Attempt to repair common LLM JSON errors before parsing. */
+function repairJSON(raw: string): any {
+  // First try as-is
+  try { return JSON.parse(raw); } catch {}
+
+  let fixed = raw;
+  // Remove trailing commas before } or ]
+  fixed = fixed.replace(/,\s*([}\]])/g, '$1');
+  // Fix missing commas between } { or } " patterns (adjacent objects/properties)
+  fixed = fixed.replace(/\}(\s*)\{/g, '},$1{');
+  fixed = fixed.replace(/\}(\s*)"(\w)/g, '},$1"$2');
+  // Fix missing commas after boolean/number before "
+  fixed = fixed.replace(/(true|false|null|\d)(\s*\n\s*")/g, '$1,$2');
+  try { return JSON.parse(fixed); } catch {}
+
+  // Truncation: find the last complete object in the groups array
+  const groupsMatch = fixed.match(/"groups"\s*:\s*\[/);
+  if (groupsMatch && groupsMatch.index !== undefined) {
+    const start = groupsMatch.index + groupsMatch[0].length;
+    // Find all complete group objects
+    let depth = 0;
+    let lastValidEnd = -1;
+    for (let i = start; i < fixed.length; i++) {
+      if (fixed[i] === '{') depth++;
+      else if (fixed[i] === '}') {
+        depth--;
+        if (depth === 0) lastValidEnd = i;
+      }
+    }
+    if (lastValidEnd > start) {
+      const truncated = fixed.slice(0, lastValidEnd + 1) + ']}';
+      // Clean trailing commas again after truncation
+      const cleaned = truncated.replace(/,\s*([}\]])/g, '$1');
+      try { return JSON.parse(cleaned); } catch {}
+    }
+  }
+
+  throw new Error('JSON repair failed');
+}
+
 /** Validate that an artifact file has real content (not an error message or empty). */
 function validateArtifact(filePath: string, label: string, minBytes = 500): void {
   if (!fs.existsSync(filePath)) {
@@ -1782,11 +1822,24 @@ JSON schema:
   ]
 }`;
 
-    try {
-      const result = await callClaude(prompt, { model: 'sonnet', phase: 'canonicalize' });
-      const parsed = JSON.parse(stripCodeFences(result));
-      const groups: GroupResult[] = parsed.groups ?? [];
+    let parsed: any = null;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const result = await callClaude(prompt, { model: 'sonnet', phase: 'canonicalize' });
+        const stripped = stripCodeFences(result);
+        parsed = repairJSON(stripped);
+        break;
+      } catch (err: any) {
+        if (attempt === 1) {
+          console.warn(`  [canonicalize] Batch ${bi + 1} attempt 1 failed: ${err.message} — retrying`);
+        } else {
+          console.warn(`  [canonicalize] Batch ${bi + 1} attempt 2 failed: ${err.message} — skipping batch`);
+        }
+      }
+    }
 
+    if (parsed) {
+      const groups: GroupResult[] = parsed.groups ?? [];
       for (const g of groups) {
         for (const kwRef of g.keywords) {
           const idx = kwRef.index - 1; // 1-indexed → 0-indexed
@@ -1796,8 +1849,6 @@ JSON schema:
         }
       }
       console.log(`  [canonicalize] Batch ${bi + 1}: ${groups.length} groups identified`);
-    } catch (err: any) {
-      console.warn(`  [canonicalize] Batch ${bi + 1} failed: ${err.message} — skipping batch`);
     }
   }
 
