@@ -31,7 +31,7 @@ export const PHASE_MAX_TOKENS: Record<string, number> = {
   'keyword-research-synth': 16384,
   canonicalize: 4096,
   competitors: 4096,
-  validator: 4096,
+  validator: 16384,
   scout_topic: 4096,
   scout_report: 16384,
   brief: 16384,
@@ -62,6 +62,17 @@ export function initAnthropicClient(apiKey: string): void {
   _client = new Anthropic({ apiKey });
 }
 
+// ── Truncation detection ─────────────────────────────────────
+
+export class TruncationError extends Error {
+  output: string;
+  constructor(message: string, output: string) {
+    super(message);
+    this.name = 'TruncationError';
+    this.output = output;
+  }
+}
+
 // ── Core call function ────────────────────────────────────────
 
 export interface CallClaudeOptions {
@@ -69,6 +80,7 @@ export interface CallClaudeOptions {
   maxTokens?: number;   // override max_tokens
   phase?: string;       // phase name for max_tokens lookup
   timeoutMs?: number;   // request timeout (default: 600_000)
+  warnOnTruncation?: boolean; // throw TruncationError if stop_reason === 'max_tokens'
 }
 
 /**
@@ -111,6 +123,19 @@ export async function callClaude(
 
   if (output.startsWith('Error:')) {
     throw new Error(`Anthropic API returned error: ${output.slice(0, 200)}`);
+  }
+
+  // Truncation detection
+  if (response.stop_reason === 'max_tokens') {
+    const phase = opts.phase ?? 'unknown';
+    const tail = output.slice(-100);
+    console.warn(`  [truncation] Phase "${phase}" hit max_tokens (${maxTokens}). Last 100 chars: …${tail}`);
+    if (opts.warnOnTruncation) {
+      throw new TruncationError(
+        `Phase "${phase}" output truncated at ${maxTokens} tokens`,
+        output,
+      );
+    }
   }
 
   return output;

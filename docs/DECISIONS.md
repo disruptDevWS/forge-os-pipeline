@@ -4,6 +4,16 @@ Non-obvious choices that would look wrong without context. Check here before "fi
 
 ---
 
+**2026-03-24: Validator resilience — max_tokens bump + truncation detection + JSON repair**
+
+Phase 6.5 (Coverage Validator) failed on IMA's audit (35 clusters, 30+ gaps) because `max_tokens: 4096` was too low — JSON response truncated at ~14K chars. Bumped to 16384 (matches other synthesis phases). Added `TruncationError` class and `warnOnTruncation` option to `callClaude()` — when `stop_reason === 'max_tokens'`, always logs a warning; when the flag is set, throws `TruncationError` carrying the partial output so callers can attempt repair. Generalized `repairJSON()` with an optional `arrayKey` parameter (tries specified key for truncation recovery instead of hardcoded `"groups"`). Validator now catches `TruncationError` and attempts `repairJSON(partial, 'coverage')`. Cost impact of token bump: zero (cap, not minimum). Added defensive dedup guardrail to validator prompt as safety net.
+
+**2026-03-24: Gap agent deduplication — canonical_key pre-aggregation + structural prompt constraint**
+
+Phase 5 (Gap agent) produced near-duplicate authority_gaps on IMA (5 EMT variants, 4 burn/first-aid variants) because dominance data had multiple rows per canonical_key (one per geo-variant keyword). Two-layer fix: (1) Pre-aggregate dominance and weakTopics by `canonical_key` before injecting into the prompt — keep the row with lowest `client_share` as representative, prefix each line with `[canonical_key]`. (2) Replace the single "deduplicate semantic equivalents" sentence in the prompt with a structural constraint: each authority_gap MUST correspond to a distinct `[canonical_key]`, max 15 is an upper bound not a target, typical audit 6-12. The `[canonical_key]` prefix provides context; the structural constraint is the enforcement mechanism. Gap QA rubric floor is "5+ specific content gaps" (line ~4607) — target range of 6-12 stays above this, no rubric update needed.
+
+---
+
 **2026-03-23: Phase 2 service_area → Bucket 3 cities + cap raised from 3 to 5**
 
 Bucket 3 (city-qualified keywords in state mode) relied entirely on Haiku extracting city names from AUDIT_REPORT.md. With JS rendering disabled, crawls return thin HTML and Haiku finds 0 locations — Bucket 3 never fires. The user already enters `service_area` in Settings (e.g., "Boise, Nampa, Meridian"). This data was available via `loadClientContextAsync()` as `extras.service_area` but Phase 2 discarded `extras`. Now Phase 2 parses `service_area`, filters out state names (already in Bucket 2), deduplicates against Haiku results, and merges into `locations`. City cap raised from 3 to 5 because explicit user input is reliable (not noisy Haiku extraction). Cost impact: ~160 more candidates in a 500-cap matrix — well within budget.

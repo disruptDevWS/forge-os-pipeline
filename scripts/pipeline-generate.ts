@@ -28,6 +28,7 @@ import {
   callClaudeAsync,
   initAnthropicClient,
   PHASE_MAX_TOKENS,
+  TruncationError,
 } from './anthropic-client.js';
 
 // ============================================================
@@ -145,8 +146,11 @@ function stripCodeFences(text: string): string {
   return stripped.trim();
 }
 
-/** Attempt to repair common LLM JSON errors before parsing. */
-function repairJSON(raw: string): any {
+/** Attempt to repair common LLM JSON errors before parsing.
+ *  @param arrayKey — if provided, only try that key for truncation repair;
+ *                     if omitted, try "groups" then "coverage" as fallbacks.
+ */
+function repairJSON(raw: string, arrayKey?: string): any {
   // First try as-is
   try { return JSON.parse(raw); } catch {}
 
@@ -160,25 +164,29 @@ function repairJSON(raw: string): any {
   fixed = fixed.replace(/(true|false|null|\d)(\s*\n\s*")/g, '$1,$2');
   try { return JSON.parse(fixed); } catch {}
 
-  // Truncation: find the last complete object in the groups array
-  const groupsMatch = fixed.match(/"groups"\s*:\s*\[/);
-  if (groupsMatch && groupsMatch.index !== undefined) {
-    const start = groupsMatch.index + groupsMatch[0].length;
-    // Find all complete group objects
-    let depth = 0;
-    let lastValidEnd = -1;
-    for (let i = start; i < fixed.length; i++) {
-      if (fixed[i] === '{') depth++;
-      else if (fixed[i] === '}') {
-        depth--;
-        if (depth === 0) lastValidEnd = i;
+  // Truncation: find the last complete object in a top-level array
+  const keysToTry = arrayKey ? [arrayKey] : ['groups', 'coverage'];
+  for (const key of keysToTry) {
+    const keyPattern = new RegExp(`"${key}"\\s*:\\s*\\[`);
+    const keyMatch = fixed.match(keyPattern);
+    if (keyMatch && keyMatch.index !== undefined) {
+      const start = keyMatch.index + keyMatch[0].length;
+      // Find all complete objects in the array
+      let depth = 0;
+      let lastValidEnd = -1;
+      for (let i = start; i < fixed.length; i++) {
+        if (fixed[i] === '{') depth++;
+        else if (fixed[i] === '}') {
+          depth--;
+          if (depth === 0) lastValidEnd = i;
+        }
       }
-    }
-    if (lastValidEnd > start) {
-      const truncated = fixed.slice(0, lastValidEnd + 1) + ']}';
-      // Clean trailing commas again after truncation
-      const cleaned = truncated.replace(/,\s*([}\]])/g, '$1');
-      try { return JSON.parse(cleaned); } catch {}
+      if (lastValidEnd > start) {
+        const truncated = fixed.slice(0, lastValidEnd + 1) + ']}';
+        // Clean trailing commas again after truncation
+        const cleaned = truncated.replace(/,\s*([}\]])/g, '$1');
+        try { return JSON.parse(cleaned); } catch {}
+      }
     }
   }
 
@@ -2057,7 +2065,7 @@ JSON schema:
       try {
         const result = await callClaude(prompt, { model: 'sonnet', phase: 'canonicalize' });
         const stripped = stripCodeFences(result);
-        parsed = repairJSON(stripped);
+        parsed = repairJSON(stripped, 'groups');
         break;
       } catch (err: any) {
         if (attempt === 1) {
@@ -2425,10 +2433,20 @@ async function runGap(sb: SupabaseClient, auditId: string, domain: string) {
 
   // Build compact summaries for the prompt
   // Dominance: lower client_share = weaker position
-  const topDominance = dominance
+  // Pre-aggregate by canonical_key — keep the row with lowest client_share as representative
+  const domByKey = new Map<string, any>();
+  for (const d of dominance) {
+    const key = d.canonical_key ?? d.canonical_topic ?? 'unknown';
+    const existing = domByKey.get(key);
+    if (!existing || (d.client_share ?? 0) < (existing.client_share ?? 0)) {
+      domByKey.set(key, d);
+    }
+  }
+  const dedupedDominance = [...domByKey.values()];
+  const topDominance = dedupedDominance
     .sort((a, b) => (a.client_share ?? 0) - (b.client_share ?? 0))
     .slice(0, 30)
-    .map((d) => `${d.canonical_topic ?? d.canonical_key} | client_share=${(d.client_share ?? 0).toFixed(2)} | leader=${d.leader_domain} share=${(d.leader_share ?? 0).toFixed(2)}`)
+    .map((d) => `[${d.canonical_key ?? 'unknown'}] ${d.canonical_topic ?? d.canonical_key} | client_share=${(d.client_share ?? 0).toFixed(2)} | leader=${d.leader_domain} share=${(d.leader_share ?? 0).toFixed(2)}`)
     .join('\n');
 
   // Aggregate competitors by domain
@@ -2449,10 +2467,19 @@ async function runGap(sb: SupabaseClient, auditId: string, domain: string) {
     .map((c) => `${c.topic} | vol=${c.total_volume} | rev=$${c.est_revenue_low}-$${c.est_revenue_high} | samples: ${(c.sample_keywords ?? []).slice(0, 3).join(', ')}`)
     .join('\n');
 
-  // Topics where client has low/zero share but competitor leads
-  const weakTopics = dominance
-    .filter((d) => (d.client_share ?? 0) < 0.05 && (d.leader_share ?? 0) > 0.1)
-    .map((d) => `${d.canonical_topic ?? d.canonical_key}: client_share=${(d.client_share ?? 0).toFixed(2)}, leader=${d.leader_domain} share=${(d.leader_share ?? 0).toFixed(2)}`)
+  // Topics where client has low/zero share but competitor leads (deduped by canonical_key)
+  const weakByKey = new Map<string, any>();
+  for (const d of dominance) {
+    if ((d.client_share ?? 0) < 0.05 && (d.leader_share ?? 0) > 0.1) {
+      const key = d.canonical_key ?? d.canonical_topic ?? 'unknown';
+      const existing = weakByKey.get(key);
+      if (!existing || (d.client_share ?? 0) < (existing.client_share ?? 0)) {
+        weakByKey.set(key, d);
+      }
+    }
+  }
+  const weakTopics = [...weakByKey.values()]
+    .map((d) => `[${d.canonical_key ?? 'unknown'}] ${d.canonical_topic ?? d.canonical_key}: client_share=${(d.client_share ?? 0).toFixed(2)}, leader=${d.leader_domain} share=${(d.leader_share ?? 0).toFixed(2)}`)
     .join('\n');
 
   const plannedSummary = plannedPages.length > 0
@@ -2523,8 +2550,8 @@ Ranking criterion: order by estimated revenue opportunity — use CPC × volume 
 5. "summary": 2-3 sentence executive summary written for Michael (the architecture agent) and the Validator. Must include: (1) the dominant competitor domain by name and what makes them the primary threat, (2) the single highest-revenue gap topic by name, and (3) if unaddressed_gaps is empty due to missing architecture, note that here. Do not restate array contents — synthesize the competitive situation in terms that directly inform architecture decisions.
 
 ## QUALITY RULES for authority_gaps topics:
+- DEDUPLICATION (LOAD-BEARING RULE): Each authority_gap MUST correspond to a DISTINCT [canonical_key] from the Dominance Scores. If multiple Dominance Scores share the same [canonical_key] prefix, they are the SAME topic — produce ONE gap entry using the highest-volume variant as the representative topic name. Example: if dominance data has [emt_training] for "EMT Training Courses Online", "EMT Training Programs", and "EMT Certification Classes", produce ONE authority_gap for "EMT Training" — not three separate entries. Similarly, "Burn First Aid" and "First Aid for Burns" → one gap. Max 15 is an UPPER BOUND, not a target. Typical audit: 6-12 distinct gaps.
 - Each topic must be a COMPLETE, meaningful service phrase (e.g., "AC repair", "furnace installation"). Never use truncated fragments like "boise heating and" or "repair boise".
-- Deduplicate semantic equivalents: "air conditioner repair" and "air conditioning repair" are the same topic — pick one.
 - Exclude brand/navigational queries (other companies' names, job listings, TV schedules).
 - Exclude non-customer intent (job postings, supplier queries, industry news).
 - Topics should be service-category level ("AC repair", "furnace installation"), not raw keyword strings.
@@ -3771,6 +3798,8 @@ Coverage status definitions — apply strictly:
 - "partially_addressed": A related page exists that would capture some of the gap's search demand, but no page directly targets the gap topic as its primary keyword. Example: a general "EMT Training" page partially addresses an "EMT Certification Idaho" gap.
 - "unaddressed": No page in the blueprint targets the gap topic directly or partially.
 
+DEDUPLICATION GUARDRAIL: If near-duplicate topics appear in the gap analysis despite upstream deduplication (e.g., "First Aid for Burns" and "Burn First Aid" as separate entries), merge them into ONE coverage entry using the highest-volume variant as representative. Do not create separate coverage entries for semantic duplicates.
+
 EMPTY INPUT HANDLING:
 - If the gap analysis contains no authority_gaps, format_gaps, or unaddressed_gaps (e.g., because architecture had not yet been generated when gap analysis ran), set coverage to [] and note this in the summary.
 - If the architecture blueprint contains no silo tables (e.g., blueprint generation failed or is incomplete), set all gaps to status "unaddressed" with notes: "Blueprint unavailable — cannot validate coverage."
@@ -3793,12 +3822,32 @@ Field rules:
 REMINDER: Your response IS the JSON — start with { and end with }. No preamble.`;
 
   console.log('  Running coverage validation via Anthropic API (sonnet)...');
-  const result = await callClaude(prompt, { model: 'sonnet', phase: 'validator' });
   let validation: { coverage: any[]; summary: string };
   try {
-    validation = JSON.parse(stripCodeFences(result));
+    const result = await callClaude(prompt, { model: 'sonnet', phase: 'validator', warnOnTruncation: true });
+    const stripped = stripCodeFences(result);
+    try {
+      validation = JSON.parse(stripped);
+    } catch {
+      console.warn('  [validator] Direct JSON.parse failed, attempting repair...');
+      validation = repairJSON(stripped, 'coverage');
+    }
   } catch (err: any) {
-    throw new Error(`Coverage validation JSON parse failed: ${err.message}`);
+    if (err instanceof TruncationError) {
+      console.warn('  [validator] Output truncated — attempting repair on partial output...');
+      const stripped = stripCodeFences(err.output);
+      try {
+        validation = repairJSON(stripped, 'coverage');
+        // Synthesize summary if repair dropped it
+        if (!validation.summary) {
+          validation.summary = `Partial result — output was truncated at max_tokens. ${(validation.coverage ?? []).length} coverage entries recovered.`;
+        }
+      } catch (repairErr: any) {
+        throw new Error(`Coverage validation truncated and repair failed: ${repairErr.message}`);
+      }
+    } else {
+      throw new Error(`Coverage validation failed: ${err.message}`);
+    }
   }
 
   const coverage = validation.coverage ?? [];
