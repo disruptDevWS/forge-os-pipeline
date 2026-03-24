@@ -28,7 +28,7 @@ export const PHASE_MAX_TOKENS: Record<string, number> = {
   michael: 16384,
   gap: 8192,
   'keyword-research-extract': 4096,
-  'keyword-research-synth': 8192,
+  'keyword-research-synth': 16384,
   canonicalize: 4096,
   competitors: 4096,
   validator: 4096,
