@@ -8,6 +8,10 @@ Non-obvious choices that would look wrong without context. Check here before "fi
 
 Bucket 3 (city-qualified keywords in state mode) relied entirely on Haiku extracting city names from AUDIT_REPORT.md. With JS rendering disabled, crawls return thin HTML and Haiku finds 0 locations — Bucket 3 never fires. The user already enters `service_area` in Settings (e.g., "Boise, Nampa, Meridian"). This data was available via `loadClientContextAsync()` as `extras.service_area` but Phase 2 discarded `extras`. Now Phase 2 parses `service_area`, filters out state names (already in Bucket 2), deduplicates against Haiku results, and merges into `locations`. City cap raised from 3 to 5 because explicit user input is reliable (not noisy Haiku extraction). Cost impact: ~160 more candidates in a 500-cap matrix — well within budget.
 
+**2026-03-23: Robust prose parsing for service_area city extraction**
+
+`service_area` is free-text — users enter prose like "Primarily serving Idaho, Eastern Oregon, and Eastern Washington" not just "Boise, Nampa, Meridian". Naive comma-split produced tokens like "Primarily serving Idaho" which, when concatenated with long service names, exceeded DataForSEO's keyword character limit (all 380 candidates rejected → pipeline failed). Parser now: (1) strips leading prose prefixes ("Primarily serving..."), (2) splits on commas AND the word "and", (3) rejects tokens with prose/filler words, (4) rejects directional state patterns ("Eastern Oregon"), (5) rejects tokens >4 words. When no cities are extractable, logs diagnostic instead of injecting garbage. This means `service_area` with only regional descriptions correctly yields 0 city hints — Bucket 3 won't fire, which is correct behavior.
+
 ---
 
 **2026-03-10: Moved all DataForSEO/keyword/revenue logic out of run-audit Edge Function into the pipeline**
