@@ -11,6 +11,7 @@ import fs from 'fs';
 import path from 'path';
 import archiver from 'archiver';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { lookupKeywordVolumes } from './dataforseo-keywords.js';
 
 const PORT = parseInt(process.env.PORT || process.env.PIPELINE_SERVER_PORT || '3847', 10);
 const TRIGGER_SECRET = process.env.PIPELINE_TRIGGER_SECRET || '';
@@ -759,6 +760,40 @@ async function handleExportAudit(req: http.IncomingMessage, res: http.ServerResp
   archive.finalize();
 }
 
+async function handleLookupKeywords(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  if (!checkAuth(req, res)) return;
+
+  let payload: { keywords?: string[]; location_codes?: number[] };
+  try {
+    payload = JSON.parse(await readBody(req));
+  } catch {
+    json(res, 400, { error: 'Invalid JSON' });
+    return;
+  }
+
+  const { keywords, location_codes } = payload;
+  if (!keywords || !Array.isArray(keywords) || keywords.length === 0) {
+    json(res, 400, { error: 'keywords array is required' });
+    return;
+  }
+  if (keywords.length > 500) {
+    json(res, 400, { error: `Too many keywords (${keywords.length}). Maximum is 500 per request.` });
+    return;
+  }
+
+  try {
+    const results = await lookupKeywordVolumes(process.env as Record<string, string>, keywords, location_codes);
+    const found = results.filter((r) => r.volume > 0).length;
+    const tasks = (location_codes?.length ?? 1) * Math.ceil(keywords.length / 1000);
+    const estimatedCost = `$${(0.075 * tasks).toFixed(3)}`;
+
+    json(res, 200, { results, total: results.length, found, estimated_cost: estimatedCost });
+  } catch (err: any) {
+    console.error('Keyword lookup error:', err);
+    json(res, 500, { error: err.message || 'Keyword lookup failed' });
+  }
+}
+
 const server = http.createServer((req, res) => {
   if (req.method === 'GET' && req.url === '/health') {
     json(res, 200, {
@@ -793,6 +828,8 @@ const server = http.createServer((req, res) => {
     handleStrategyBrief(req, res);
   } else if (req.method === 'POST' && req.url === '/export-audit') {
     handleExportAudit(req, res);
+  } else if (req.method === 'POST' && req.url === '/lookup-keywords') {
+    handleLookupKeywords(req, res);
   } else {
     json(res, 404, { error: 'Not found' });
   }
