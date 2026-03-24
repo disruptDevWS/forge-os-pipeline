@@ -3879,12 +3879,16 @@ async function runScout(sb: SupabaseClient, domain: string, prospectConfigPath: 
   // Flatten geos for keyword generation
   const allGeos: string[] = [];
   for (const geo of config.target_geos) {
-    for (const metro of geo.metros) {
-      allGeos.push(metro);
-      allGeos.push(`${metro} ${geo.state}`);
+    if (geo.metros.length > 0) {
+      for (const metro of geo.metros) {
+        allGeos.push(metro);
+        allGeos.push(`${metro} ${geo.state}`);
+      }
+    } else if (geo.state) {
+      allGeos.push(geo.state);
     }
   }
-  console.log(`  Target geos: ${allGeos.length / 2} metros across ${config.target_geos.length} state(s)`);
+  console.log(`  Target geos: ${allGeos.length} geo qualifiers across ${config.target_geos.length} state(s)`);
 
   // Resolve geo-qualified location codes from prospect config states
   const scoutStateCodes: number[] = [];
@@ -4091,16 +4095,20 @@ Group related keywords into single topics. YOUR ENTIRE RESPONSE IS RAW JSON — 
   for (const topic of canonicalTopics) {
     const topicPhrase = topic.label.toLowerCase();
     for (const geo of config.target_geos) {
-      for (const metro of geo.metros) {
-        candidates.push(`${topicPhrase} ${metro}`.toLowerCase());
-        candidates.push(`${topicPhrase} ${metro} ${geo.state}`.toLowerCase());
+      if (geo.metros.length > 0) {
+        for (const metro of geo.metros) {
+          candidates.push(`${topicPhrase} ${metro}`.toLowerCase());
+          candidates.push(`${topicPhrase} ${metro} ${geo.state}`.toLowerCase());
+        }
+      } else if (geo.state) {
+        candidates.push(`${topicPhrase} ${geo.state}`.toLowerCase());
       }
     }
   }
 
   // Deduplicate
   const uniqueCandidates = [...new Set(candidates)];
-  console.log(`  ${uniqueCandidates.length} keyword candidates (${canonicalTopics.length} topics × ${allGeos.length / 2} metros)`);
+  console.log(`  ${uniqueCandidates.length} keyword candidates (${canonicalTopics.length} topics × ${allGeos.length} geos)`);
 
   const volCost = 0.075 * Math.ceil(uniqueCandidates.length / 1000) * scoutLocationCodes.length;
   if (sessionCost + volCost > SCOUT_SESSION_BUDGET) {
@@ -4222,8 +4230,10 @@ Group related keywords into single topics. YOUR ENTIRE RESPONSE IS RAW JSON — 
     business_type: config.name,
     domain: config.domain,
     services: canonicalTopics.map((t) => t.label),
-    locales: config.target_geos.flatMap((g) => g.metros),
-    state: config.state,
+    locales: config.target_geos.flatMap((g) =>
+      g.metros.length > 0 ? g.metros : (g.state ? [g.state] : [])
+    ),
+    state: config.target_geos.length === 1 ? config.target_geos[0].state : '',
     topics: canonicalTopics,
     gap_summary: {
       total: gapMatrix.length,
@@ -4246,7 +4256,10 @@ Group related keywords into single topics. YOUR ENTIRE RESPONSE IS RAW JSON — 
 
   // Generate the full scout report via Claude Sonnet
   const geoDescription = config.target_geos
-    .map((g) => `${g.state}: ${g.metros.join(', ')}`)
+    .map((g) => {
+      if (g.metros.length > 0) return `${g.state}: ${g.metros.join(', ')}`;
+      return g.state;
+    })
     .join('; ');
 
   const reportPrompt = `You are Scout, a prospect discovery agent for Forge Growth. Generate a comprehensive scout report for a prospective client.
