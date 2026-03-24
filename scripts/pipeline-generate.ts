@@ -3314,13 +3314,42 @@ ${reportContent}`;
   }
 
   // --- Inject service_area cities into locations (supplement Haiku extraction) ---
+  // service_area is free-text — may contain prose ("Primarily serving Idaho,
+  // Eastern Oregon, and Eastern Washington") or clean city lists ("Boise, Nampa").
+  // Strategy: split on commas, strip prose filler, reject tokens that don't look
+  // like place names (too many words, contain verbs/prepositions).
   if (kwExtras?.service_area) {
-    const areaTokens = kwExtras.service_area
-      .split(',')
+    const FILLER_RE = /^(primarily|mainly|mostly|generally|currently|also)\s+(serving|covering|operating\s+in|based\s+in|located\s+in)\s+/i;
+    const PROSE_WORDS = new Set([
+      'serving', 'covering', 'operating', 'based', 'located', 'including',
+      'throughout', 'across', 'surrounding', 'nearby', 'greater', 'the',
+      'and', 'or', 'also', 'primarily', 'mainly', 'mostly', 'areas',
+    ]);
+
+    // Strip leading prose prefix from the whole string before splitting
+    const cleaned = kwExtras.service_area.replace(FILLER_RE, '');
+    const areaTokens = cleaned
+      .split(/,|\band\b/)
       .map((s: string) => s.trim())
       .filter(Boolean);
+
     const statesLower = new Set(kwGeo.locales.map((s: string) => s.toLowerCase()));
-    const cityHints = areaTokens.filter((t: string) => !statesLower.has(t.toLowerCase()));
+
+    // Filter: must look like a place name (1-3 proper words, no prose words)
+    const cityHints: string[] = [];
+    for (const raw of areaTokens) {
+      const words = raw.split(/\s+/);
+      // Reject if >4 words (not a city name)
+      if (words.length > 4) continue;
+      // Reject if any word is a prose/filler word
+      if (words.some((w) => PROSE_WORDS.has(w.toLowerCase()))) continue;
+      // Reject if it matches a target state
+      if (statesLower.has(raw.toLowerCase())) continue;
+      // Reject state-like patterns ("Eastern Oregon", "Northern California")
+      if (/^(eastern|western|northern|southern|central)\s+/i.test(raw)) continue;
+      cityHints.push(raw);
+    }
+
     if (cityHints.length > 0) {
       const existingLower = new Set(locations.map((l: string) => l.toLowerCase()));
       let added = 0;
@@ -3334,6 +3363,8 @@ ${reportContent}`;
       if (added > 0) {
         console.log(`  Added ${added} city hints from service_area: ${cityHints.join(', ')}`);
       }
+    } else if (kwExtras.service_area.trim()) {
+      console.log(`  service_area present but no city names extracted: "${kwExtras.service_area}"`);
     }
   }
 
