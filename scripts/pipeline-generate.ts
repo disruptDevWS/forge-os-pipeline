@@ -639,6 +639,15 @@ interface BulkVolumeResult {
   competition_level: string | null;
 }
 
+/** Strip characters DataForSEO rejects: parentheses, brackets, special symbols */
+function sanitizeKeyword(kw: string): string {
+  return kw
+    .replace(/\([^)]*\)/g, '') // strip parenthesized content e.g. "(ACLS)"
+    .replace(/[[\]{}()]/g, '')  // any remaining brackets/parens
+    .replace(/\s{2,}/g, ' ')   // collapse double spaces
+    .trim();
+}
+
 async function bulkKeywordVolumeForLocation(
   authString: string,
   keywords: string[],
@@ -647,8 +656,22 @@ async function bulkKeywordVolumeForLocation(
   const results: BulkVolumeResult[] = [];
   const CHUNK_SIZE = 1000;
 
-  for (let i = 0; i < keywords.length; i += CHUNK_SIZE) {
-    const chunk = keywords.slice(i, i + CHUNK_SIZE);
+  // Sanitize and deduplicate, maintaining mapping back to original keywords
+  const originalByClean = new Map<string, string[]>(); // sanitized → [originals]
+  for (const kw of keywords) {
+    const clean = sanitizeKeyword(kw);
+    if (!clean) continue;
+    const existing = originalByClean.get(clean);
+    if (existing) {
+      existing.push(kw);
+    } else {
+      originalByClean.set(clean, [kw]);
+    }
+  }
+  const cleanKeywords = [...originalByClean.keys()];
+
+  for (let i = 0; i < cleanKeywords.length; i += CHUNK_SIZE) {
+    const chunk = cleanKeywords.slice(i, i + CHUNK_SIZE);
     console.log(`  Fetching volume for ${chunk.length} keywords (batch ${Math.floor(i / CHUNK_SIZE) + 1}, location ${locationCode})...`);
 
     const resp = await fetch('https://api.dataforseo.com/v3/keywords_data/google_ads/search_volume/live', {
@@ -670,13 +693,17 @@ async function bulkKeywordVolumeForLocation(
       }
       for (const item of resultItems) {
         if (item.search_volume && item.search_volume > 0) {
-          results.push({
-            keyword: item.keyword,
-            volume: item.search_volume,
-            cpc: item.cpc ?? 0,
-            competition: item.competition ?? null,
-            competition_level: item.competition_level ?? null,
-          });
+          // Map back to original keyword(s) so callers can match
+          const originals = originalByClean.get(item.keyword) ?? [item.keyword];
+          for (const orig of originals) {
+            results.push({
+              keyword: orig,
+              volume: item.search_volume,
+              cpc: item.cpc ?? 0,
+              competition: item.competition ?? null,
+              competition_level: item.competition_level ?? null,
+            });
+          }
         }
       }
     }
@@ -3457,6 +3484,13 @@ ${reportContent}`;
   validated.sort((a, b) => (b.cpc - a.cpc) || (b.volume - a.volume));
 
   console.log(`  Validated: ${validated.length} keywords with volume or CPC (of ${cappedMatrix.length} candidates)`);
+
+  if (validated.length === 0) {
+    throw new Error(
+      `Phase 2 produced 0 validated keywords — all ${cappedMatrix.length} candidates returned 0 volume from DataForSEO. ` +
+      `Check DataForSEO API status, keyword formatting, or geo scope.`
+    );
+  }
 
   // Write raw results to disk
   const rawPath = path.join(researchDir, 'keyword_research_raw.json');
