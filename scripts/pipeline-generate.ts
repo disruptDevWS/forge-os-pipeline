@@ -3297,7 +3297,7 @@ ${reportContent}`;
   }
 
   // --- Inject client context services (full mode) ---
-  const { context: kwClientCtx } = await loadClientContextAsync(domain, sb, auditId);
+  const { context: kwClientCtx, extras: kwExtras } = await loadClientContextAsync(domain, sb, auditId);
   if (kwClientCtx?.services?.length) {
     const existingLower = new Set(services.map((s) => s.toLowerCase()));
     let added = 0;
@@ -3310,6 +3310,30 @@ ${reportContent}`;
     }
     if (added > 0) {
       console.log(`  Added ${added} services from client_context: ${kwClientCtx.services.join(', ')}`);
+    }
+  }
+
+  // --- Inject service_area cities into locations (supplement Haiku extraction) ---
+  if (kwExtras?.service_area) {
+    const areaTokens = kwExtras.service_area
+      .split(',')
+      .map((s: string) => s.trim())
+      .filter(Boolean);
+    const statesLower = new Set(kwGeo.locales.map((s: string) => s.toLowerCase()));
+    const cityHints = areaTokens.filter((t: string) => !statesLower.has(t.toLowerCase()));
+    if (cityHints.length > 0) {
+      const existingLower = new Set(locations.map((l: string) => l.toLowerCase()));
+      let added = 0;
+      for (const city of cityHints) {
+        if (!existingLower.has(city.toLowerCase())) {
+          locations.push(city);
+          existingLower.add(city.toLowerCase());
+          added++;
+        }
+      }
+      if (added > 0) {
+        console.log(`  Added ${added} city hints from service_area: ${cityHints.join(', ')}`);
+      }
     }
   }
 
@@ -3414,7 +3438,7 @@ ${reportContent}`;
       // Bucket 3: Top city variants from Haiku extraction (if any cities found in crawl)
       // These capture local intent even for online providers (campus/hybrid searches)
       if (locations.length > 0) {
-        const topCities = locations.slice(0, 3); // cap at 3 cities to control matrix size
+        const topCities = locations.slice(0, 5); // cap at 5 — service_area input is explicit, not noisy
         for (const service of services) {
           const svc = service.toLowerCase();
           for (const city of topCities) {

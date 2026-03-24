@@ -4,6 +4,12 @@ Non-obvious choices that would look wrong without context. Check here before "fi
 
 ---
 
+**2026-03-23: Phase 2 service_area → Bucket 3 cities + cap raised from 3 to 5**
+
+Bucket 3 (city-qualified keywords in state mode) relied entirely on Haiku extracting city names from AUDIT_REPORT.md. With JS rendering disabled, crawls return thin HTML and Haiku finds 0 locations — Bucket 3 never fires. The user already enters `service_area` in Settings (e.g., "Boise, Nampa, Meridian"). This data was available via `loadClientContextAsync()` as `extras.service_area` but Phase 2 discarded `extras`. Now Phase 2 parses `service_area`, filters out state names (already in Bucket 2), deduplicates against Haiku results, and merges into `locations`. City cap raised from 3 to 5 because explicit user input is reliable (not noisy Haiku extraction). Cost impact: ~160 more candidates in a 500-cap matrix — well within budget.
+
+---
+
 **2026-03-10: Moved all DataForSEO/keyword/revenue logic out of run-audit Edge Function into the pipeline**
 
 The `run-audit` Supabase Edge Function used to run DataForSEO keyword fetch + clustering + revenue modeling (Stage 1) before the pipeline existed. When the pipeline trigger was added, this became redundant — the pipeline's Phase 2 (KeywordResearch) and Phase 3 (Jim) handle all keyword seeding and research. The edge function was slimmed to a thin trigger: validate audit, mark as running, POST to pipeline server. It writes **nothing** to audit_keywords, audit_clusters, or audit_rollups.
