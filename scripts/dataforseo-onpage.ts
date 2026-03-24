@@ -25,7 +25,7 @@ export interface OnPageCredentials {
 
 export interface OnPageTaskOptions {
   maxPages?: number;          // max_crawl_pages (default: 500)
-  enableJsRendering?: boolean; // default: true
+  enableJsRendering?: boolean; // default: false (raw HTML = what search engines see)
   customUserAgent?: string;
   budgetCap?: number;         // USD limit per crawl (default: $0.50)
 }
@@ -180,7 +180,7 @@ export async function createOnPageTask(
 ): Promise<string> {
   const creds = getCredentials(env);
   const maxPages = options.maxPages ?? 500;
-  const enableJs = options.enableJsRendering ?? true;
+  const enableJs = options.enableJsRendering ?? false;
 
   const taskPayload = [
     {
