@@ -133,8 +133,16 @@ function todayStr(): string {
 // Imported at top of file: import { callClaude, callClaudeAsync, initAnthropicClient } from './anthropic-client.js';
 
 function stripCodeFences(text: string): string {
-  const fenced = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/);
-  return fenced ? fenced[1].trim() : text.trim();
+  // Try standard fenced block first (greedy to handle nested backticks)
+  const fenced = text.match(/```(?:json)?\s*\n([\s\S]*)\n\s*```/);
+  if (fenced) return fenced[1].trim();
+  // Fallback: strip leading ```json and trailing ``` separately
+  let stripped = text.trim();
+  if (stripped.startsWith('```')) {
+    stripped = stripped.replace(/^```(?:json)?\s*\n?/, '');
+    stripped = stripped.replace(/\n?\s*```\s*$/, '');
+  }
+  return stripped.trim();
 }
 
 /** Attempt to repair common LLM JSON errors before parsing. */
