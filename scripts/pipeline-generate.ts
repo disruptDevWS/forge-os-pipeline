@@ -4262,7 +4262,7 @@ Group related keywords into single topics. YOUR ENTIRE RESPONSE IS RAW JSON — 
     })
     .join('; ');
 
-  const reportPrompt = `You are Scout, a prospect discovery agent for Forge Growth. Generate a comprehensive scout report for a prospective client.
+  const reportPrompt = `You are a prospect discovery analyst for Forge Growth. Generate a comprehensive scout report for a prospective client.
 
 YOUR ENTIRE RESPONSE IS THE REPORT. Output ONLY the markdown content — start with "# Scout Report". No preamble, no narration.
 
@@ -4300,7 +4300,7 @@ ${gapTable || '| (no gap data) | | | | | |'}
 # Scout Report: ${config.name}
 ## ${domain}
 **Scout Date:** ${date}
-**Agent:** Scout (Forge Growth)
+**Prepared by:** Forge Growth
 ---
 
 ## 1. Prospect Overview
@@ -4328,7 +4328,7 @@ ${gapTable || '| (no gap data) | | | | | |'}
 [For geo_type 'local': lead with optimization priorities for existing pages, then new local service pages. For geo_type 'multi_state' or 'regional': lead with the expansion footprint gap — the prospect has zero ranking presence in their target markets. Frame LP creation as the foundational infrastructure needed before any ranking is possible in expansion geos, and treat defending local positions as a secondary (not primary) priority in this section.]
 
 ## 7. Recommended Scope for Research
-[This section is a human-readable recommendation document formatted as JSON for clarity. It is NOT a pipeline configuration file and will NOT be parsed programmatically. Include whatever fields are analytically useful — seed_topics, expansion_geos, flags, estimated_addressable_volume, etc. Label the JSON block with a comment at the top: // Recommended Jim run scope — human review required before pipeline execution]
+[This section is a human-readable recommendation document formatted as JSON for clarity. It is NOT a pipeline configuration file and will NOT be parsed programmatically. Include whatever fields are analytically useful — seed_topics, expansion_geos, flags, estimated_addressable_volume, etc. Label the JSON block with a comment at the top: // Recommended research scope — human review required before pipeline execution]
 \`\`\`json
 {scope_json}
 \`\`\`
