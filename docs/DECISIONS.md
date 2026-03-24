@@ -4,6 +4,24 @@ Non-obvious choices that would look wrong without context. Check here before "fi
 
 ---
 
+**2026-03-24: Keyword lookup utility in `src/` not `scripts/`**
+
+`dataforseo-keywords.ts` lives in `src/` because `tsconfig.json` has `rootDir: "./src"` and the server imports it. The pipeline's existing `bulkKeywordVolume()` in `scripts/pipeline-generate.ts` filters zero-volume keywords (correct for revenue modeling). The lookup utility returns ALL keywords including zero-volume — users need to know what has no volume, not just what does. Duplicating the DataForSEO call logic rather than refactoring `pipeline-generate.ts` avoids touching a 1000+ line file for a standalone feature.
+
+**2026-03-24: Keyword lookup is synchronous (200), not async (202)**
+
+Unlike `/trigger-pipeline` and `/recanonicalize` which spawn background processes and return 202, `/lookup-keywords` blocks and returns results directly. DataForSEO volume API responds in 1-5 seconds for up to 1000 keywords — fast enough for synchronous. The 500-keyword cap prevents accidental expensive calls (~$0.075 per 1000-keyword batch per location).
+
+**2026-03-24: TSV clipboard copy instead of CSV**
+
+Spreadsheet apps (Google Sheets, Excel) auto-parse tab-separated values into columns on paste. CSV requires an import dialog. Since the primary use case is paste-into-spreadsheet, TSV is the correct clipboard format. The copy also preserves the current sort order.
+
+**2026-03-24: Static reports via `public/reports/` with Vercel rewrite passthrough**
+
+Self-contained HTML reports (intelligence briefs, etc.) served as static files from Vercel. Required adding a passthrough rewrite rule (`/reports/:path*`) before the SPA catch-all in `vercel.json`. Alternative was Supabase Storage (bucket created, file uploaded) but the Vercel path gives a cleaner URL on the dashboard domain and doesn't require a separate service.
+
+---
+
 **2026-03-24: Validator resilience — max_tokens bump + truncation detection + JSON repair**
 
 Phase 6.5 (Coverage Validator) failed on IMA's audit (35 clusters, 30+ gaps) because `max_tokens: 4096` was too low — JSON response truncated at ~14K chars. Bumped to 16384 (matches other synthesis phases). Added `TruncationError` class and `warnOnTruncation` option to `callClaude()` — when `stop_reason === 'max_tokens'`, always logs a warning; when the flag is set, throws `TruncationError` carrying the partial output so callers can attempt repair. Generalized `repairJSON()` with an optional `arrayKey` parameter (tries specified key for truncation recovery instead of hardcoded `"groups"`). Validator now catches `TruncationError` and attempts `repairJSON(partial, 'coverage')`. Cost impact of token bump: zero (cap, not minimum). Added defensive dedup guardrail to validator prompt as safety net.
