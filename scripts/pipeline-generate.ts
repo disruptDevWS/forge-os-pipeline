@@ -660,7 +660,15 @@ async function bulkKeywordVolumeForLocation(
     const data = await resp.json();
 
     for (const task of data?.tasks ?? []) {
-      for (const item of task?.result ?? []) {
+      if (task.status_code !== 20000) {
+        console.warn(`  DataForSEO task error: ${task.status_code} — ${task.status_message}`);
+        continue;
+      }
+      const resultItems = task?.result ?? [];
+      if (resultItems.length === 0) {
+        console.warn(`  DataForSEO returned 0 result items for batch (location ${locationCode})`);
+      }
+      for (const item of resultItems) {
         if (item.search_volume && item.search_volume > 0) {
           results.push({
             keyword: item.keyword,
@@ -671,6 +679,9 @@ async function bulkKeywordVolumeForLocation(
           });
         }
       }
+    }
+    if ((data?.tasks ?? []).length === 0) {
+      console.warn(`  DataForSEO returned 0 tasks (unexpected — check API key/balance)`);
     }
   }
 
