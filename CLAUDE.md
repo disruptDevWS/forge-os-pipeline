@@ -89,6 +89,7 @@ Each pipeline phase (Dwight, Jim, Michael, etc.) is a **prompt template**, not a
 ```
 Phase 0  Scout           (prospect mode only, exits after + prospect-narrative.md)
 Phase 1  Dwight          Technical crawl + audit report
+Phase 1a Verify Dwight   HTTP checks: sitemap, schema, redirect integrity
 Phase 1b Strategy Brief  Synthesize Dwight + Scout + client profile → strategic framing
      ── Review Gate ──  (opt-in: if review_gate_enabled=true, pauses with awaiting_review)
 Phase 2  KeywordResearch Service × city × intent keyword matrix
@@ -158,6 +159,7 @@ Run commands directly — don't tell the user to run them.
 | `scripts/generate-cluster-strategy.ts` | Cluster activation: Opus strategy generation (on-demand, per-cluster) |
 | `scripts/local-presence.ts` | Phase 6d: GBP lookup + SERP citation scan → gbp_snapshots, citation_snapshots |
 | `scripts/dataforseo-business.ts` | DataForSEO client: GBP lookup + SERP citation scan |
+| `scripts/verify-dwight.ts` | Phase 1a: HTTP verification of Dwight findings (sitemap, schema, redirects) |
 | `scripts/strategy-brief.ts` | Phase 1b: synthesize Dwight + Scout + client profile → strategy_brief.md |
 | `scripts/track-rankings.ts` | Performance tracking: DataForSEO ranked_keywords snapshot + authority scoring |
 | `scripts/backfill-authority-scores.ts` | Backfill authority scores for existing snapshots |
@@ -284,3 +286,8 @@ Pipeline server (`pipeline-server-standalone.ts`) on port 3847, 9 endpoints. Sup
 Two-step audit creation flow: Create Draft → Configure on Settings → Start Pipeline. `useCreateAudit` no longer auto-triggers `run-audit`; audit stays as `draft`. User redirected to Settings page for client context entry, then clicks "Start Pipeline" (draft banner). `loadClientContextAsync(domain, sb, auditId)` in `client-context.ts` bridges the dual-store: tries `prospect-config.json` first (Scout path), falls back to `audits.client_context` JSONB with field mapping (`core_services` → `services[]`, `differentiators` → `competitive_advantage`). Dashboard-only fields (`service_area`, `notes`) returned as `DashboardExtras` for Phase 1b. All 5 pipeline callers updated to use async version. Convert-prospect path unaffected (independent hook, auto-triggers).
 
 **Key decisions**: Settings reuse over new intermediate page (already has context form + pipeline trigger). Disk file takes priority over DB so Scout data isn't overwritten. `loadClientContextAsync` checks both sources on every run (no caching) so skip → fill later → re-run works.
+
+## Documentation
+When working with any external library or framework, use Context7 MCP to 
+fetch current documentation before implementing. Do not rely on training 
+data for API signatures, configuration options, or version-specific behavior.

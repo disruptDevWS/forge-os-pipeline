@@ -32,6 +32,7 @@
 # ─────────────────────────────────────────────────────────────
 #
 # Phase 1:  Dwight — DataForSEO OnPage crawl + analysis → AUDIT_REPORT.md + CSVs
+# Phase 1a: Verify Dwight — HTTP checks for sitemap, schema, redirect integrity
 # Phase 2:  KeywordResearch — Service × city × intent matrix → keyword_research_summary.md + audit_keywords (seeded)
 # Phase 3:  Jim — DataForSEO ranked-keywords + competitors → research_summary.md
 # Phase 3b: sync jim — ranked_keywords.json → Supabase (audit_keywords, clusters, rollups)
@@ -93,7 +94,7 @@ for i in "$@"; do
 done
 
 # Phase ordering for --start-from
-PHASE_ORDER=(1 1b 2 3 3b 3c 3d 4 5 6 6.5 6b 6c 6d)
+PHASE_ORDER=(1 1a 1b 2 3 3b 3c 3d 4 5 6 6.5 6b 6c 6d)
 should_run_phase() {
   local phase="$1"
   [[ -z "$START_FROM" ]] && return 0
@@ -165,6 +166,13 @@ QA_RESULT=$(npx tsx scripts/pipeline-generate.ts qa --domain "$DOMAIN" --user-em
 }
 echo "  QA PASSED: Dwight"
 else echo "  [SKIP] Phase 1: Dwight"; fi
+
+# ─── Phase 1a: Verify Dwight (HTTP checks) ──────────────────
+if should_run_phase 1a; then
+echo ""
+echo "--- Phase 1a: Verify Dwight (HTTP checks) ---"
+npx tsx scripts/verify-dwight.ts --domain "$DOMAIN"
+else echo "  [SKIP] Phase 1a: Verify Dwight"; fi
 
 # ─── Phase 1b: Strategy Brief ────────────────────────────────
 if should_run_phase 1b; then

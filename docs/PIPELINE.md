@@ -60,6 +60,13 @@ Phase 1 (Dwight)
              Copies internal_all.csv → architecture/
       │
       ▼
+Phase 1a (Verify Dwight)
+  READS:     AUDIT_REPORT.md, internal_all.csv (for 3xx redirect list)
+  CHECKS:    Sitemap existence (HEAD), Schema presence (GET+parse), Redirect chain integrity (follow 3xx)
+  PRODUCES:  verification_results.json (structured corrections map)
+             Annotates AUDIT_REPORT.md with verification section
+      │
+      ▼
 Phase 1b (Strategy Brief)
   READS:     AUDIT_REPORT.md (Dwight), scope.json + scout-report.md (Scout, optional),
              prospect-config.json → client_context (optional),
@@ -216,6 +223,29 @@ Phase 6d (Local Presence)
 **Prompt framing:** Uses "YOUR ENTIRE RESPONSE IS THE REPORT" top/bottom framing to prevent narration. `validateArtifact()` enforces ≥5000 byte minimum and checks for conversational patterns.
 
 **Supabase writes:** `agent_runs`, `audit_snapshots` (agent='dwight')
+
+---
+
+### Phase 1a: Verify Dwight — HTTP Checks
+
+**Script:** `scripts/verify-dwight.ts` | **Model:** None (pure HTTP)
+
+**Purpose:** DataForSEO's OnPage API has documented gaps that cause Dwight to report false negatives on sitemap detection, schema/structured data detection, and redirect chain resolution. This phase independently verifies those findings with direct HTTP checks before downstream phases consume AUDIT_REPORT.md.
+
+**Checks:**
+- **Check A — Sitemap existence:** HEAD requests to `/sitemap.xml` and `/sitemap_index.xml` (both `www` and non-`www`). If sitemap found but Dwight flagged as missing → correction.
+- **Check B — Schema presence:** GET homepage, parse for `<script type="application/ld+json">` and Yoast schema graph. Extracts `@type` values from JSON-LD blocks. If schema found but Dwight flagged as absent → correction.
+- **Check C — Redirect chain integrity:** Reads `internal_all.csv` for 3xx entries with empty `Redirect URL` column. Follows each redirect chain (manual redirect mode, max 10 hops, max 50 URLs) and records terminal URL, status, and chain health.
+
+**Outputs:**
+- `verification_results.json` — structured corrections map (keyed by issue pattern match). Consumed by `syncDwight()` at Phase 6c for merging into `prioritized_fixes[]` objects.
+- Appends a `## Post-Dwight Verification (Phase 1a)` section to `AUDIT_REPORT.md` (cosmetic annotation for disk artifact accuracy — not machine-parsed).
+
+**Correction flow:** Corrections are NOT applied by modifying `parseAuditReport()`. Instead, `syncDwight()` loads `verification_results.json` after parsing and merges corrections into fix objects before writing to `audit_snapshots`. Each fix object gets `status` ('flagged' | 'false_positive'), `original_severity` (baseline for re-verification), `verified_at`, `verification_source`, and `verification_note`.
+
+**Idempotency:** Skips if `AUDIT_REPORT.md` already contains the verification section header.
+
+**Cost:** $0 (HTTP only, no LLM calls). Runtime: ~2-5 seconds.
 
 ---
 

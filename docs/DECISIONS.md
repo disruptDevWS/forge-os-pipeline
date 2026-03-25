@@ -4,6 +4,14 @@ Non-obvious choices that would look wrong without context. Check here before "fi
 
 ---
 
+**2026-03-25: Verification layer uses structured corrections map, not inline annotation parsing**
+
+Phase 1a (`verify-dwight.ts`) writes `verification_results.json` with corrections keyed by issue text pattern. `syncDwight()` loads this file after `parseAuditReport()` and merges corrections into fix objects. The alternative was having `parseAuditReport()` detect `[VERIFIED: ...]` annotations in the markdown — rejected because regex-based annotation parsing is fragile and creates coupling between the verification output format and the report parser. The report annotations exist for human-readable disk artifact accuracy only; they are never machine-parsed. `original_severity` is set on ALL fix objects at parse time (not just corrected ones) so future re-verification has a baseline to diff against.
+
+**2026-03-25: Phase 1a runs between Dwight QA and Phase 1b, not before Phase 6c**
+
+Verification runs immediately after Dwight produces AUDIT_REPORT.md (post-QA). The alternative was running before Phase 6c (syncDwight), but Phase 1b (Strategy Brief), Phase 2 (Keyword Research), and Phase 6 (Michael) all read AUDIT_REPORT.md — the report annotation benefits all downstream phases. The corrections map is consumed by syncDwight at Phase 6c regardless of when it was generated.
+
 **2026-03-24: Keyword lookup utility in `src/` not `scripts/`**
 
 `dataforseo-keywords.ts` lives in `src/` because `tsconfig.json` has `rootDir: "./src"` and the server imports it. The pipeline's existing `bulkKeywordVolume()` in `scripts/pipeline-generate.ts` filters zero-volume keywords (correct for revenue modeling). The lookup utility returns ALL keywords including zero-volume — users need to know what has no volume, not just what does. Duplicating the DataForSEO call logic rather than refactoring `pipeline-generate.ts` avoids touching a 1000+ line file for a standalone feature.

@@ -163,11 +163,29 @@
 
 | agent_name | Writer Phase | Key JSONB Columns | Dashboard Consumer |
 |------------|-------------|-------------------|-------------------|
-| `dwight` | Phase 1 (syncDwight) | `executive_summary`, `prioritized_fixes[]`, `agentic_readiness[]`, `structured_data_issues[]`, `heading_issues[]`, `security_issues[]`, `platform_notes`, `site_metadata` | `useAuditSiteFindings()` → AuditPage |
+| `dwight` | Phase 6c (syncDwight) | `executive_summary`, `prioritized_fixes[]`, `agentic_readiness[]`, `structured_data_issues[]`, `heading_issues[]`, `security_issues[]`, `platform_notes`, `site_metadata` | `useAuditSiteFindings()` → AuditPage |
 | `jim` | Phase 3 (syncJim) | `research_summary_markdown`, `keyword_overview{}`, `position_distribution[]`, `branded_split{}`, `intent_breakdown[]`, `top_ranking_urls[]`, `competitor_analysis[]`, `competitor_summary{}`, `striking_distance[]`, `content_gap_observations[]`, `key_takeaways[]` | `useResearchSiteFindings()` → ResearchPage |
 | `gap` | Phase 5 | `keyword_overview` (JSONB with `authority_gaps[]`, `format_gaps[]`, `gap_summary`) | `useAuditSnapshots()` |
 
 **Shared columns**: `id`, `audit_id`, `agent_name`, `snapshot_version`, `agent_run_id`, `row_count`, `created_at`
+
+**`prioritized_fixes[]` item schema** (Dwight snapshots):
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `number` | integer | Fix sequence number within tier |
+| `issue` | string | Issue title from AUDIT_REPORT.md |
+| `affected_pages` | string | Page count or URL list |
+| `fix` | string | Remediation recommendation |
+| `priority_tier` | integer | 1=Critical, 2=High, 3=Medium, etc. |
+| `priority_label` | string | "Critical", "High", "Medium" |
+| `status` | string | `flagged` (default), `false_positive`, `verified`, `resolved` |
+| `original_severity` | string | Baseline `priority_label` at parse time (never changes) |
+| `verified_at` | string? | ISO timestamp of verification check |
+| `verification_source` | string? | `direct_http`, `manual`, `re-verification` |
+| `verification_note` | string? | Human-readable explanation of the verification finding |
+
+Phase 1a (`verify-dwight.ts`) writes `verification_results.json` to disk. syncDwight loads it and merges corrections into fix objects before writing to `audit_snapshots`. False positive fixes display as struck-through in the dashboard.
 
 ---
 

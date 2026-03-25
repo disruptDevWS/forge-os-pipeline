@@ -1110,6 +1110,11 @@ interface ParsedAuditReport {
     fix: string;
     priority_tier: number;
     priority_label: string;
+    status: 'flagged' | 'verified' | 'false_positive' | 'resolved';
+    original_severity: string;
+    verified_at?: string;
+    verification_source?: string;
+    verification_note?: string;
   }>;
   agenticReadiness: Array<{
     signal: string;
@@ -1177,6 +1182,8 @@ function parseAuditReport(filePath: string): ParsedAuditReport {
         fix: row[4].trim(),
         priority_tier: tier,
         priority_label: label,
+        status: 'flagged',
+        original_severity: label,
       });
     }
   }
@@ -1584,6 +1591,42 @@ async function syncDwight(
     console.log(`  [dwight] Extracted: ${parsedReport.prioritizedFixes.length} fixes, ${parsedReport.agenticReadiness.length} agentic signals, ${parsedReport.structuredDataIssues.length} schema issues, ${parsedReport.headingIssues.length} heading issues, ${parsedReport.securityIssues.length} security issues, ${JSON.parse(parsedReport.siteMetadata.url_identity_issues || '[]').length} URL identity issues, ${JSON.parse(parsedReport.siteMetadata.metadata_over_length_titles || '[]').length} over-length titles`);
   } else {
     console.log(`  [dwight] No AUDIT_REPORT.md found in any auditor directory — site-level findings will be empty`);
+  }
+
+  // Merge verification results if Phase 1a ran
+  if (parsedReport && parsedReport.prioritizedFixes.length > 0) {
+    const verificationPath = path.join(dir, 'verification_results.json');
+    if (fs.existsSync(verificationPath)) {
+      try {
+        const vr = JSON.parse(fs.readFileSync(verificationPath, 'utf-8'));
+        const corrections: Array<{
+          issue_pattern: string;
+          finding: string;
+          status: string;
+          verified_at: string;
+          verification_source: string;
+        }> = vr.corrections ?? [];
+
+        if (corrections.length > 0) {
+          console.log(`  [dwight] Merging ${corrections.length} verification correction(s)`);
+          for (const fix of parsedReport.prioritizedFixes) {
+            for (const correction of corrections) {
+              const pattern = new RegExp(correction.issue_pattern, 'i');
+              if (pattern.test(fix.issue)) {
+                fix.status = correction.status as typeof fix.status;
+                fix.verified_at = correction.verified_at;
+                fix.verification_source = correction.verification_source;
+                fix.verification_note = correction.finding;
+                console.log(`  [dwight]   Corrected fix #${fix.number}: "${fix.issue}" → ${correction.status}`);
+                break;
+              }
+            }
+          }
+        }
+      } catch (err: any) {
+        console.log(`  [dwight] Warning: could not parse verification_results.json: ${err.message}`);
+      }
+    }
   }
 
   // Record snapshot with site-level findings and update staleness
