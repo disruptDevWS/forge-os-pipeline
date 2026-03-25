@@ -1094,6 +1094,90 @@ async function syncJim(
     console.log(`  [jim] Captured ${baselineRecords.length} baseline snapshots`);
   }
 
+  // LLM visibility table writes (optional — skip if no llm_mentions.json)
+  const llmMentionsPath = path.join(dir, 'llm_mentions.json');
+  if (fs.existsSync(llmMentionsPath)) {
+    try {
+      const llmData = JSON.parse(fs.readFileSync(llmMentionsPath, 'utf-8'));
+      const snapshotDate = new Date().toISOString().slice(0, 10);
+
+      // Clear existing rows for this audit + date
+      await (sb as any).from('llm_visibility_snapshots')
+        .delete()
+        .eq('audit_id', auditId)
+        .eq('snapshot_date', snapshotDate);
+      await (sb as any).from('llm_mention_details')
+        .delete()
+        .eq('audit_id', auditId);
+
+      // Insert domain mentions → llm_visibility_snapshots
+      const visRecords: any[] = [];
+      for (const m of llmData.domain_mentions ?? []) {
+        visRecords.push({
+          audit_id: auditId,
+          domain,
+          snapshot_date: snapshotDate,
+          keyword: m.keyword,
+          platform: m.platform,
+          mention_count: m.mention_count ?? 0,
+          ai_search_volume: m.ai_search_volume ?? null,
+          top_citation_domains: m.citation_sources ?? [],
+        });
+      }
+
+      // Insert competitor mentions → llm_visibility_snapshots (using competitor's domain)
+      for (const cm of llmData.competitor_mentions ?? []) {
+        visRecords.push({
+          audit_id: auditId,
+          domain: cm.domain,
+          snapshot_date: snapshotDate,
+          keyword: cm.keyword,
+          platform: cm.platform,
+          mention_count: cm.mention_count ?? 0,
+          ai_search_volume: null,
+          top_citation_domains: [],
+        });
+      }
+
+      if (visRecords.length > 0) {
+        for (let i = 0; i < visRecords.length; i += 500) {
+          const batch = visRecords.slice(i, i + 500);
+          const { error } = await (sb as any).from('llm_visibility_snapshots').upsert(batch, {
+            onConflict: 'audit_id,snapshot_date,keyword,platform,domain',
+          });
+          if (error) console.warn(`  [jim] llm_visibility_snapshots upsert warning: ${error.message}`);
+        }
+        console.log(`  [jim] Inserted ${visRecords.length} LLM visibility snapshot records`);
+      }
+
+      // Insert mention details → llm_mention_details
+      const detailRecords: any[] = [];
+      for (const m of llmData.domain_mentions ?? []) {
+        for (const text of m.mention_texts ?? []) {
+          detailRecords.push({
+            audit_id: auditId,
+            keyword: m.keyword,
+            platform: m.platform,
+            mention_text: text,
+            citation_urls: [],
+            source_domains: m.citation_sources ?? [],
+          });
+        }
+      }
+
+      if (detailRecords.length > 0) {
+        for (let i = 0; i < detailRecords.length; i += 500) {
+          const batch = detailRecords.slice(i, i + 500);
+          const { error } = await (sb as any).from('llm_mention_details').insert(batch);
+          if (error) console.warn(`  [jim] llm_mention_details insert warning: ${error.message}`);
+        }
+        console.log(`  [jim] Inserted ${detailRecords.length} LLM mention detail records`);
+      }
+    } catch (err: any) {
+      console.log(`  [jim] LLM visibility sync failed (non-fatal): ${err.message}`);
+    }
+  }
+
   return agentRunId;
 }
 

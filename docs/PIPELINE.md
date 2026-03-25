@@ -10,6 +10,7 @@ Trigger paths:
 - **Scout:** Dashboard Scout UI → `scout-config` Edge Function → Forge OS pipeline server (`/scout-config` + `/trigger-pipeline` with `--mode prospect`)
 - **Re-canonicalize:** Settings page → `pipeline-controls` Edge Function → `/recanonicalize` → `run-canonicalize.ts` (Phase 3c+3d only)
 - **Refresh rankings:** Settings page → `pipeline-controls` Edge Function → `/track-rankings` → `track-rankings.ts`
+- **Track AI visibility:** Settings page → `pipeline-controls` Edge Function → `/track-llm-mentions` → `track-llm-mentions.ts`
 - **Re-run pipeline:** Settings page → `run-audit` Edge Function → `/trigger-pipeline` → `run-pipeline.sh`
 - **Cluster activation:** Clusters page → `cluster-action` Edge Function → `/activate-cluster` → `generate-cluster-strategy.ts`
 - **Export audit:** Settings page → `export-audit` Edge Function → `/export-audit` → ZIP stream of all `audits/{domain}/` artifacts
@@ -18,7 +19,7 @@ Edge Functions (deployed from [Lovable repo](https://github.com/disruptDevWS/mar
 - `run-audit` — validates audit, marks `running`, POSTs to `/trigger-pipeline`
 - `scout-config` — writes prospect config to disk, triggers scout, reads reports via `/scout-report` (auth: `validateSuperAdmin` + `has_role`)
 - `cluster-action` — proxies `/activate-cluster` and `/deactivate-cluster` (auth: `resolveAuthContext` + ownership check)
-- `pipeline-controls` — proxies `/recanonicalize` and `/track-rankings` for Settings page (auth: `validateSuperAdmin` + `has_role`)
+- `pipeline-controls` — proxies `/recanonicalize`, `/track-rankings`, and `/track-llm-mentions` for Settings page (auth: `validateSuperAdmin` + `has_role`)
 - `export-audit` — streams ZIP of all pipeline artifacts for a domain (auth: `validateSuperAdmin` + `has_role`)
 
 Core scripts:
@@ -320,7 +321,11 @@ Phase 6d (Local Presence)
 | DataForSEO Ranked Keywords | `/v3/dataforseo_labs/google/ranked_keywords/live` | Current organic rankings for domain |
 | DataForSEO Competitors | `/v3/dataforseo_labs/google/competitors_domain/live` | Competitor domain landscape |
 | DataForSEO Bulk Volume | `/v3/keywords_data/google_ads/search_volume/live` | Volume for seed/supplementary keywords |
+| DataForSEO LLM Mentions | `/v3/ai_optimization/llm_mentions/search/live` | Domain mentions in AI platforms (ChatGPT, Google AI) |
+| DataForSEO LLM Mentions | `/v3/ai_optimization/llm_mentions/aggregated_metrics/live` | Competitor AI mention counts |
 | Anthropic API (sonnet) | `callClaude()` | Generate research_summary.md narrative |
+
+**LLM Mentions (conditional):** After ranked keywords and competitors are collected, `fetchAllLlmMentions()` queries DataForSEO for AI platform mentions. Top 5 keywords (by volume, rank ≤ 30, excluding brand/near-me) and top 3 non-aggregator competitors are selected. Results written to `research/{date}/llm_mentions.json`. An `## AI Visibility Data` block is injected into the narrative prompt (mention counts by platform, AI search volume, top citation sources, competitor comparison). Budget guard via `LLM_MENTIONS_BUDGET` env var (default $1.00) — non-fatal if exceeded. A conditional Section 11 (AI Visibility) is added to the research narrative output when data exists.
 
 **Aggregator filtering:** Before building the prompt, competitors are pre-filtered using `isAggregatorDomain()` (Yelp, HomeAdvisor, Angi, BBB, Thumbtack, social media, Wikipedia, Reddit, etc.). This prevents aggregator domains with massive ETV from dominating the competitor table and misleading analysis.
 
@@ -336,7 +341,8 @@ Phase 6d (Local Presence)
 - `research/{date}/ranked_keywords.json` (geo-qualified volumes when applicable)
 - `research/{date}/ranked_keywords.national.json` (backup, Mode A only, geo-qualified audits only)
 - `research/{date}/competitors.json`
-- `research/{date}/research_summary.md` (10 sections: executive summary, keyword overview, position distribution, branded analysis, intent breakdown, top URLs, competitor deep dive, striking distance, content gaps, key takeaways)
+- `research/{date}/llm_mentions.json` (AI platform mention data: domain_mentions, competitor_mentions, queried_keywords, total_cost)
+- `research/{date}/research_summary.md` (10-11 sections: executive summary, keyword overview, position distribution, branded analysis, intent breakdown, top URLs, competitor deep dive, striking distance, content gaps, key takeaways, + conditional Section 11: AI Visibility)
 
 **Prompt framing:** Uses "YOUR ENTIRE RESPONSE IS THE REPORT" top/bottom framing. `validateArtifact()` enforces ≥3000 byte minimum.
 
@@ -363,6 +369,8 @@ Phase 6d (Local Presence)
 | `audit_rollups` | DELETE + INSERT | Preliminary — rebuilt in Phase 3d |
 | `audit_snapshots` | INSERT | 1 (parsed research sections) |
 | `baseline_snapshots` | UPSERT | 1 (first sync only) |
+| `llm_visibility_snapshots` | DELETE + INSERT | Client + competitor AI mention data (from `llm_mentions.json`, optional) |
+| `llm_mention_details` | DELETE + INSERT | Qualitative mention texts and citation URLs (from `llm_mentions.json`, optional) |
 | `audits` | UPDATE | status='completed', completed_at |
 
 Each `audit_keywords` row includes revenue estimates: `delta_revenue_low/mid/high` computed from `delta_traffic × CR × ACV` at three tiers. Near-miss filter: `is_brand=false AND intent≠navigational AND pos in [min,max] AND vol≥min_volume`.
@@ -434,7 +442,7 @@ Synthesizes all competitive intelligence + keyword data into a structured gap an
 
 **Supabase reads:** `audit_topic_competitors`, `audit_topic_dominance`, `audit_keywords`, `audit_clusters`, `agent_architecture_pages`
 
-**Output JSON keys:** `authority_gaps` (with `data_source` provenance), `format_gaps`, `unaddressed_gaps`, `priority_recommendations`, `summary`
+**Output JSON keys:** `authority_gaps` (with `data_source` provenance), `format_gaps`, `unaddressed_gaps`, `priority_recommendations`, `summary`, `ai_citation_gaps` (conditional, from `llm_mentions.json` — topic, client/competitor mention counts, gap_severity, recommended_action)
 
 **Client context:** If `prospect-config.json` has `client_context`, out-of-scope items are injected as reasoning constraints ("do not surface gaps related to these topics or delivery models").
 
@@ -727,6 +735,61 @@ Ranking performance tracking runs independently of the audit pipeline — weekly
 **Backfill:** `npx tsx scripts/backfill-authority-scores.ts [--domain <d>]` — computes authority scores for existing `cluster_performance_snapshots` and updates `audit_clusters`. Uses `audit_keywords` as denominator (not snapshot data) since older snapshots may be incomplete. Processes snapshot dates chronologically so deltas are correct.
 
 **RLS:** All tables: SELECT for audit owners (`audits.user_id = auth.uid()`). INSERT/UPDATE/DELETE restricted to service_role.
+
+---
+
+## LLM Visibility Tracking (Post-Pipeline, Scheduled)
+
+AI platform mention tracking runs independently of the audit pipeline — monthly via cron, or on-demand via the `/track-llm-mentions` endpoint.
+
+### track-llm-mentions.ts — Per-Domain Tracker
+
+**Script:** `scripts/track-llm-mentions.ts` | **No LLM calls**
+
+**Invocation:** `npx tsx scripts/track-llm-mentions.ts --domain <d> --user-email <e> [--force]`
+
+**Steps:**
+1. Resolve audit from Supabase (domain + email)
+2. Recency check: skip if latest `llm_visibility_snapshots` < 25 days old (bypass with `--force`)
+3. Load top 5 keywords from `audit_keywords` (by volume, rank ≤ 30, excluding brand/near-me)
+4. Fetch DataForSEO LLM Mentions `/search/live` for domain mentions across platforms (~$0.10-0.30)
+5. DELETE + INSERT to `llm_visibility_snapshots` (one row per keyword × platform)
+6. DELETE + INSERT to `llm_mention_details` (one row per mention text)
+
+**External APIs:**
+
+| API | Endpoint | Purpose |
+|-----|----------|---------|
+| DataForSEO LLM Mentions | `/v3/ai_optimization/llm_mentions/search/live` | AI platform mention data |
+
+### cron-llm-mentions-all.ts — Batch Runner
+
+**Script:** `scripts/cron-llm-mentions-all.ts`
+
+**Invocation:** `npx tsx scripts/cron-llm-mentions-all.ts [--force]`
+
+**Logic:** Queries all audits where `status='completed'`, resolves user emails, runs `track-llm-mentions.ts` sequentially with 30-second delays between domains. The 25-day recency check prevents double-runs.
+
+**Scheduling:** Railway cron job or external scheduler, monthly.
+
+### Pipeline Server Endpoint
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | `/track-llm-mentions` | On-demand LLM visibility tracking for a single domain |
+
+**Body:** `{ domain, email, force? }` — same auth as other endpoints.
+
+### Supabase Tables
+
+| Table | Purpose |
+|-------|---------|
+| `llm_visibility_snapshots` | Per-keyword per-platform per-domain mention counts (UNIQUE: audit_id, snapshot_date, keyword, platform, domain) |
+| `llm_mention_details` | Qualitative mention texts with citation URLs |
+
+**Migration:** `scripts/migrations/004-llm-visibility.sql`
+
+**RLS:** Both tables: SELECT for audit owners (`audits.user_id = auth.uid()`). INSERT/UPDATE/DELETE restricted to service_role.
 
 ---
 

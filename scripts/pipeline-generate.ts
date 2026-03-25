@@ -30,6 +30,12 @@ import {
   PHASE_MAX_TOKENS,
   TruncationError,
 } from './anthropic-client.js';
+import {
+  selectLlmKeywords,
+  selectLlmCompetitors,
+  fetchAllLlmMentions,
+  type LlmMentionsResult,
+} from './dataforseo-llm-mentions.js';
 
 // ============================================================
 // .env loader (same pattern as sync-to-dashboard)
@@ -492,7 +498,7 @@ const MIN_RANKED_KEYWORDS_THRESHOLD = 50;
 // Aggregator / directory domain filter — pre-filters Jim's competitor table
 // ============================================================
 
-const AGGREGATOR_DOMAINS = new Set([
+export const AGGREGATOR_DOMAINS = new Set([
   'yelp.com', 'homeadvisor.com', 'angieslist.com', 'angi.com',
   'thumbtack.com', 'bbb.org', 'yellowpages.com', 'mapquest.com',
   'nextdoor.com', 'facebook.com', 'linkedin.com', 'instagram.com',
@@ -501,7 +507,7 @@ const AGGREGATOR_DOMAINS = new Set([
   'expertise.com', 'porch.com', 'houzz.com', 'bark.com',
 ]);
 
-function isAggregatorDomain(domain: string): boolean {
+export function isAggregatorDomain(domain: string): boolean {
   const d = domain.replace(/^www\./, '').toLowerCase();
   return AGGREGATOR_DOMAINS.has(d);
 }
@@ -1259,6 +1265,53 @@ async function runJim(sb: SupabaseClient, auditId: string, domain: string, audit
       .filter(Boolean),
   )];
 
+  // ── LLM Mentions: AI visibility data ──
+  let llmMentionsResult: LlmMentionsResult | null = null;
+  let aiVisibilityBlock = '';
+  try {
+    const llmKeywords = selectLlmKeywords(rankedFile, 5);
+    const llmCompetitors = selectLlmCompetitors(rawCompetitors, isAggregatorDomain, 3);
+    if (llmKeywords.length > 0) {
+      llmMentionsResult = await fetchAllLlmMentions(env, domain, llmKeywords, llmCompetitors, researchDir);
+      if (llmMentionsResult && llmMentionsResult.domain_mentions.length > 0) {
+        // Build prompt injection block
+        const clientMentions = llmMentionsResult.domain_mentions
+          .filter((m) => m.mention_count > 0);
+        const totalClientMentions = clientMentions.reduce((s, m) => s + m.mention_count, 0);
+        const platformBreakdown = new Map<string, number>();
+        for (const m of llmMentionsResult.domain_mentions) {
+          platformBreakdown.set(m.platform, (platformBreakdown.get(m.platform) ?? 0) + m.mention_count);
+        }
+        const platformStr = [...platformBreakdown.entries()]
+          .map(([p, c]) => `${p}: ${c}`)
+          .join(', ');
+
+        const competitorSummary = new Map<string, number>();
+        for (const cm of llmMentionsResult.competitor_mentions) {
+          competitorSummary.set(cm.domain, (competitorSummary.get(cm.domain) ?? 0) + cm.mention_count);
+        }
+        const compStr = [...competitorSummary.entries()]
+          .map(([d, c]) => `${d}: ${c}`)
+          .join(', ');
+
+        const topCitations = new Set<string>();
+        for (const m of clientMentions) {
+          for (const src of m.citation_sources.slice(0, 3)) {
+            topCitations.add(src);
+          }
+        }
+
+        aiVisibilityBlock = `\n## AI Visibility Data (LLM Mentions)
+- Client total mentions across AI platforms: ${totalClientMentions} (${platformStr})
+- Keywords queried: ${llmMentionsResult.queried_keywords.join(', ')}
+- Top citation sources: ${[...topCitations].slice(0, 10).join(', ') || 'none'}
+${compStr ? `- Competitor mention counts: ${compStr}` : ''}\n`;
+      }
+    }
+  } catch (err: any) {
+    console.log(`  Warning: LLM mentions fetch failed (non-fatal): ${err.message}`);
+  }
+
   // Count organic vs supplemented keywords for prompt context
   const organicKeywords = rawKeywords.filter((item) => (item.ranked_serp_element?.serp_item?.rank_group ?? 100) < 100);
   const supplementedKeywords = rawKeywords.filter((item) => (item.ranked_serp_element?.serp_item?.rank_group ?? 100) >= 100);
@@ -1311,6 +1364,7 @@ ${allUrls.join('\n')}
 ## Total Dataset Stats
 - Total keywords tracked: ${totalKeywords}
 - Total competitors found: ${rawCompetitors.length}
+${aiVisibilityBlock}
 
 ## REQUIRED OUTPUT FORMAT — SECTION HEADINGS AND CONTENT RULES
 
@@ -1392,7 +1446,16 @@ GEO MODE ADDITION: For multi-state or regional clients where the current ranking
 [Bracketed section labels in ALL CAPS (e.g., [EMERGENCY PLUMBING PAGE]). Each recommendation must reference at least one specific keyword, position, volume, or CPC data point from the report. Maximum 8 recommendations. Prioritize by revenue signal (CPC × volume), not by ease of implementation.]
 **[SECTION LABEL — e.g. SERVICE PAGES]**
 [recommendation with specific keywords and data]
-
+${aiVisibilityBlock ? `
+## 11. AI Visibility
+[Summarize how ${domain} appears in AI-generated responses across platforms. Include:
+- Total mention count by platform (Google AI Overview, ChatGPT)
+- AI search volume for queried keywords
+- Top citation sources (which domains AI platforms cite when answering queries in this space)
+- Client vs competitor comparison: who gets mentioned more for key topics
+- Recommendations for improving AI citation likelihood (structured data, authoritative content, FAQ coverage)
+If the data shows zero mentions, note that as a gap and recommend actions to establish AI visibility.]
+` : ''}
 ## IMPORTANT RULES
 - Use plain numbers (no tildes ~) in table cells. Round to whole numbers.
 - Use /mo suffix for volume in Keyword Overview and Branded tables.
@@ -2501,6 +2564,38 @@ async function runGap(sb: SupabaseClient, auditId: string, domain: string) {
   const { context: gapClientCtx } = await loadClientContextAsync(domain, sb, auditId);
   const gapClientContextBlock = gapClientCtx ? `\n${buildClientContextPrompt(gapClientCtx, 'gap')}\n` : '';
 
+  // Load LLM mentions data (optional — from Jim's Phase 3 output)
+  let aiVisibilitySection = '';
+  try {
+    const llmPath = resolveArtifactPath(domain, 'research', 'llm_mentions.json');
+    if (llmPath && fs.existsSync(llmPath)) {
+      const llmData = JSON.parse(fs.readFileSync(llmPath, 'utf-8'));
+      const clientMentions = (llmData.domain_mentions ?? []) as Array<{ keyword: string; platform: string; mention_count: number }>;
+      const compMentions = (llmData.competitor_mentions ?? []) as Array<{ domain: string; keyword: string; platform: string; mention_count: number }>;
+
+      if (clientMentions.length > 0 || compMentions.length > 0) {
+        const clientLines = clientMentions
+          .map((m) => `${m.keyword} (${m.platform}): ${m.mention_count} mentions`)
+          .join('\n');
+        const compLines = compMentions
+          .filter((m) => m.mention_count > 0)
+          .map((m) => `${m.domain} — ${m.keyword} (${m.platform}): ${m.mention_count} mentions`)
+          .join('\n');
+
+        aiVisibilitySection = `\n## AI Visibility Data (from LLM Mentions)
+Client mentions by keyword × platform:
+${clientLines || 'No client mentions found.'}
+
+Competitor mentions:
+${compLines || 'No competitor mentions found.'}
+`;
+        console.log(`  Loaded LLM mentions: ${clientMentions.length} client, ${compMentions.length} competitor entries`);
+      }
+    }
+  } catch (err: any) {
+    console.log(`  Note: Could not load llm_mentions.json (non-fatal): ${err.message}`);
+  }
+
   const prompt = `You are a Content Gap Analyst. Given the competitive landscape data for ${domain}, produce a JSON analysis identifying where competitors rank but the client is absent or weak.
 
 YOUR ENTIRE RESPONSE IS RAW JSON. Output ONLY the JSON object starting with {. No markdown, no code fences, no narration, no explanation before or after.
@@ -2522,7 +2617,7 @@ ${plannedSummary}
 
 ## Client's Existing Page Inventory (from Dwight's crawl, top 100)
 ${crawledInventory}
-
+${aiVisibilitySection}
 ## Output — JSON with these keys:
 
 1. "authority_gaps": Array of objects with { topic, client_status, client_position, top_competitor, competitor_position, estimated_volume, revenue_opportunity, data_source }. Topics where competitors dominate and client is absent or ranking 50+. Max 15.
@@ -2548,6 +2643,12 @@ CONDITIONAL: If Michael's Planned Architecture Pages section above is empty or c
 Ranking criterion: order by estimated revenue opportunity — use CPC × volume where both are available from the keyword matrix, or competitive share gap magnitude where revenue data is absent. The highest-revenue gap gets rank 1 regardless of implementation difficulty. The rationale field must reference the specific data point driving the ranking (e.g., "260 monthly searches at $3.68 CPC with 0% client share vs. idahomedicalacademy.com at 13%").
 
 5. "summary": 2-3 sentence executive summary written for Michael (the architecture agent) and the Validator. Must include: (1) the dominant competitor domain by name and what makes them the primary threat, (2) the single highest-revenue gap topic by name, and (3) if unaddressed_gaps is empty due to missing architecture, note that here. Do not restate array contents — synthesize the competitive situation in terms that directly inform architecture decisions.
+
+6. "ai_citation_gaps": Array of objects with { topic, client_mention_count, top_competitor_mention_count, gap_severity, recommended_action }. Topics where competitors are mentioned more frequently in AI platform responses than the client.
+   - gap_severity: "high" (competitor 3x+ client mentions), "medium" (competitor 1.5-3x), "low" (competitor slightly ahead)
+   - recommended_action: specific action to improve AI citation (e.g., "Add structured FAQ schema", "Create authoritative guide on topic")
+   - Max 5 entries. Only include topics where competitor meaningfully outpaces client.
+   - If no AI Visibility Data section is provided above, set to empty array [].
 
 ## QUALITY RULES for authority_gaps topics:
 - DEDUPLICATION (LOAD-BEARING RULE): Each authority_gap MUST correspond to a DISTINCT [canonical_key] from the Dominance Scores. If multiple Dominance Scores share the same [canonical_key] prefix, they are the SAME topic — produce ONE gap entry using the highest-volume variant as the representative topic name. Example: if dominance data has [emt_training] for "EMT Training Courses Online", "EMT Training Programs", and "EMT Certification Classes", produce ONE authority_gap for "EMT Training" — not three separate entries. Similarly, "Burn First Aid" and "First Aid for Burns" → one gap. Max 15 is an UPPER BOUND, not a target. Typical audit: 6-12 distinct gaps.
@@ -2623,6 +2724,7 @@ REMINDER: Your response IS the JSON object — start with { and end with }. No p
       authority_gaps: gapAnalysis.authority_gaps ?? [],
       format_gaps: gapAnalysis.format_gaps ?? [],
       unaddressed_gaps: gapAnalysis.unaddressed_gaps ?? [],
+      ai_citation_gaps: gapAnalysis.ai_citation_gaps ?? [],
       summary: gapAnalysis.summary ?? '',
     },
   });

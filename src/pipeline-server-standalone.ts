@@ -760,6 +760,89 @@ async function handleExportAudit(req: http.IncomingMessage, res: http.ServerResp
   archive.finalize();
 }
 
+async function handleTrackLlmMentions(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  if (!checkAuth(req, res)) return;
+
+  let payload: { domain?: string; email?: string; force?: boolean };
+  try {
+    payload = JSON.parse(await readBody(req));
+  } catch {
+    json(res, 400, { error: 'Invalid JSON' });
+    return;
+  }
+
+  const { domain, email, force } = payload;
+  if (!domain || !email) {
+    json(res, 400, { error: 'domain and email are required' });
+    return;
+  }
+  if (!DOMAIN_RE.test(domain)) {
+    json(res, 400, { error: 'Invalid domain format' });
+    return;
+  }
+  if (!EMAIL_RE.test(email)) {
+    json(res, 400, { error: 'Invalid email format' });
+    return;
+  }
+
+  const trackKey = `llm-mentions:${domain}`;
+  if (inFlight.has(trackKey)) {
+    json(res, 409, { error: `LLM visibility tracking already running for ${domain}` });
+    return;
+  }
+
+  inFlight.add(trackKey);
+  console.log(`Track LLM mentions triggered: ${domain} (${email})${force ? ' [force]' : ''}`);
+
+  const args = ['tsx', 'scripts/track-llm-mentions.ts', '--domain', domain, '--user-email', email];
+  if (force) args.push('--force');
+
+  const child = spawn('npx', args, {
+    detached: true,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    cwd: process.cwd(),
+  });
+  child.unref();
+
+  const logLines: string[] = [];
+  const collect = (stream: NodeJS.ReadableStream | null, prefix: string) => {
+    if (!stream) return;
+    let buf = '';
+    stream.on('data', (chunk: Buffer) => {
+      buf += chunk.toString();
+      const lines = buf.split('\n');
+      buf = lines.pop() || '';
+      for (const line of lines) {
+        console.log(`[llm-mentions:${domain}] ${prefix}: ${line}`);
+        logLines.push(`${prefix}: ${line}`);
+      }
+    });
+    stream.on('end', () => {
+      if (buf) {
+        console.log(`[llm-mentions:${domain}] ${prefix}: ${buf}`);
+        logLines.push(`${prefix}: ${buf}`);
+      }
+    });
+  };
+  collect(child.stdout, 'OUT');
+  collect(child.stderr, 'ERR');
+
+  child.on('close', (code) => {
+    inFlight.delete(trackKey);
+    console.log(`Track LLM mentions finished: ${domain} (exit ${code})`);
+    if (code !== 0) {
+      console.error(`Track LLM mentions failed: ${domain} — last 10 lines:\n${logLines.slice(-10).join('\n')}`);
+    }
+  });
+
+  child.on('error', (err) => {
+    inFlight.delete(trackKey);
+    console.error(`Track LLM mentions spawn error: ${domain}`, err);
+  });
+
+  json(res, 202, { status: 'llm_tracking_started', domain });
+}
+
 async function handleLookupKeywords(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   if (!checkAuth(req, res)) return;
 
@@ -828,6 +911,8 @@ const server = http.createServer((req, res) => {
     handleStrategyBrief(req, res);
   } else if (req.method === 'POST' && req.url === '/export-audit') {
     handleExportAudit(req, res);
+  } else if (req.method === 'POST' && req.url === '/track-llm-mentions') {
+    handleTrackLlmMentions(req, res);
   } else if (req.method === 'POST' && req.url === '/lookup-keywords') {
     handleLookupKeywords(req, res);
   } else {

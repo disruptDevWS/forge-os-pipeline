@@ -4,6 +4,18 @@ Non-obvious choices that would look wrong without context. Check here before "fi
 
 ---
 
+**2026-03-25: LLM Mentions budget guard is non-fatal — Jim never fails because of AI visibility**
+
+`fetchAllLlmMentions()` is wrapped in a try/catch inside `runJim()`. If the DataForSEO LLM Mentions API fails, exceeds budget (`LLM_MENTIONS_BUDGET`, default $1.00), or credentials aren't configured, Jim proceeds without AI visibility data. Section 11 (AI Visibility) is conditionally omitted from the narrative, and `llm_mentions.json` is not written. Same principle in `runGap()` — if `llm_mentions.json` is missing, `ai_citation_gaps` defaults to an empty array. The LLM Mentions API is additive intelligence, not core pipeline functionality.
+
+**2026-03-25: Client and competitor LLM mentions share one table with domain column**
+
+`llm_visibility_snapshots` stores both client and competitor mention data in the same table, distinguished by the `domain` column. The alternative was separate tables (`llm_client_snapshots` + `llm_competitor_snapshots`), but the data shape is identical and the 5-column UNIQUE constraint `(audit_id, snapshot_date, keyword, platform, domain)` naturally separates them. Dashboard queries filter by `domain === audit.domain` for client data. This follows the same "data coexistence" pattern used in `ranking_snapshots` (though that table is client-only, the principle of one table per data shape applies).
+
+**2026-03-25: Monthly cron cadence for LLM mentions (not weekly like rankings)**
+
+AI platform mentions change slowly — brands don't appear/disappear from AI outputs week-to-week. The 25-day recency check in `track-llm-mentions.ts` (vs 6-day for rankings) reflects this reality and controls DataForSEO costs. The standalone tracker also only fetches client mentions (no competitor re-check) to further limit API spend. Competitor data is refreshed on full pipeline runs only.
+
 **2026-03-25: Verification layer uses structured corrections map, not inline annotation parsing**
 
 Phase 1a (`verify-dwight.ts`) writes `verification_results.json` with corrections keyed by issue text pattern. `syncDwight()` loads this file after `parseAuditReport()` and merges corrections into fix objects. The alternative was having `parseAuditReport()` detect `[VERIFIED: ...]` annotations in the markdown — rejected because regex-based annotation parsing is fragile and creates coupling between the verification output format and the report parser. The report annotations exist for human-readable disk artifact accuracy only; they are never machine-parsed. `original_severity` is set on ALL fix objects at parse time (not just corrected ones) so future re-verification has a baseline to diff against.

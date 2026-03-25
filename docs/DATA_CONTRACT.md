@@ -2,7 +2,7 @@
 
 > **Purpose**: Authoritative map of every Supabase table, who writes it (pipeline), who reads it (dashboard), and which columns matter. Use this before adding columns, changing sync logic, or building new UI components.
 >
-> **Last updated**: 2026-03-23
+> **Last updated**: 2026-03-25
 
 ---
 
@@ -165,7 +165,7 @@
 |------------|-------------|-------------------|-------------------|
 | `dwight` | Phase 6c (syncDwight) | `executive_summary`, `prioritized_fixes[]`, `agentic_readiness[]`, `structured_data_issues[]`, `heading_issues[]`, `security_issues[]`, `platform_notes`, `site_metadata` | `useAuditSiteFindings()` → AuditPage |
 | `jim` | Phase 3 (syncJim) | `research_summary_markdown`, `keyword_overview{}`, `position_distribution[]`, `branded_split{}`, `intent_breakdown[]`, `top_ranking_urls[]`, `competitor_analysis[]`, `competitor_summary{}`, `striking_distance[]`, `content_gap_observations[]`, `key_takeaways[]` | `useResearchSiteFindings()` → ResearchPage |
-| `gap` | Phase 5 | `keyword_overview` (JSONB with `authority_gaps[]`, `format_gaps[]`, `gap_summary`) | `useAuditSnapshots()` |
+| `gap` | Phase 5 | `keyword_overview` (JSONB with `authority_gaps[]`, `format_gaps[]`, `gap_summary`, `ai_citation_gaps[]`) | `useAuditSnapshots()`, `useAiCitationGaps()` |
 
 **Shared columns**: `id`, `audit_id`, `agent_name`, `snapshot_version`, `agent_run_id`, `row_count`, `created_at`
 
@@ -345,6 +345,52 @@ Written by `track-rankings.ts` for published execution pages.
 | `keywords_total` | |
 
 **Dashboard reads**: `usePagePerformance()` → PerformancePage (Published Page Performance)
+
+---
+
+## LLM Visibility Tables
+
+### `llm_visibility_snapshots`
+
+Written by syncJim (Phase 3b) and `track-llm-mentions.ts` (monthly cron or on-demand). One row per keyword × platform × domain.
+
+| Column | Writer | Reader | Notes |
+|--------|--------|--------|-------|
+| `id` | Auto | Dashboard | PK, UUID |
+| `audit_id` | Pipeline | Both | FK → audits |
+| `domain` | Pipeline | Dashboard | Client domain or competitor domain |
+| `snapshot_date` | Pipeline | Dashboard | DATE |
+| `keyword` | Pipeline | Dashboard | |
+| `platform` | Pipeline | Dashboard | `google`, `chat_gpt` |
+| `mention_count` | Pipeline | Dashboard | |
+| `ai_search_volume` | Pipeline | Dashboard | Nullable |
+| `top_citation_domains` | Pipeline | Dashboard | JSONB array of domain strings |
+| `created_at` | Auto | Dashboard | |
+
+**UNIQUE constraint:** `(audit_id, snapshot_date, keyword, platform, domain)` — allows client and competitor data to coexist.
+
+**Pipeline writes**: syncJim (client + competitor mentions from `llm_mentions.json`), `track-llm-mentions.ts` (client mentions only, monthly)
+**Dashboard reads**: `useLlmVisibilitySnapshots()` → AiVisibilityPage
+
+---
+
+### `llm_mention_details`
+
+Written by syncJim (Phase 3b) and `track-llm-mentions.ts`. Qualitative mention records.
+
+| Column | Writer | Reader | Notes |
+|--------|--------|--------|-------|
+| `id` | Auto | Dashboard | PK, UUID |
+| `audit_id` | Pipeline | Both | FK → audits |
+| `keyword` | Pipeline | Dashboard | |
+| `platform` | Pipeline | Dashboard | `google`, `chat_gpt` |
+| `mention_text` | Pipeline | Dashboard | Nullable |
+| `citation_urls` | Pipeline | Dashboard | JSONB array |
+| `source_domains` | Pipeline | Dashboard | JSONB array |
+| `captured_at` | Auto | Dashboard | |
+
+**Pipeline writes**: syncJim, `track-llm-mentions.ts`
+**Dashboard reads**: `useLlmMentionDetails()` → AiVisibilityPage
 
 ---
 
@@ -552,6 +598,7 @@ Server-side view computing position changes from `ranking_snapshots`.
 | `scout-config` | `get_share_report` | (Supabase-only, **no auth**) | `{token}` | `{prospect, markdown, scope, narrative}` |
 | `pipeline-controls` | `recanonicalize` | `/recanonicalize` | `{domain, email}` | `{ok}` |
 | `pipeline-controls` | `track_rankings` | `/track-rankings` | `{domain, email}` | `{ok}` |
+| `pipeline-controls` | `track_llm_mentions` | `/track-llm-mentions` | `{domain, email}` | `{ok}` |
 | `pipeline-controls` | `rerun_pipeline` | `/trigger-pipeline` | `{domain, email}` | `{ok}` |
 | `pipeline-controls` | `resume_pipeline` | `/trigger-pipeline` | `{domain, email, annotations?, audit_id}` | `{success, start_from:'1b'}` |
 | `cluster-action` | `activate` | `/activate-cluster` | `{audit_id, canonical_key, target_publish_date?, notes?}` | cluster status |
@@ -590,7 +637,8 @@ These files live on the pipeline server disk and are NOT in Supabase. They feed 
 | `audits/{domain}/research/{date}/keyword_research_matrix.json` | Phase 2 | Service × city × intent matrix |
 | `audits/{domain}/research/{date}/ranked_keywords.json` | Jim | DataForSEO ranked keywords (geo-qualified volumes when `geo_mode != 'national'`) |
 | `audits/{domain}/research/{date}/ranked_keywords.national.json` | Jim | Original national volumes backup (only created when geo-qualifying Mode A) |
-| `audits/{domain}/research/{date}/research_summary.md` | Jim | 10-section research narrative |
+| `audits/{domain}/research/{date}/llm_mentions.json` | Jim | AI platform mention data (domain + competitor mentions) |
+| `audits/{domain}/research/{date}/research_summary.md` | Jim | 10-11 section research narrative (Section 11 conditional: AI Visibility) |
 | `audits/{domain}/research/{date}/content_gap_analysis.md` | Gap | Authority + format gaps |
 | `audits/{domain}/research/{date}/coverage_validation.md` | Validator | Gap vs blueprint cross-check |
 | `audits/{domain}/architecture/{date}/architecture_blueprint.md` | Michael | Silo structure + page plan |
