@@ -7,9 +7,9 @@
 -- Table 1: llm_visibility_snapshots (time-series tracking)
 -- ============================================================
 
-CREATE TABLE IF NOT EXISTS llm_visibility_snapshots (
+CREATE TABLE IF NOT EXISTS public.llm_visibility_snapshots (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  audit_id UUID NOT NULL REFERENCES audits(id) ON DELETE CASCADE,
+  audit_id UUID NOT NULL REFERENCES public.audits(id) ON DELETE CASCADE,
   domain TEXT NOT NULL,
   snapshot_date DATE NOT NULL,
   keyword TEXT NOT NULL,
@@ -22,18 +22,25 @@ CREATE TABLE IF NOT EXISTS llm_visibility_snapshots (
 );
 
 -- Indexes
-CREATE INDEX IF NOT EXISTS idx_llm_vis_audit ON llm_visibility_snapshots(audit_id);
-CREATE INDEX IF NOT EXISTS idx_llm_vis_audit_date ON llm_visibility_snapshots(audit_id, snapshot_date);
+CREATE INDEX IF NOT EXISTS idx_llm_vis_audit ON public.llm_visibility_snapshots(audit_id);
+CREATE INDEX IF NOT EXISTS idx_llm_vis_audit_date ON public.llm_visibility_snapshots(audit_id, snapshot_date);
 
 -- RLS
-ALTER TABLE llm_visibility_snapshots ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.llm_visibility_snapshots ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Authenticated users can read own audit LLM snapshots"
-  ON llm_visibility_snapshots FOR SELECT
+CREATE POLICY "Service role can manage llm_visibility_snapshots"
+  ON public.llm_visibility_snapshots FOR ALL
+  TO service_role
+  USING (true);
+
+CREATE POLICY "Users can view own llm_visibility_snapshots"
+  ON public.llm_visibility_snapshots FOR SELECT
   TO authenticated
   USING (
-    audit_id IN (
-      SELECT id FROM audits WHERE user_id = auth.uid()
+    EXISTS (
+      SELECT 1 FROM public.audits
+      WHERE public.audits.id = llm_visibility_snapshots.audit_id
+        AND (public.audits.user_id = auth.uid() OR has_role(auth.uid(), 'super_admin'::app_role))
     )
   );
 
@@ -41,9 +48,9 @@ CREATE POLICY "Authenticated users can read own audit LLM snapshots"
 -- Table 2: llm_mention_details (qualitative mention records)
 -- ============================================================
 
-CREATE TABLE IF NOT EXISTS llm_mention_details (
+CREATE TABLE IF NOT EXISTS public.llm_mention_details (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  audit_id UUID NOT NULL REFERENCES audits(id) ON DELETE CASCADE,
+  audit_id UUID NOT NULL REFERENCES public.audits(id) ON DELETE CASCADE,
   keyword TEXT NOT NULL,
   platform TEXT NOT NULL,
   mention_text TEXT,
@@ -53,16 +60,23 @@ CREATE TABLE IF NOT EXISTS llm_mention_details (
 );
 
 -- Index
-CREATE INDEX IF NOT EXISTS idx_llm_details_audit ON llm_mention_details(audit_id);
+CREATE INDEX IF NOT EXISTS idx_llm_details_audit ON public.llm_mention_details(audit_id);
 
 -- RLS
-ALTER TABLE llm_mention_details ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.llm_mention_details ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Authenticated users can read own audit LLM details"
-  ON llm_mention_details FOR SELECT
+CREATE POLICY "Service role can manage llm_mention_details"
+  ON public.llm_mention_details FOR ALL
+  TO service_role
+  USING (true);
+
+CREATE POLICY "Users can view own llm_mention_details"
+  ON public.llm_mention_details FOR SELECT
   TO authenticated
   USING (
-    audit_id IN (
-      SELECT id FROM audits WHERE user_id = auth.uid()
+    EXISTS (
+      SELECT 1 FROM public.audits
+      WHERE public.audits.id = llm_mention_details.audit_id
+        AND (public.audits.user_id = auth.uid() OR has_role(auth.uid(), 'super_admin'::app_role))
     )
   );
