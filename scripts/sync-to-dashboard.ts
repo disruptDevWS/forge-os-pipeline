@@ -104,6 +104,12 @@ function getLatestDateDir(agentDir: string): string | null {
   return entries.length > 0 ? entries[entries.length - 1] : null;
 }
 
+function nextDay(dateStr: string): string {
+  const d = new Date(dateStr + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().slice(0, 10);
+}
+
 function agentDir(domain: string, agentRole: string, date?: string): string | null {
   const base = path.join(AUDITS_BASE, domain, agentRole);
   const dateStr = date ?? getLatestDateDir(base);
@@ -1108,7 +1114,9 @@ async function syncJim(
         .eq('snapshot_date', snapshotDate);
       await (sb as any).from('llm_mention_details')
         .delete()
-        .eq('audit_id', auditId);
+        .eq('audit_id', auditId)
+        .gte('captured_at', `${snapshotDate}T00:00:00Z`)
+        .lt('captured_at', `${nextDay(snapshotDate)}T00:00:00Z`);
 
       // Insert domain mentions → llm_visibility_snapshots
       const visRecords: any[] = [];
@@ -1122,6 +1130,7 @@ async function syncJim(
           mention_count: m.mention_count ?? 0,
           ai_search_volume: m.ai_search_volume ?? null,
           top_citation_domains: m.citation_sources ?? [],
+          is_estimated: false,
         });
       }
 
@@ -1136,6 +1145,7 @@ async function syncJim(
           mention_count: cm.mention_count ?? 0,
           ai_search_volume: null,
           top_citation_domains: [],
+          is_estimated: cm.is_estimated ?? true,
         });
       }
 
@@ -1172,6 +1182,9 @@ async function syncJim(
           if (error) console.warn(`  [jim] llm_mention_details insert warning: ${error.message}`);
         }
         console.log(`  [jim] Inserted ${detailRecords.length} LLM mention detail records`);
+      }
+      if (llmData.competitor_budget_skipped) {
+        console.log(`  [jim] Note: Competitor LLM mentions budget was exhausted — competitor data is partial`);
       }
     } catch (err: any) {
       console.log(`  [jim] LLM visibility sync failed (non-fatal): ${err.message}`);

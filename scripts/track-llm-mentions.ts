@@ -99,6 +99,12 @@ function daysSince(dateStr: string): number {
   return Math.floor((now.getTime() - then.getTime()) / (1000 * 60 * 60 * 24));
 }
 
+function nextDay(dateStr: string): string {
+  const d = new Date(dateStr + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().slice(0, 10);
+}
+
 async function resolveAudit(sb: SupabaseClient, domain: string, userEmail: string) {
   const { data: userData } = await sb.auth.admin.listUsers();
   const user = userData?.users?.find((u: any) => u.email === userEmail);
@@ -193,7 +199,9 @@ async function trackLlmMentions(cliArgs: CliArgs) {
 
   await (sb as any).from('llm_mention_details')
     .delete()
-    .eq('audit_id', audit.id);
+    .eq('audit_id', audit.id)
+    .gte('captured_at', `${snapshotDate}T00:00:00Z`)
+    .lt('captured_at', `${nextDay(snapshotDate)}T00:00:00Z`);
 
   // Insert visibility snapshots
   const visRecords = mentions.map((m) => ({
@@ -205,6 +213,7 @@ async function trackLlmMentions(cliArgs: CliArgs) {
     mention_count: m.mention_count,
     ai_search_volume: m.ai_search_volume || null,
     top_citation_domains: m.citation_sources,
+    is_estimated: false,
   }));
 
   if (visRecords.length > 0) {

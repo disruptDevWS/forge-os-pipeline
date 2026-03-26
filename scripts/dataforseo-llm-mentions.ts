@@ -14,7 +14,13 @@ import * as path from 'node:path';
 
 const DATAFORSEO_API = 'https://api.dataforseo.com/v3';
 const COST_LOG = path.resolve(process.cwd(), 'audits/.dataforseo_cost.log');
-const DEFAULT_BUDGET = 1.0;
+
+// Budget env vars:
+//   LLM_DOMAIN_BUDGET     — max spend on domain mention calls (default $1.00)
+//   LLM_COMPETITOR_BUDGET — max spend on competitor mention calls (default $0.50)
+//   LLM_MENTIONS_BUDGET   — legacy fallback for LLM_DOMAIN_BUDGET (still honored)
+const DEFAULT_DOMAIN_BUDGET = 1.0;
+const DEFAULT_COMPETITOR_BUDGET = 0.5;
 
 // ── Types ─────────────────────────────────────────────────────
 
@@ -32,6 +38,7 @@ export interface CompetitorMention {
   keyword: string;
   platform: string;
   mention_count: number;
+  is_estimated: boolean;
 }
 
 export interface LlmMentionsResult {
@@ -41,6 +48,7 @@ export interface LlmMentionsResult {
   queried_competitors: string[];
   total_cost: number;
   timestamp: string;
+  competitor_budget_skipped: boolean;
 }
 
 interface RankedKeywordItem {
@@ -75,13 +83,22 @@ function logCost(operation: string, cost: number): void {
   }
 }
 
-function getBudget(env: Record<string, string>): number {
-  const val = env.LLM_MENTIONS_BUDGET;
+function getDomainBudget(env: Record<string, string>): number {
+  const val = env.LLM_DOMAIN_BUDGET ?? env.LLM_MENTIONS_BUDGET;
   if (val) {
     const parsed = parseFloat(val);
     if (!isNaN(parsed)) return parsed;
   }
-  return DEFAULT_BUDGET;
+  return DEFAULT_DOMAIN_BUDGET;
+}
+
+function getCompetitorBudget(env: Record<string, string>): number {
+  const val = env.LLM_COMPETITOR_BUDGET;
+  if (val) {
+    const parsed = parseFloat(val);
+    if (!isNaN(parsed)) return parsed;
+  }
+  return DEFAULT_COMPETITOR_BUDGET;
 }
 
 async function apiCall(
@@ -176,13 +193,13 @@ export async function fetchDomainMentions(
   keywords: string[],
 ): Promise<{ mentions: LlmMention[]; cost: number }> {
   const auth = makeAuthHeader(env);
-  const budget = getBudget(env);
+  const budget = getDomainBudget(env);
   let totalCost = 0;
   const mentions: LlmMention[] = [];
 
   for (const platform of PLATFORMS) {
     if (totalCost >= budget) {
-      console.log(`  LLM mentions budget exceeded ($${totalCost.toFixed(2)} >= $${budget.toFixed(2)}), skipping ${platform}`);
+      console.log(`  LLM mentions domain budget exceeded ($${totalCost.toFixed(2)} >= $${budget.toFixed(2)}), skipping ${platform}`);
       break;
     }
 
@@ -261,11 +278,13 @@ export async function fetchCompetitorMentions(
   env: Record<string, string>,
   competitorDomains: string[],
   keywords: string[],
-): Promise<{ mentions: CompetitorMention[]; cost: number }> {
+): Promise<{ mentions: CompetitorMention[]; cost: number; completed_all: boolean }> {
   const auth = makeAuthHeader(env);
-  const budget = getBudget(env);
+  const budget = getCompetitorBudget(env);
   let totalCost = 0;
   const mentions: CompetitorMention[] = [];
+  let callsCompleted = 0;
+  const callsExpected = competitorDomains.length * PLATFORMS.length;
 
   for (const platform of PLATFORMS) {
     if (totalCost >= budget) break;
@@ -308,8 +327,10 @@ export async function fetchCompetitorMentions(
             keyword: kw,
             platform,
             mention_count: Math.round(mentionCount / keywords.length),
+            is_estimated: true,
           });
         }
+        callsCompleted++;
       } catch (err: any) {
         console.log(`  Warning: Competitor mention fetch failed for ${competitorDomain} on ${platform}: ${err.message}`);
         for (const kw of keywords) {
@@ -318,13 +339,15 @@ export async function fetchCompetitorMentions(
             keyword: kw,
             platform,
             mention_count: 0,
+            is_estimated: true,
           });
         }
+        callsCompleted++;
       }
     }
   }
 
-  return { mentions, cost: totalCost };
+  return { mentions, cost: totalCost, completed_all: callsCompleted === callsExpected };
 }
 
 /**
@@ -346,12 +369,13 @@ export async function fetchAllLlmMentions(
   console.log(`  Fetching LLM mentions for ${domain} (${keywords.length} keywords, ${competitorDomains.length} competitors)...`);
 
   const domainResult = await fetchDomainMentions(env, domain, keywords);
-  let competitorResult = { mentions: [] as CompetitorMention[], cost: 0 };
+  let competitorResult = { mentions: [] as CompetitorMention[], cost: 0, completed_all: true };
 
   if (competitorDomains.length > 0) {
     competitorResult = await fetchCompetitorMentions(env, competitorDomains, keywords);
   }
 
+  const competitorBudgetSkipped = competitorDomains.length > 0 && !competitorResult.completed_all;
   const totalCost = domainResult.cost + competitorResult.cost;
   console.log(`  LLM mentions complete: ${domainResult.mentions.length} domain mentions, ${competitorResult.mentions.length} competitor mentions ($${totalCost.toFixed(4)})`);
 
@@ -362,6 +386,7 @@ export async function fetchAllLlmMentions(
     queried_competitors: competitorDomains,
     total_cost: totalCost,
     timestamp: new Date().toISOString(),
+    competitor_budget_skipped: competitorBudgetSkipped,
   };
 
   // Write disk artifact
