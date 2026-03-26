@@ -176,12 +176,13 @@ async function gatherContext(sb: SupabaseClient, req: PamRequest) {
   const normalizedSlug = req.page_url.replace(/^\/+/, '');
   const { data: pageData } = await sb
     .from('execution_pages')
-    .select('page_brief, url_slug, silo')
+    .select('*')
     .eq('audit_id', req.audit_id)
     .or(`url_slug.eq.${normalizedSlug},url_slug.eq./${normalizedSlug}`)
     .maybeSingle();
 
   const brief = (pageData?.page_brief ?? {}) as Record<string, any>;
+  const canonicalKey = (pageData as any)?.canonical_key ?? null;
 
   // 3. Keywords for this silo/cluster
   const siloName = req.silo_name ?? pageData?.silo ?? null;
@@ -363,7 +364,35 @@ async function gatherContext(sb: SupabaseClient, req: PamRequest) {
     // Table may not exist yet
   }
 
-  return { auditMeta, brief, keywords, siblings, blueprintExcerpt, siloName, serpEnrichment, clientProfile, authorityGaps, formatGaps, marketContext, strategyContext };
+  // 9. Entity type and entity map from cluster data
+  let primaryEntityType = 'Service';
+  let entityMap: any = null;
+  if (canonicalKey) {
+    try {
+      const { data: clusterRow } = await (sb as any)
+        .from('audit_clusters')
+        .select('primary_entity_type')
+        .eq('audit_id', req.audit_id)
+        .eq('canonical_key', canonicalKey)
+        .maybeSingle();
+      primaryEntityType = (clusterRow as any)?.primary_entity_type ?? 'Service';
+    } catch {
+      // Column may not exist yet
+    }
+    try {
+      const { data: strategyRow } = await (sb as any)
+        .from('cluster_strategy')
+        .select('entity_map')
+        .eq('audit_id', req.audit_id)
+        .eq('canonical_key', canonicalKey)
+        .maybeSingle();
+      entityMap = (strategyRow as any)?.entity_map ?? null;
+    } catch {
+      // Column or table may not exist yet
+    }
+  }
+
+  return { auditMeta, brief, keywords, siblings, blueprintExcerpt, siloName, serpEnrichment, clientProfile, authorityGaps, formatGaps, marketContext, strategyContext, primaryEntityType, entityMap };
 }
 
 function escapeRegex(s: string): string {
@@ -617,7 +646,7 @@ function buildPrompt(
   req: PamRequest,
   ctx: Awaited<ReturnType<typeof gatherContext>>
 ): string {
-  const { auditMeta, brief, keywords, siblings, blueprintExcerpt, siloName, clientProfile, authorityGaps, formatGaps, marketContext, strategyContext } = ctx;
+  const { auditMeta, brief, keywords, siblings, blueprintExcerpt, siloName, clientProfile, authorityGaps, formatGaps, marketContext, strategyContext, primaryEntityType, entityMap } = ctx;
   const slug = req.page_url.replace(/^\/+/, '');
   const actionType = req.action_type || 'create';
   const pageRole = req.page_role ?? brief?.role ?? 'service page';
@@ -664,6 +693,7 @@ Your job is strategic content engineering. You are not producing a document temp
 - Silo: ${siloName ?? 'Unknown'}
 - Role: ${pageRole}
 - Service category: ${service_key}
+- Primary Entity Type: ${primaryEntityType} (schema.org type — use for @type in JSON-LD)
 - Market: ${market_city}, ${market_state}
 
 ## Target Keywords
@@ -679,6 +709,7 @@ ${blueprintExcerpt || 'No architecture blueprint available.'}
 
 ${buildContentGapSection(authorityGaps, formatGaps)}
 
+${entityMap ? `## Entity Map (from Cluster Strategy)\n${JSON.stringify(entityMap, null, 2)}\nIMPORTANT: The schema JSON-LD you produce must use the entity type and key attributes defined above. The pillar page establishes the primary entity. Supporting pages reference it via sameAs or isRelatedTo where appropriate.\n` : ''}
 ${buildSerpSection(ctx.serpEnrichment)}
 
 ${buildClientProfileSection(clientProfile)}

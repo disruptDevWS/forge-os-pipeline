@@ -268,6 +268,7 @@ async function main() {
 You are an SEO content strategist analyzing a single topic cluster for a local service business.
 
 ## Cluster: ${cluster.canonical_topic ?? args.canonicalKey}
+- Entity Type: ${(cluster as any).primary_entity_type ?? 'Service'} (schema.org type for the pillar page)
 - Total Volume: ${cluster.total_volume ?? 0}
 - Revenue Opportunity (mid): $${(cluster.est_revenue_mid ?? 0).toFixed(0)}/mo
 - Keywords: ${kwList.length}
@@ -297,6 +298,43 @@ ${researchContext}
 
 Produce a cluster strategy with the following sections:
 
+### 0. Entity Map
+
+Define the canonical entity this cluster is built around. This entity definition governs the schema markup on the pillar page and how supporting pages reference the cluster's central subject.
+
+Output as JSON:
+\`\`\`json
+{
+  "entity": {
+    "type": "${(cluster as any).primary_entity_type ?? 'Service'}",
+    "name": "canonical name for this entity as it should appear in schema markup",
+    "key_attributes": [
+      "attribute name: description of what this attribute captures"
+    ],
+    "related_entities": [
+      {
+        "type": "schema.org type",
+        "name": "entity name",
+        "relationship": "how this entity relates to the primary entity",
+        "warrants_own_page": true
+      }
+    ],
+    "schema_notes": "Specific schema implementation notes for this entity type in this vertical"
+  }
+}
+\`\`\`
+
+Rules for key_attributes:
+- List only attributes meaningful for this entity type that the client actually has or should have
+- For Course: provider, duration, credential_issued, accrediting_body, delivery_mode, prerequisites
+- For Service: provider, serviceArea, serviceType, hasOfferCatalog
+- Do not list generic schema attributes that add no signal
+
+Rules for related_entities:
+- Include entities that appear naturally in supporting content for this cluster
+- warrants_own_page: true = this entity should have a dedicated page in the cluster
+- warrants_own_page: false = this entity appears as supporting content on existing pages
+
 ### 1. Buyer Journey Map
 Map keywords to buyer stages (Awareness → Consideration → Decision → Retention). Identify which stages have coverage and which are gaps.
 
@@ -321,6 +359,11 @@ Output as JSON:
 { "pages": [{ "url_slug": "/slug", "primary_keyword": "kw", "volume": 100, "buyer_stage": "consideration", "content_type": "service_page", "priority": 1, "rationale": "why" }] }
 \`\`\`
 
+When recommending new pages, cross-reference the entity map from Section 0:
+- Pages for related_entities where warrants_own_page: true should appear as priority 1 or 2 recommendations
+- Each recommended page should specify which entity it targets
+- Schema type for each recommended page should be consistent with its entity type from the entity map
+
 ### 4. Format Gaps
 Content formats competitors use that this cluster lacks (video, FAQ schema, comparison tables, calculators, before/after galleries, etc.)
 
@@ -332,53 +375,61 @@ Output as JSON:
 ### 5. AI & Search Optimization Notes
 Specific recommendations for AI overview optimization, featured snippet targeting, and People Also Ask coverage for this cluster's keywords.
 
+Entity-based AI optimization priorities:
+- Which pages are strongest candidates for establishing the primary entity as a citable entity in AI platforms?
+- Which key_attributes from the entity map are absent from existing pages? Missing attributes reduce AI citation likelihood.
+- Are related entities adequately covered? AI platforms frequently answer comparison and adjacent queries — gaps in related entity coverage are AI visibility gaps.
+
 ### 6. Production Sequence
 Ordered list of content to produce first for maximum impact.
 
 ---
 
 IMPORTANT FORMATTING RULES:
-- Sections 1, 3, and 4 MUST contain valid JSON blocks (fenced with \`\`\`json ... \`\`\`).
+- Sections 0, 1, 3, and 4 MUST contain valid JSON blocks (fenced with \`\`\`json ... \`\`\`).
 - Sections 2, 5, and 6 are markdown prose.
-- Do not include any preamble before "### 1. Buyer Journey Map".
+- Do not include any preamble before "### 0. Entity Map".
 
-REMINDER: Your response IS the cluster strategy document — start with "### 1. Buyer Journey Map". No preamble, no narration.`;
+REMINDER: Your response IS the cluster strategy document — start with "### 0. Entity Map". No preamble, no narration.`;
 
   console.log(`  [cluster-strategy] Calling Claude (Opus)...`);
   const result = await callClaude(prompt, { model: 'opus', phase: 'cluster-strategy' });
 
-  // 9. Parse JSON sections from the response
-  const extractJson = (text: string, sectionName: string): any => {
-    const jsonRegex = /```json\s*\n([\s\S]*?)```/g;
-    let match;
-    const allMatches: string[] = [];
-    while ((match = jsonRegex.exec(text)) !== null) {
-      allMatches.push(match[1].trim());
-    }
+  // 9. Parse JSON sections — header-based extraction (immune to section ordering and stray JSON blocks)
+  const extractJsonBySection = (text: string, sectionHeader: RegExp): any => {
+    const sectionMatch = text.match(sectionHeader);
+    if (!sectionMatch || sectionMatch.index === undefined) return null;
 
-    // Match by section order: 1=buyer_stages, 3=recommended_pages, 4=format_gaps
-    const sectionOrder: Record<string, number> = { buyer_stages: 0, recommended_pages: 1, format_gaps: 2 };
-    const idx = sectionOrder[sectionName] ?? -1;
-    if (idx >= 0 && idx < allMatches.length) {
-      try {
-        return JSON.parse(allMatches[idx]);
-      } catch {
-        console.warn(`  [cluster-strategy] Failed to parse JSON for ${sectionName}`);
-      }
+    const sectionStart = sectionMatch.index + sectionMatch[0].length;
+    // Find the next section header (### followed by number) or end of text
+    const nextSection = text.slice(sectionStart).search(/\n### \d+\./);
+    const sectionText = nextSection >= 0
+      ? text.slice(sectionStart, sectionStart + nextSection)
+      : text.slice(sectionStart);
+
+    // Find the FIRST fenced JSON block in this section
+    const jsonMatch = sectionText.match(/```json\s*\n([\s\S]*?)```/);
+    if (!jsonMatch) return null;
+
+    try {
+      return JSON.parse(jsonMatch[1].trim());
+    } catch (err) {
+      console.warn(`  [cluster-strategy] Failed to parse JSON in ${sectionHeader}: ${(err as Error).message}`);
+      return null;
     }
-    return null;
   };
 
-  const buyerStages = extractJson(result, 'buyer_stages');
-  const recommendedPages = extractJson(result, 'recommended_pages');
-  const formatGaps = extractJson(result, 'format_gaps');
+  const entityMap = extractJsonBySection(result, /### 0\.\s*Entity Map/i);
+  const buyerStages = extractJsonBySection(result, /### 1\.\s*Buyer Journey Map/i);
+  const recommendedPages = extractJsonBySection(result, /### 3\.\s*Recommended New Pages/i);
+  const formatGaps = extractJsonBySection(result, /### 4\.\s*Format Gaps/i);
 
   // Extract AI optimization notes (Section 5)
   const aiNotesMatch = result.match(/### 5\.\s*AI.*?Optimization.*?\n([\s\S]*?)(?=### 6\.|$)/i);
   const aiOptimizationNotes = aiNotesMatch ? aiNotesMatch[1].trim() : null;
 
   // 10. Upsert cluster_strategy
-  const { error: stratErr } = await sb.from('cluster_strategy').upsert({
+  const { error: stratErr } = await (sb as any).from('cluster_strategy').upsert({
     audit_id: auditId,
     canonical_key: args.canonicalKey,
     canonical_topic: cluster.canonical_topic ?? cluster.topic,
@@ -387,6 +438,7 @@ REMINDER: Your response IS the cluster strategy document — start with "### 1. 
     buyer_stages: buyerStages,
     format_gaps: formatGaps,
     ai_optimization_notes: aiOptimizationNotes,
+    entity_map: entityMap,
     generated_at: new Date().toISOString(),
     model_used: 'opus',
   }, { onConflict: 'audit_id,canonical_key' });

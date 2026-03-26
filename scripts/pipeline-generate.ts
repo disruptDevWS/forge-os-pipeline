@@ -2069,6 +2069,7 @@ export async function runCanonicalize(sb: SupabaseClient, auditId: string, domai
   type GroupResult = {
     canonical_key: string;
     canonical_topic: string;
+    primary_entity_type?: string;
     keywords: { index: number; is_brand: boolean; intent_type: string }[];
   };
   const allGroups: { group: GroupResult; kwId: string }[] = [];
@@ -2090,6 +2091,14 @@ RULES:
   "plumber boise idaho", "boise plumber", "plumber meridian" ALL map to canonical_key: "plumbing", canonical_topic: "Plumbing"
   Geographic targeting is handled by keyword-level data, not cluster identity.
 - Merge synonyms and word-order variants (e.g., "ac repair" and "air conditioning repair" → same group)
+
+WHEN TO SPLIT vs. MERGE:
+- Merge into one cluster: same primary service, different geo modifiers, word-order variants, or specificity levels
+- Merge into one cluster: informational keywords about a service (cost, how-to, FAQ) belong in that service's cluster, NOT a separate informational cluster
+- Split into separate clusters: meaningfully different services a business would have dedicated pages for
+- Split into separate clusters: topics with different primary audiences or buyer journeys, even if semantically adjacent (e.g., "EMT certification" vs. "EMT recertification" — new students vs. lapsed certifications. "new installation" vs. "repair" vs. "maintenance" for the same equipment type may warrant separate clusters if volume supports it)
+- Do NOT create clusters that are purely informational with no commercial anchor — informational keywords attach to their service cluster
+
 - canonical_key: lowercase with underscores, NO geo modifiers, NO state/city codes (e.g., "water_heater_repair" NOT "id:boise:water_heater_repair")
 - canonical_topic: Title Case, NO geo modifiers (e.g., "Water Heater Repair" NOT "Boise Water Heater Repair")
 - Target approximately 1 group per 5-8 keywords. Minimum 5 groups, maximum 40 groups. For batches of 150 keywords, aim for 18-30 groups. Do not merge semantically distinct service topics just to stay under a ceiling — accurate grouping is more important than a low group count.
@@ -2100,6 +2109,13 @@ RULES:
   * "informational" = seeking knowledge — cost questions, how-to, guides, what-is, certification requirements (e.g., "basement finishing cost", "how to unclog drain")
   * "navigational" = looking for a specific brand/company BY NAME (e.g., "talon construction group", "ross dress for less boise"). ONLY use navigational when the keyword contains a recognizable brand name. This includes competitor brand names, not just the client's brand — if a keyword appears to be a competitor's name or branded phrase, classify as navigational and set is_brand: true. Generic service keywords like "hvac contractors boise" or "air conditioning repair meridian" are NEVER navigational — they are commercial.
 - Reference keywords by their number (index), not by string
+
+INFORMATIONAL KEYWORD PLACEMENT:
+- Cost/pricing queries ("how much does X cost", "X price") → assign to the service/course cluster they price, NOT a separate informational group
+- How-to and guide content → assign to the most relevant service cluster
+- Comparison queries ("X vs Y") → assign to the cluster of the primary subject, or create a standalone cluster only if both subjects are core services with substantial volume
+- Informational keywords belong in the cluster of the entity they inform about, even though they'll be filtered from revenue calculations downstream
+- Do NOT create clusters named "Cost Guides", "How-To Guides", "FAQ", or similar topic-agnostic informational buckets. Each informational keyword has a parent service — assign it there.
 
 UNCLASSIFIABLE KEYWORDS: If a keyword does not clearly map to any service topic (e.g., ambiguous queries, pure competitor brand navigational leaks, non-service terms), assign it to a special group:
 { "canonical_key": "other", "canonical_topic": "Other / Unclassified" }
@@ -2116,12 +2132,24 @@ JSON schema:
     {
       "canonical_key": "ac_repair",
       "canonical_topic": "AC Repair",
+      "primary_entity_type": "Service",
       "keywords": [
         { "index": 1, "is_brand": false, "intent_type": "commercial" }
       ]
     }
   ]
-}`;
+}
+
+primary_entity_type must be one of:
+- "Service" — a service the business performs (most common for local service businesses)
+- "Course" — an educational program with defined duration, credential, enrollment
+- "Product" — a physical or digital product
+- "LocalBusiness" — the business itself (use only for brand/homepage cluster)
+- "FAQPage" — primarily Q&A content with no single service anchor
+- "Article" — purely informational content not tied to a specific service or course
+
+When uncertain between Service and Course: if the offering grants a credential or certification, use Course. If it's a job performed for a customer, use Service.
+Default to "Service" when the category is ambiguous for a local service business.`;
 
     let parsed: any = null;
     for (let attempt = 1; attempt <= 2; attempt++) {
@@ -2179,7 +2207,7 @@ JSON schema:
   for (let i = 0; i < allGroups.length; i += BATCH_SIZE) {
     const chunk = allGroups.slice(i, i + BATCH_SIZE);
     const promises = chunk.map(({ group, kwId }) =>
-      sb.from('audit_keywords').update({
+      (sb as any).from('audit_keywords').update({
         canonical_key: group.canonical_key,
         canonical_topic: group.canonical_topic,
         cluster: group.canonical_topic,
@@ -2187,6 +2215,7 @@ JSON schema:
         intent_type: group.keywords[0].intent_type,
         intent: group.keywords[0].intent_type,  // backfill intent for dashboard display
         is_near_me: nearMeIds.has(kwId),
+        primary_entity_type: group.primary_entity_type ?? 'Service',
       }).eq('id', kwId),
     );
     const results = await Promise.all(promises);

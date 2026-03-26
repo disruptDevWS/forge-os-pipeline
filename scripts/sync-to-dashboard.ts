@@ -617,6 +617,7 @@ function extractTopic(keyword: string): string {
 
 type ClusterAgg = {
   topic: string;
+  primaryEntityType: string;
   positions: number[];
   keywords: string[];
   revLow: number;
@@ -657,9 +658,13 @@ function buildClusterMap(rows: any[]): Map<string, ClusterAgg> {
       existing.kwEligible++;
       existing.volSum += vol;
       existing.kwTotal++;
+      if (!existing.primaryEntityType || existing.primaryEntityType === 'Service') {
+        existing.primaryEntityType = r.primary_entity_type ?? existing.primaryEntityType;
+      }
     } else {
       map.set(key, {
         topic,
+        primaryEntityType: r.primary_entity_type ?? 'Service',
         positions: [pos],
         keywords: [r.keyword],
         revLow: Number(r.delta_revenue_low ?? 0),
@@ -709,7 +714,7 @@ export async function rebuildClustersAndRollups(sb: SupabaseClient, auditId: str
   // Preserve cluster activation + hidden status before delete
   const { data: existingStatuses } = await sb
     .from('audit_clusters')
-    .select('canonical_key, status, activated_at, activated_by, target_publish_date, notes, hidden_reason')
+    .select('canonical_key, status, activated_at, activated_by, target_publish_date, notes, hidden_reason, primary_entity_type')
     .eq('audit_id', auditId);
   const statusMap = new Map(
     (existingStatuses ?? [])
@@ -727,7 +732,7 @@ export async function rebuildClustersAndRollups(sb: SupabaseClient, auditId: str
   // Pull ALL keywords with a canonical_key (full topic map, not just near-miss)
   const { data: kwRows } = await sb
     .from('audit_keywords')
-    .select('keyword, rank_pos, search_volume, cpc, delta_traffic, delta_revenue_low, delta_revenue_mid, delta_revenue_high, delta_leads_low, delta_leads_high, canonical_key, canonical_topic, cluster, intent_type, intent, is_brand, is_near_miss, topic')
+    .select('keyword, rank_pos, search_volume, cpc, delta_traffic, delta_revenue_low, delta_revenue_mid, delta_revenue_high, delta_leads_low, delta_leads_high, canonical_key, canonical_topic, cluster, intent_type, intent, is_brand, is_near_miss, topic, primary_entity_type')
     .eq('audit_id', auditId)
     .not('canonical_key', 'is', null);
 
@@ -771,11 +776,12 @@ export async function rebuildClustersAndRollups(sb: SupabaseClient, auditId: str
         tar_revenue_mid: round2(tar.tar_revenue_mid),
         tar_revenue_high: round2(tar.tar_revenue_high),
         sample_keywords: c.keywords.slice(0, 5),
+        primary_entity_type: c.primaryEntityType ?? 'Service',
       };
     });
 
   if (clusterRecords.length > 0) {
-    const { error } = await sb.from('audit_clusters').insert(clusterRecords);
+    const { error } = await (sb as any).from('audit_clusters').insert(clusterRecords);
     if (error) throw new Error(`cluster insert failed: ${error.message}`);
     console.log(`  [${label}] Inserted ${clusterRecords.length} clusters`);
 
