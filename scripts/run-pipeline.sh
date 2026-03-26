@@ -49,9 +49,10 @@
 # All phases run synchronously.
 #
 # Usage:
-#   ./scripts/run-pipeline.sh <domain> <email> [seed_matrix.json] [competitor_urls] [--mode sales|full|prospect] [--prospect-config <path>]
+#   ./scripts/run-pipeline.sh <domain> <email> [seed_matrix.json] [competitor_urls] [--mode sales|full|prospect] [--prospect-config <path>] [--start-from <phase>] [--stop-after <phase>]
 #   ./scripts/run-pipeline.sh foxhvacpro.com matt@forgegrowth.ai
 #   ./scripts/run-pipeline.sh foxhvacpro.com matt@forgegrowth.ai --mode sales
+#   ./scripts/run-pipeline.sh foxhvacpro.com matt@forgegrowth.ai --start-from 3 --stop-after 3d
 #   ./scripts/run-pipeline.sh newsite.com matt@forgegrowth.ai audits/newsite.com/seed_matrix.json "comp1.com,comp2.com"
 #   ./scripts/run-pipeline.sh prospect.com matt@forgegrowth.ai --mode prospect --prospect-config audits/prospect.com/prospect-config.json
 
@@ -63,10 +64,11 @@ SEED_MATRIX="${3:-}"
 COMPETITOR_URLS="${4:-}"
 DATE=$(date +%Y-%m-%d)
 
-# Parse --mode, --prospect-config, and --start-from flags from any position
+# Parse --mode, --prospect-config, --start-from, and --stop-after flags from any position
 MODE="full"
 PROSPECT_CONFIG=""
 START_FROM=""
+STOP_AFTER=""
 NEXT_FLAG=""
 for i in "$@"; do
   if [[ "$i" == "--mode" ]]; then
@@ -81,6 +83,10 @@ for i in "$@"; do
     NEXT_FLAG="start-from"
     continue
   fi
+  if [[ "$i" == "--stop-after" ]]; then
+    NEXT_FLAG="stop-after"
+    continue
+  fi
   if [[ "$NEXT_FLAG" == "mode" ]]; then
     MODE="$i"
     NEXT_FLAG=""
@@ -90,20 +96,24 @@ for i in "$@"; do
   elif [[ "$NEXT_FLAG" == "start-from" ]]; then
     START_FROM="$i"
     NEXT_FLAG=""
+  elif [[ "$NEXT_FLAG" == "stop-after" ]]; then
+    STOP_AFTER="$i"
+    NEXT_FLAG=""
   fi
 done
 
-# Phase ordering for --start-from
+# Phase ordering for --start-from / --stop-after
 PHASE_ORDER=(1 1a 1b 2 3 3b 3c 3d 4 5 6 6.5 6b 6c 6d)
 should_run_phase() {
   local phase="$1"
-  [[ -z "$START_FROM" ]] && return 0
-  local started=false
-  for p in "${PHASE_ORDER[@]}"; do
-    [[ "$p" == "$START_FROM" ]] && started=true
-    [[ "$p" == "$phase" ]] && { $started && return 0 || return 1; }
+  [[ -z "$START_FROM" && -z "$STOP_AFTER" ]] && return 0
+  local idx=-1 start_idx=0 stop_idx=${#PHASE_ORDER[@]}
+  for i in "${!PHASE_ORDER[@]}"; do
+    [[ "${PHASE_ORDER[$i]}" == "$phase" ]] && idx=$i
+    [[ -n "$START_FROM" && "${PHASE_ORDER[$i]}" == "$START_FROM" ]] && start_idx=$i
+    [[ -n "$STOP_AFTER" && "${PHASE_ORDER[$i]}" == "$STOP_AFTER" ]] && stop_idx=$i
   done
-  return 0
+  [[ $idx -ge $start_idx && $idx -le $stop_idx ]] && return 0 || return 1
 }
 
 # Clear positional args that were actually flags
@@ -146,6 +156,7 @@ trap 'update_status failed' ERR
 update_status audit
 
 [[ -n "$START_FROM" ]] && echo "  Resuming from Phase $START_FROM (skipping earlier phases)"
+[[ -n "$STOP_AFTER" ]] && echo "  Stopping after Phase $STOP_AFTER (skipping later phases)"
 
 # ─── Phase 1: Dwight — DataForSEO OnPage Crawl ───────────────
 if should_run_phase 1; then

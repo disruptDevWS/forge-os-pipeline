@@ -59,7 +59,7 @@ function checkAuth(req: http.IncomingMessage, res: http.ServerResponse): boolean
 async function handleTrigger(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   if (!checkAuth(req, res)) return;
 
-  let payload: { domain?: string; email?: string; mode?: string; prospect_config?: string; start_from?: string };
+  let payload: { domain?: string; email?: string; mode?: string; prospect_config?: string; start_from?: string; stop_after?: string };
   try {
     payload = JSON.parse(await readBody(req));
   } catch {
@@ -104,6 +104,12 @@ async function handleTrigger(req: http.IncomingMessage, res: http.ServerResponse
   if (startFrom) {
     args.push('--start-from', startFrom);
     console.log(`  Resuming from Phase ${startFrom}`);
+  }
+
+  const stopAfter = payload.stop_after || '';
+  if (stopAfter) {
+    args.push('--stop-after', stopAfter);
+    console.log(`  Stopping after Phase ${stopAfter}`);
   }
 
   const child = spawn(scriptPath, args, {
