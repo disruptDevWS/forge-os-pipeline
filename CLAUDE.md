@@ -95,7 +95,7 @@ Phase 1b Strategy Brief  Synthesize Dwight + Scout + client profile → strategi
 Phase 2  KeywordResearch Service × city × intent keyword matrix
 Phase 3  Jim             DataForSEO research + narrative
 Phase 3b sync-jim        Keywords → Supabase (revenue modeling)
-Phase 3c Canonicalize    Semantic topic grouping (Haiku)
+Phase 3c Canonicalize    Semantic topic grouping (Sonnet)
 Phase 3d rebuild-clusters Re-aggregate with canonical keys
 Phase 4  Competitors     SERP analysis (skipped in sales mode)
 Phase 5  Gap             Content gap analysis (skipped in sales mode)
@@ -227,7 +227,7 @@ Single Sonnet call (~$0.06) synthesizes Dwight + Scout + client profile into `st
 
 ### Keyword Pipeline (Phases 2–3d)
 
-Service × city × intent keyword matrix (Phase 2) → DataForSEO research + narrative (Phase 3) → Supabase sync with revenue modeling (Phase 3b) → semantic canonicalization via Haiku (Phase 3c) → cluster rebuild with canonical keys (Phase 3d).
+Service × city × intent keyword matrix (Phase 2) → DataForSEO research + narrative (Phase 3) → Supabase sync with revenue modeling (Phase 3b) → semantic canonicalization via Sonnet (Phase 3c) → cluster rebuild with canonical keys (Phase 3d).
 
 **Key decisions**: Canonical keys are geo-agnostic ("water_heater_repair" not "boise_water_heater_repair"). Phase 3d exists because 3b builds clusters before canonical_key exists. Revenue model is three-tier (low/mid/high) from CR × ACV × delta_traffic. Near-me and navigational keywords excluded from striking distance via three-layer defense.
 

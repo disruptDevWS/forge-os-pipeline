@@ -2,7 +2,7 @@
 
 > **Purpose**: Authoritative map of every Supabase table, who writes it (pipeline), who reads it (dashboard), and which columns matter. Use this before adding columns, changing sync logic, or building new UI components.
 >
-> **Last updated**: 2026-03-25
+> **Last updated**: 2026-03-26
 
 ---
 
@@ -74,6 +74,7 @@
 | `is_brand` | Pipeline (Phase 3c) | Dashboard | |
 | `is_near_me` | Pipeline (Phase 2) | Dashboard | |
 | `intent_type` | Pipeline (Phase 3c) | Dashboard | |
+| `primary_entity_type` | Pipeline (Phase 3c) | Dashboard | `Service`, `Course`, `Product`, `LocalBusiness`, `FAQPage`, `Article` — default `Service` |
 | `source` | Pipeline | Dashboard | `ranked` or `keyword_research` |
 | `current_ctr` | Pipeline | Dashboard | |
 | `current_traffic` | Pipeline | Dashboard | |
@@ -111,10 +112,11 @@
 | `activated_by` | Edge fn | Dashboard | |
 | `target_publish_date` | Edge fn | Dashboard | |
 | `notes` | Edge fn | Dashboard | |
+| `primary_entity_type` | Pipeline (Phase 3c/3d) | Dashboard | `Service`, `Course`, `Product`, `LocalBusiness`, `FAQPage`, `Article` — default `Service` |
 | `authority_score` | Pipeline (track-rankings) | Dashboard | 0-100, position-weighted |
 | `authority_score_updated_at` | Pipeline | Dashboard | |
 
-**Pipeline writes**: Phase 3b (initial), Phase 3d (rebuild with canonical keys, preserves status/activation/hidden)
+**Pipeline writes**: Phase 3b (initial), Phase 3d (rebuild with canonical keys, preserves status/activation/hidden/entity_type)
 **Dashboard reads**: `useAuditClusters()`, `useAudit()` relation, ClustersPage, StrategyPage, OverviewPage
 **Dashboard writes**: Via `cluster-action` edge function (status, activation fields), direct update (hidden status/reason)
 
@@ -365,12 +367,13 @@ Written by syncJim (Phase 3b) and `track-llm-mentions.ts` (monthly cron or on-de
 | `mention_count` | Pipeline | Dashboard | |
 | `ai_search_volume` | Pipeline | Dashboard | Nullable |
 | `top_citation_domains` | Pipeline | Dashboard | JSONB array of domain strings |
+| `is_estimated` | Pipeline | Dashboard | Boolean, default false. True for competitor rows (aggregate API data, not per-keyword measured) |
 | `created_at` | Auto | Dashboard | |
 
 **UNIQUE constraint:** `(audit_id, snapshot_date, keyword, platform, domain)` — allows client and competitor data to coexist.
 
 **Pipeline writes**: syncJim (client + competitor mentions from `llm_mentions.json`), `track-llm-mentions.ts` (client mentions only, monthly)
-**Dashboard reads**: `useLlmVisibilitySnapshots()` → AiVisibilityPage
+**Dashboard reads**: `useLlmVisibilitySnapshots()` → AiVisibilityPage, PerformancePage (via `useAiVisibilityTrend`)
 
 ---
 
@@ -398,13 +401,16 @@ Written by syncJim (Phase 3b) and `track-llm-mentions.ts`. Qualitative mention r
 
 ### `execution_pages`
 
-Written by syncMichael (Phase 6b), updated by Pam + Oscar.
+Written by syncMichael (Phase 6b) and Cluster Strategy (on-demand), updated by Pam + Oscar.
 
 | Column | Writer | Notes |
 |--------|--------|-------|
-| `url_slug` | syncMichael | |
-| `silo` | syncMichael | |
-| `priority` | syncMichael | 1=create, 2=optimize, 3=differentiate, 4=maintain |
+| `url_slug` | syncMichael / Cluster Strategy | |
+| `silo` | syncMichael / Cluster Strategy | |
+| `priority` | syncMichael / Cluster Strategy | 1=create, 2=optimize, 3=differentiate, 4=maintain |
+| `source` | syncMichael / Cluster Strategy | `michael` (default) or `cluster_strategy` |
+| `buyer_stage` | Cluster Strategy | `awareness`, `consideration`, `decision`, `retention` — null for architecture pages |
+| `strategy_rationale` | Cluster Strategy | Why this page was recommended — null for architecture pages |
 | `status` | Pipeline + Dashboard | `not_started` → `brief_generated` → `content_generated` → `published` |
 | `page_brief` | syncMichael | JSONB |
 | `canonical_key` | syncMichael | Join to `audit_clusters` |
@@ -460,6 +466,7 @@ Written by `generate-cluster-strategy.ts` (on-demand, per-cluster via `/activate
 | `recommended_pages` | JSON |
 | `buyer_stages` | JSON |
 | `format_gaps` | JSON |
+| `entity_map` | JSONB — entity type mapping from Section 0 |
 | `ai_optimization_notes` | |
 | `model_used` | |
 

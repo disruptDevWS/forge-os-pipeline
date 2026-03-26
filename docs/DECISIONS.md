@@ -4,6 +4,42 @@ Non-obvious choices that would look wrong without context. Check here before "fi
 
 ---
 
+**2026-03-26: Competitor AI mention data is re-aggregated to domain totals before prompt injection**
+
+DataForSEO's `/aggregated_metrics/live` endpoint returns one total per domain×platform. The pipeline code then evenly distributes this across keywords (`Math.round(mentionCount / keywords.length)`), creating synthetic per-keyword counts. Both Jim's `aiVisibilityBlock` and Gap's `aiVisibilitySection` now re-aggregate competitor mentions back to domain×platform totals before injecting into prompts. This prevents Jim/Gap from treating synthetic distributions as granular measurements. Both blocks include explicit caveats: "Competitor counts are aggregate totals, not per-keyword measurements."
+
+---
+
+**2026-03-26: Jim Section 11 requires explicit cross-reference pointers for structural gap analysis**
+
+Section 11.4 (Structural Gap Analysis) instructs Jim to cross-reference citation sources against Site Inventory and All Ranked URLs, naming specific signals (schema markup, content depth, structured page patterns). Without these explicit pointers, Sonnet produces generic gap analysis even though the right data is in context. The prompt names the exact data sources and signals because Sonnet won't reliably cross-reference two distant sections of a large prompt without being told to.
+
+---
+
+**2026-03-26: Entity type classification uses Sonnet (not Haiku) in Phase 3c**
+
+Phase 3c (Canonicalize) was upgraded from Haiku to Sonnet before entity anchoring was added. The `primary_entity_type` classification (Service, Course, Product, etc.) runs as part of the existing Sonnet canonicalization call — no additional LLM call. Entity type flows: Phase 3c → `audit_keywords` → `audit_clusters` → Cluster Strategy (Section 0 Entity Map) → Pam (Page Identity block).
+
+---
+
+**2026-03-26: Cluster strategy uses header-based JSON extraction, not positional indexing**
+
+`extractJsonBySection(text, sectionHeader)` finds a section by regex header match, scans to the next `### N.` header, and parses the first JSON code fence within that range. This replaced fragile positional `extractJson(text, index)` calls that broke when new sections were added. Each section's header regex is explicit: `### 0. Entity Map`, `### 1. Buyer Journey Map`, etc.
+
+---
+
+**2026-03-26: Buyer journey pages inserted into execution_pages with slug deduplication**
+
+Cluster strategy's `recommended_pages` are inserted into `execution_pages` with `source: 'cluster_strategy'` (vs `'michael'` for architecture pages). Insertion uses per-row insert with slug dedup check (same pattern as sync-michael) to prevent duplicates if strategy is regenerated. `buyer_stage` and `strategy_rationale` columns carry journey context into Pam's brief generation.
+
+---
+
+**2026-03-26: `select('*')` in Pam's page data query is intentional for migration-order safety**
+
+`generate-brief.ts` uses `.select('*')` instead of listing specific columns when fetching from `execution_pages`. This ensures Pam works regardless of whether migrations for new columns (`source`, `buyer_stage`, `strategy_rationale`) have been applied. Missing columns simply return undefined. This is a deliberate trade-off: slightly less type safety for zero-downtime deployment.
+
+---
+
 **2026-03-25: LLM Mentions budget guard is non-fatal — Jim never fails because of AI visibility**
 
 `fetchAllLlmMentions()` is wrapped in a try/catch inside `runJim()`. If the DataForSEO LLM Mentions API fails, exceeds budget (`LLM_MENTIONS_BUDGET`, default $1.00), or credentials aren't configured, Jim proceeds without AI visibility data. Section 11 (AI Visibility) is conditionally omitted from the narrative, and `llm_mentions.json` is not written. Same principle in `runGap()` — if `llm_mentions.json` is missing, `ai_citation_gaps` defaults to an empty array. The LLM Mentions API is additive intelligence, not core pipeline functionality.
