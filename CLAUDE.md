@@ -45,7 +45,10 @@ Forge OS is an **SEO audit pipeline toolkit**. Dashboard buttons trigger Supabas
 
 ## SQL & Database Changes
 
-- Before writing any SQL migration, verify that all referenced enums, tables, columns, and functions actually exist in the current schema. Use `\dt`, `\dT`, `\df` or query `information_schema` to confirm.
+- **Before writing any SQL migration**, run a live verification query against the Supabase database to confirm that all referenced tables, columns, enums, and functions actually exist. Use `supabase db query --linked` with `information_schema` queries. Never assume database objects exist from a plan or from code — always verify against the live schema first.
+- **Before running any SQL migration**, verify the target tables and columns exist (or don't exist, as expected) by querying `information_schema.columns` on the linked database. This catches schema drift between what the code expects and what actually exists.
+- **Running migrations**: Use `supabase db query --linked -f <path>` (file flag). Do NOT pass SQL with `--` comments as inline arguments — they get parsed as CLI flags.
+- **After running migrations**, verify the new columns/tables exist with a confirmation query.
 - Never assume database objects exist from a plan — always verify against the live schema first.
 
 ## TypeScript Conventions
