@@ -1274,38 +1274,66 @@ async function runJim(sb: SupabaseClient, auditId: string, domain: string, audit
     if (llmKeywords.length > 0) {
       llmMentionsResult = await fetchAllLlmMentions(env, domain, llmKeywords, llmCompetitors, researchDir);
       if (llmMentionsResult && llmMentionsResult.domain_mentions.length > 0) {
-        // Build prompt injection block
-        const clientMentions = llmMentionsResult.domain_mentions
-          .filter((m) => m.mention_count > 0);
-        const totalClientMentions = clientMentions.reduce((s, m) => s + m.mention_count, 0);
-        const platformBreakdown = new Map<string, number>();
-        for (const m of llmMentionsResult.domain_mentions) {
-          platformBreakdown.set(m.platform, (platformBreakdown.get(m.platform) ?? 0) + m.mention_count);
-        }
-        const platformStr = [...platformBreakdown.entries()]
-          .map(([p, c]) => `${p}: ${c}`)
-          .join(', ');
+        // Per-keyword breakdown table (granular, reliable data)
+        const kwRows = llmMentionsResult.domain_mentions
+          .reduce((acc, m) => {
+            const existing = acc.find((r) => r.keyword === m.keyword);
+            if (existing) {
+              if (m.platform === 'google') existing.google = m.mention_count;
+              else if (m.platform === 'chat_gpt') existing.chatgpt = m.mention_count;
+              existing.aiVolume = Math.max(existing.aiVolume, m.ai_search_volume ?? 0);
+              for (const src of m.citation_sources.slice(0, 2)) existing.citations.add(src);
+            } else {
+              const row = { keyword: m.keyword, google: 0, chatgpt: 0, aiVolume: m.ai_search_volume ?? 0, citations: new Set<string>() };
+              if (m.platform === 'google') row.google = m.mention_count;
+              else if (m.platform === 'chat_gpt') row.chatgpt = m.mention_count;
+              for (const src of m.citation_sources.slice(0, 2)) row.citations.add(src);
+              acc.push(row);
+            }
+            return acc;
+          }, [] as Array<{ keyword: string; google: number; chatgpt: number; aiVolume: number; citations: Set<string> }>);
 
-        const competitorSummary = new Map<string, number>();
+        const kwTable = kwRows
+          .map((r) => `${r.keyword} | ${r.google} | ${r.chatgpt} | ${r.aiVolume} | ${[...r.citations].join(', ') || 'none'}`)
+          .join('\n');
+
+        // Re-aggregate competitor mentions to domain × platform totals (honest presentation)
+        const compAgg = new Map<string, { google: number; chatgpt: number }>();
         for (const cm of llmMentionsResult.competitor_mentions) {
-          competitorSummary.set(cm.domain, (competitorSummary.get(cm.domain) ?? 0) + cm.mention_count);
+          if (!compAgg.has(cm.domain)) compAgg.set(cm.domain, { google: 0, chatgpt: 0 });
+          const entry = compAgg.get(cm.domain)!;
+          if (cm.platform === 'google') entry.google += cm.mention_count;
+          else if (cm.platform === 'chat_gpt') entry.chatgpt += cm.mention_count;
         }
-        const compStr = [...competitorSummary.entries()]
-          .map(([d, c]) => `${d}: ${c}`)
-          .join(', ');
+        const compTable = [...compAgg.entries()]
+          .map(([d, c]) => `${d} | ${c.google} | ${c.chatgpt}`)
+          .join('\n');
 
-        const topCitations = new Set<string>();
-        for (const m of clientMentions) {
-          for (const src of m.citation_sources.slice(0, 3)) {
-            topCitations.add(src);
-          }
+        // Budget/data quality notes
+        const hasCompetitors = llmMentionsResult.queried_competitors.length > 0;
+        const hasCompData = llmMentionsResult.competitor_mentions.length > 0;
+        let dataQualityNotes = `### Data Quality Notes
+- Client mention data is per-keyword × per-platform (granular, measured by API).
+- Competitor counts are aggregate totals per domain × platform. Per-keyword breakdown is NOT available — distribution across keywords is estimated, not measured. Treat competitor comparisons as directional only.`;
+        if (hasCompetitors && !hasCompData) {
+          dataQualityNotes += `\n- Competitor data was requested but not returned. Zero values may indicate no mentions or budget constraints.`;
+        } else if (llmMentionsResult.competitor_budget_skipped) {
+          dataQualityNotes += `\n- Competitor mention tracking was partially limited by budget constraints. Counts may be incomplete.`;
         }
 
         aiVisibilityBlock = `\n## AI Visibility Data (LLM Mentions)
-- Client total mentions across AI platforms: ${totalClientMentions} (${platformStr})
-- Keywords queried: ${llmMentionsResult.queried_keywords.join(', ')}
-- Top citation sources: ${[...topCitations].slice(0, 10).join(', ') || 'none'}
-${compStr ? `- Competitor mention counts: ${compStr}` : ''}\n`;
+
+### Client Mentions by Keyword
+Keyword | Google Mentions | ChatGPT Mentions | AI Search Volume | Top Citation Source
+${kwTable}
+
+${compTable ? `### Competitor Comparison (aggregate totals — per-keyword breakdown not available)
+Domain | Google Total | ChatGPT Total
+${compTable}
+NOTE: These are aggregate totals. Distribution across keywords is estimated, not measured.` : ''}
+
+${dataQualityNotes}
+`;
       }
     }
   } catch (err: any) {
@@ -1448,13 +1476,27 @@ GEO MODE ADDITION: For multi-state or regional clients where the current ranking
 [recommendation with specific keywords and data]
 ${aiVisibilityBlock ? `
 ## 11. AI Visibility
-[Summarize how ${domain} appears in AI-generated responses across platforms. Include:
-- Total mention count by platform (Google AI Overview, ChatGPT)
-- AI search volume for queried keywords
-- Top citation sources (which domains AI platforms cite when answering queries in this space)
-- Client vs competitor comparison: who gets mentioned more for key topics
-- Recommendations for improving AI citation likelihood (structured data, authoritative content, FAQ coverage)
-If the data shows zero mentions, note that as a gap and recommend actions to establish AI visibility.]
+
+### 11.1 Mention Summary
+[Count of mentions by platform (Google AI Overview, ChatGPT). For each queried keyword, state whether ${domain} was cited, how many times, and the AI search volume. Frame zero-mention keywords as gaps, not absences — "not cited for [keyword] despite [volume] monthly AI queries" is more useful than "0 mentions".]
+
+### 11.2 Citation Source Analysis
+[List the top citation sources from the AI Visibility Data above. For each cited domain, identify what structural characteristics make it citable: schema markup types, content depth (word count, heading structure), page authority signals, FAQ presence, entity clarity. This is the causal layer — WHY these domains get cited.]
+
+### 11.3 Competitor Comparison
+[Compare ${domain} mention frequency against competitors using the aggregate totals from the AI Visibility Data. IMPORTANT: Competitor data is aggregate per-domain totals, not per-keyword measurements. Use directional language only ("competitor X has roughly 3x more total mentions") — do not claim per-topic precision. Note if competitor data was unavailable or limited.]
+
+### 11.4 Structural Gap Analysis (REQUIRED)
+[This is the most important subsection. Cross-reference the citation sources listed in the AI Visibility Data above against the Site Inventory and All Ranked URLs in this prompt — specifically schema markup presence, content depth signals, and structured page patterns. Identify what the cited domains have structurally that ${domain} lacks. Candidate gap factors (evaluate against actual evidence, do not list generically):
+- Schema/JSON-LD: Do cited sources have structured data types ${domain} lacks?
+- Content depth: Are cited pages substantively longer, better-structured, or more authoritative?
+- FAQ/Q&A patterns: Do cited sources answer questions ${domain} doesn't address?
+- Entity clarity: Do cited sources have clearer business/service entity definitions?
+- Topical authority signals: Do cited sources cover topic clusters ${domain} has gaps in?
+Each gap must reference specific evidence from the data — not generic best practices.]
+
+### 11.5 Recommendations
+[Based on the structural gaps identified in 11.4, recommend specific actions. Each recommendation must name a specific page, content type, or structural change and connect it to a gap identified above. Do not repeat generic advice ("add structured data") — specify WHAT structured data, on WHICH pages, addressing WHICH citation gap.]
 ` : ''}
 ## IMPORTANT RULES
 - Use plain numbers (no tildes ~) in table cells. Round to whole numbers.
@@ -2630,24 +2672,36 @@ async function runGap(sb: SupabaseClient, auditId: string, domain: string) {
     const llmPath = resolveArtifactPath(domain, 'research', 'llm_mentions.json');
     if (llmPath && fs.existsSync(llmPath)) {
       const llmData = JSON.parse(fs.readFileSync(llmPath, 'utf-8'));
-      const clientMentions = (llmData.domain_mentions ?? []) as Array<{ keyword: string; platform: string; mention_count: number }>;
+      const clientMentions = (llmData.domain_mentions ?? []) as Array<{ keyword: string; platform: string; mention_count: number; ai_search_volume?: number; citation_sources?: string[] }>;
       const compMentions = (llmData.competitor_mentions ?? []) as Array<{ domain: string; keyword: string; platform: string; mention_count: number }>;
 
       if (clientMentions.length > 0 || compMentions.length > 0) {
         const clientLines = clientMentions
-          .map((m) => `${m.keyword} (${m.platform}): ${m.mention_count} mentions`)
+          .map((m) => `${m.keyword} (${m.platform}): ${m.mention_count} mentions, AI volume: ${m.ai_search_volume ?? 'n/a'}, citations: ${(m.citation_sources ?? []).slice(0, 3).join(', ') || 'none'}`)
           .join('\n');
-        const compLines = compMentions
-          .filter((m) => m.mention_count > 0)
-          .map((m) => `${m.domain} — ${m.keyword} (${m.platform}): ${m.mention_count} mentions`)
+
+        // Re-aggregate competitor mentions to domain × platform totals (honest presentation)
+        const compAgg = new Map<string, { google: number; chatgpt: number }>();
+        for (const cm of compMentions) {
+          if (!compAgg.has(cm.domain)) compAgg.set(cm.domain, { google: 0, chatgpt: 0 });
+          const entry = compAgg.get(cm.domain)!;
+          if (cm.platform === 'google') entry.google += cm.mention_count;
+          else if (cm.platform === 'chat_gpt') entry.chatgpt += cm.mention_count;
+        }
+        const compLines = [...compAgg.entries()]
+          .map(([d, c]) => `${d}: ${c.google + c.chatgpt} total mentions (google: ${c.google}, chat_gpt: ${c.chatgpt})`)
           .join('\n');
 
         aiVisibilitySection = `\n## AI Visibility Data (from LLM Mentions)
 Client mentions by keyword × platform:
 ${clientLines || 'No client mentions found.'}
 
-Competitor mentions:
+Competitor aggregate totals (not per-keyword — directional only):
 ${compLines || 'No competitor mentions found.'}
+
+NOTE FOR GAP ANALYSIS: Competitor AI mention counts are aggregate totals, not per-topic measurements.
+Identify ai_citation_gaps based on citation source patterns (which domains appear, why they appear)
+rather than treating mention count differentials as precise topic-level gaps.
 `;
         console.log(`  Loaded LLM mentions: ${clientMentions.length} client, ${compMentions.length} competitor entries`);
       }
