@@ -325,7 +325,7 @@ Phase 6d (Local Presence)
 | DataForSEO LLM Mentions | `/v3/ai_optimization/llm_mentions/aggregated_metrics/live` | Competitor AI mention counts |
 | Anthropic API (sonnet) | `callClaude()` | Generate research_summary.md narrative |
 
-**LLM Mentions (conditional):** After ranked keywords and competitors are collected, `fetchAllLlmMentions()` queries DataForSEO for AI platform mentions. Top 5 keywords (by volume, rank ≤ 30, excluding brand/near-me) and top 3 non-aggregator competitors are selected. Results written to `research/{date}/llm_mentions.json`. An `## AI Visibility Data` block is injected into the narrative prompt (mention counts by platform, AI search volume, top citation sources, competitor comparison). Budget guard via `LLM_MENTIONS_BUDGET` env var (default $1.00) — non-fatal if exceeded. A conditional Section 11 (AI Visibility) is added to the research narrative output when data exists.
+**LLM Mentions (conditional):** After ranked keywords and competitors are collected, `fetchAllLlmMentions()` queries DataForSEO for AI platform mentions. Top 5 keywords (by volume, rank ≤ 30, excluding brand/near-me) and top 3 non-aggregator competitors are selected. Results written to `research/{date}/llm_mentions.json`. An `## AI Visibility Data` block is injected into the narrative prompt with: per-keyword breakdown table (Google/ChatGPT mentions, AI search volume, top citation source per keyword), re-aggregated competitor totals (domain-level, not synthetic per-keyword), and data quality notes section (precision caveats, budget skip detection). Budget guard via `LLM_DOMAIN_BUDGET` / `LLM_COMPETITOR_BUDGET` env vars (legacy fallback: `LLM_MENTIONS_BUDGET`, default $1.00/$0.50) — non-fatal if exceeded. A conditional Section 11 (AI Visibility, 5 subsections: Mention Summary, Citation Source Analysis, Competitor Comparison, Structural Gap Analysis, Recommendations) is added to the research narrative output when data exists. Section 11.4 includes explicit cross-reference pointers directing Sonnet to compare citation sources against Site Inventory and ranked URLs for evidence-based structural gap reasoning.
 
 **Aggregator filtering:** Before building the prompt, competitors are pre-filtered using `isAggregatorDomain()` (Yelp, HomeAdvisor, Angi, BBB, Thumbtack, social media, Wikipedia, Reddit, etc.). This prevents aggregator domains with massive ETV from dominating the competitor table and misleading analysis.
 
@@ -381,15 +381,17 @@ Each `audit_keywords` row includes revenue estimates: `delta_revenue_low/mid/hig
 
 ### Phase 3c: Canonicalize — Semantic Topic Grouping
 
-**Function:** `runCanonicalize()` | **Model:** Claude Haiku (sync, small batches)
+**Function:** `runCanonicalize()` | **Model:** Claude Sonnet (sync, batches of up to 250)
 
-Batches all `audit_keywords` (up to 250 per call) through Haiku for semantic grouping. Returns `canonical_key` (slug), `canonical_topic` (display name), `is_brand`, `intent_type` per keyword.
+Batches all `audit_keywords` (up to 250 per call) through Sonnet for semantic grouping. Returns `canonical_key` (slug), `canonical_topic` (display name), `is_brand`, `intent_type`, `primary_entity_type` per keyword.
 
 **Near-me flagging:** After grouping, flags keywords containing "near me" with `is_near_me: true`. This supplements the flags already set by KeywordResearch on seeded keywords.
 
 **Post-canonicalize cleanup:** Clears `is_near_miss` (and zeroes revenue fields) for any keywords where canonicalize set `is_brand=true` or `intent_type=navigational`, since these shouldn't appear in striking distance opportunities.
 
-**Supabase writes:** `audit_keywords` UPDATE (canonical_key, canonical_topic, cluster, is_brand, intent_type, is_near_me)
+**Entity type classification:** Each keyword group receives a `primary_entity_type` (Service, Course, Product, LocalBusiness, FAQPage, Article). This flows downstream: Phase 3d aggregates to `audit_clusters`, Cluster Strategy uses it for Section 0 Entity Map, Pam uses it for Page Identity. Prompt includes split/merge decision rules and informational keyword placement rules.
+
+**Supabase writes:** `audit_keywords` UPDATE (canonical_key, canonical_topic, cluster, is_brand, intent_type, is_near_me, primary_entity_type)
 
 **Why before Competitors:** Clean canonical keys eliminate duplicate SERP calls (e.g., "plumber boise" and "plumber boise id" map to the same canonical_key).
 
@@ -410,6 +412,8 @@ Batches all `audit_keywords` (up to 250 per call) through Haiku for semantic gro
 **Supabase writes:**
 - `audit_clusters` — DELETE + INSERT (using canonical groupings)
 - `audit_rollups` — DELETE + INSERT (recalculated totals)
+
+**Entity type aggregation:** Each cluster's `primary_entity_type` is set from its constituent keywords, preferring non-Service types (e.g., if any keyword in the cluster is `Course`, the cluster gets `Course`).
 
 **Filters:** Excludes `is_brand=true`, `intent_type=informational`, `intent_type=navigational` from clusters.
 
@@ -484,6 +488,9 @@ All cross-phase reads use `resolveArtifactPath()` with date fallback for operati
 - Platform Constraints section required when Dwight detects CMS-specific limitations
 - Near-me keywords prohibited as `primary_keyword` for any page
 - Every authority gap from Gap analysis must map to at least one architecture page
+- **Buyer Journey Coverage (Rule 15):** Every silo must have Consideration + Decision stage coverage
+- **Geo Pages as Silo Roles (Rule 16):** Geo pages are roles within a silo (e.g., `/services/plumbing/boise/`), not separate silos
+- Buyer Journey Coverage Assessment table required: per-silo matrix of Awareness/Consideration/Decision/Retention coverage
 
 **Prompt framing:** Uses "YOUR ENTIRE RESPONSE IS THE BLUEPRINT" top/bottom framing.
 
@@ -605,13 +612,16 @@ Oscar (generate-content.ts) — polls oscar_requests
 **What it does:** For each `execution_pages` row created by sync-michael, generates a complete content brief: metadata (meta title, description, H1, intent), JSON-LD schema, and a detailed content outline with per-section word counts, keyword targets, and internal linking maps.
 
 **Context gathered per page:**
-1. `execution_pages` — page_brief, silo, url_slug (from sync-michael)
-2. `audit_keywords` — keywords in the same cluster/silo
-3. `architecture_blueprint.md` — silo excerpt from disk
-4. `research_summary.md` — striking distance + key takeaways from Jim
-5. `audit_snapshots` (agent='gap') — authority gaps and format gaps
-6. `client_profiles` — brand voice, USPs, differentiators (optional)
-7. DataForSEO SERP Advanced — PAA questions, People Also Search, top organic competitors (optional, per primary keyword)
+1. `execution_pages` — page_brief, silo, url_slug, buyer_stage, strategy_rationale (from sync-michael or cluster strategy)
+2. `audit_keywords` — keywords in the same cluster/silo (includes `primary_entity_type`)
+3. `audit_clusters` → `cluster_strategy` — entity_map (JSONB) for entity-aware content framing
+4. `architecture_blueprint.md` — silo excerpt from disk
+5. `research_summary.md` — striking distance + key takeaways from Jim
+6. `audit_snapshots` (agent='gap') — authority gaps and format gaps
+7. `client_profiles` — brand voice, USPs, differentiators (optional)
+8. DataForSEO SERP Advanced — PAA questions, People Also Search, top organic competitors (optional, per primary keyword)
+
+**Entity + buyer journey context:** If the page has a `primary_entity_type` (from audit_clusters), it's injected into the Page Identity block. If `entity_map` exists on the cluster's strategy, the full entity definition is injected. If `buyer_stage` is set (cluster strategy pages), a Buyer Journey Context block is added.
 
 **Output (3 files per page):**
 - `content/{date}/{slug}/metadata.md` — meta title, description, H1, intent, keyword-element mapping
@@ -836,13 +846,16 @@ Cluster activation is an on-demand step that generates a strategy document for a
 
 **Steps:**
 1. Resolve audit from Supabase (domain + email)
-2. Load cluster, keywords, execution_pages, gap analysis, competitors, client context
-3. Build prompt → `callClaude()` with Opus (strategic judgment tier)
-4. Parse buyer_stages, recommended_pages, format_gaps (JSON blocks), AI optimization notes
-5. Upsert `cluster_strategy` table
+2. Load cluster (with `primary_entity_type`), keywords, execution_pages, gap analysis, competitors, client context
+3. Build prompt → `callClaude()` with Opus (strategic judgment tier). Prompt includes entity type context and Section 0 (Entity Map) requirement.
+4. Parse via `extractJsonBySection()` (header-based, not positional): entity_map (Section 0), buyer_stages (Section 1), recommended_pages (Section 3), format_gaps (Section 4), AI optimization notes (Section 5)
+5. Upsert `cluster_strategy` table (includes `entity_map` JSONB)
 6. SET `audit_clusters.status = 'active'`, `activated_at = now()`
 7. SET `execution_pages.cluster_active = true` WHERE `canonical_key = key`
-8. Log `agent_runs` entry
+8. **Insert recommended_pages into `execution_pages`** with `source: 'cluster_strategy'`, `buyer_stage`, `strategy_rationale` (slug dedup check prevents duplicates on re-activation)
+9. Log `agent_runs` entry
+
+**Strategy sections:** 0. Entity Map (JSON), 1. Buyer Journey Map (JSON), 2. Content Strategy (markdown), 3. Recommended New Pages (JSON), 4. Format Gaps (JSON), 5. AI Optimization Priorities
 
 **Cost:** ~$0.15-0.50 per cluster (single Opus call).
 
