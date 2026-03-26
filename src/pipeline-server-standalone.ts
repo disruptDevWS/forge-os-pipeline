@@ -883,6 +883,103 @@ async function handleLookupKeywords(req: http.IncomingMessage, res: http.ServerR
   }
 }
 
+async function handleAiVisibilityAnalysis(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  if (!checkAuth(req, res)) return;
+
+  let payload: { domain?: string; email?: string; audit_id?: string; keywords?: string[]; competitor_domains?: string[] };
+  try {
+    payload = JSON.parse(await readBody(req));
+  } catch {
+    json(res, 400, { error: 'Invalid JSON' });
+    return;
+  }
+
+  const { domain, email, audit_id, keywords, competitor_domains } = payload;
+  if (!domain || !email || !audit_id) {
+    json(res, 400, { error: 'domain, email, and audit_id are required' });
+    return;
+  }
+  if (keywords && (!Array.isArray(keywords) || keywords.length > 50)) {
+    json(res, 400, { error: 'keywords must be an array of max 50 items' });
+    return;
+  }
+  if (competitor_domains && (!Array.isArray(competitor_domains) || competitor_domains.length > 5)) {
+    json(res, 400, { error: 'competitor_domains must be an array of max 5 items' });
+    return;
+  }
+
+  const visKey = `ai-vis:${domain}`;
+  if (inFlight.has(visKey)) {
+    json(res, 409, { error: `AI visibility analysis already running for ${domain}` });
+    return;
+  }
+
+  inFlight.add(visKey);
+  console.log(`AI visibility analysis triggered: ${domain} (${email})`);
+
+  const requestJson = JSON.stringify({ domain, email, audit_id, keywords, competitor_domains });
+  const child = spawn('npx', ['tsx', 'scripts/ai-visibility-analysis.ts', `--json=${requestJson}`], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    cwd: process.cwd(),
+  });
+
+  let stdout = '';
+  let stderr = '';
+
+  child.stdout.on('data', (chunk: Buffer) => {
+    const text = chunk.toString();
+    stdout += text;
+    // Stream logs to server console (lines before the result sentinel)
+    for (const line of text.split('\n')) {
+      if (line && !line.startsWith('__AI_VIS_RESULT_')) {
+        console.log(`[ai-vis:${domain}] ${line}`);
+      }
+    }
+  });
+
+  child.stderr.on('data', (chunk: Buffer) => {
+    stderr += chunk.toString();
+  });
+
+  child.on('close', (code) => {
+    inFlight.delete(visKey);
+
+    // Extract JSON result from stdout sentinels
+    const startMarker = '__AI_VIS_RESULT_START__';
+    const endMarker = '__AI_VIS_RESULT_END__';
+    const startIdx = stdout.indexOf(startMarker);
+    const endIdx = stdout.indexOf(endMarker);
+
+    if (startIdx >= 0 && endIdx > startIdx) {
+      const resultJson = stdout.slice(startIdx + startMarker.length, endIdx).trim();
+      try {
+        const result = JSON.parse(resultJson);
+        if (result.error) {
+          json(res, 500, { error: result.error });
+        } else {
+          json(res, 200, result);
+        }
+        return;
+      } catch {
+        // Fall through to error
+      }
+    }
+
+    if (code !== 0) {
+      console.error(`AI visibility analysis failed (exit ${code}): ${stderr.slice(-500)}`);
+      json(res, 500, { error: `AI visibility analysis failed (exit code ${code})` });
+    } else {
+      json(res, 500, { error: 'AI visibility analysis produced no result' });
+    }
+  });
+
+  child.on('error', (err) => {
+    inFlight.delete(visKey);
+    console.error(`AI visibility analysis spawn error:`, err);
+    json(res, 500, { error: err.message });
+  });
+}
+
 const server = http.createServer((req, res) => {
   if (req.method === 'GET' && req.url === '/health') {
     json(res, 200, {
@@ -921,6 +1018,8 @@ const server = http.createServer((req, res) => {
     handleTrackLlmMentions(req, res);
   } else if (req.method === 'POST' && req.url === '/lookup-keywords') {
     handleLookupKeywords(req, res);
+  } else if (req.method === 'POST' && req.url === '/ai-visibility-analysis') {
+    handleAiVisibilityAnalysis(req, res);
   } else {
     json(res, 404, { error: 'Not found' });
   }

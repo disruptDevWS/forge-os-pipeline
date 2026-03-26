@@ -4,6 +4,18 @@ Non-obvious choices that would look wrong without context. Check here before "fi
 
 ---
 
+**2026-03-26: AI Visibility Analysis uses intent-driven query generation, not ranked keywords**
+
+The AI Visibility Assessment (SOW 2.5) generates queries from client context via Haiku rather than pulling top-ranked keywords. Rationale: top-ranked keywords bias toward organic search performance, which doesn't correlate with AI platform visibility. AI assistants answer natural-language questions ("best HVAC service in Boise") not keyword-shaped queries ("boise hvac repair"). Haiku generates 10-15 queries spanning discovery/consideration/comparison intents from `client_profiles` + `audits.client_context`. Deterministic fallback from `service_key` + `market_city` if client context is too sparse or Haiku fails.
+
+---
+
+**2026-03-26: AI Visibility Analysis runs via child process spawn, not direct import**
+
+`ai-visibility-analysis.ts` lives in `scripts/` (alongside other analysis scripts that import from `scripts/anthropic-client.ts`, `scripts/dataforseo-llm-mentions.ts`, etc). The server's `src/` directory has `rootDir: ./src` in tsconfig, preventing cross-directory imports. The handler spawns `npx tsx scripts/ai-visibility-analysis.ts` and collects JSON via stdout sentinels (`__AI_VIS_RESULT_START__`/`__AI_VIS_RESULT_END__`), matching the spawn pattern used by other handlers while returning results synchronously.
+
+---
+
 **2026-03-26: Competitor AI mention data is re-aggregated to domain totals before prompt injection**
 
 DataForSEO's `/aggregated_metrics/live` endpoint returns one total per domain×platform. The pipeline code then evenly distributes this across keywords (`Math.round(mentionCount / keywords.length)`), creating synthetic per-keyword counts. Both Jim's `aiVisibilityBlock` and Gap's `aiVisibilitySection` now re-aggregate competitor mentions back to domain×platform totals before injecting into prompts. This prevents Jim/Gap from treating synthetic distributions as granular measurements. Both blocks include explicit caveats: "Competitor counts are aggregate totals, not per-keyword measurements."

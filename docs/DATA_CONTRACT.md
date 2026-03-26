@@ -392,8 +392,10 @@ Written by syncJim (Phase 3b) and `track-llm-mentions.ts`. Qualitative mention r
 | `source_domains` | Pipeline | Dashboard | JSONB array |
 | `captured_at` | Auto | Dashboard | |
 
-**Pipeline writes**: syncJim, `track-llm-mentions.ts`
+**Pipeline writes**: syncJim, `track-llm-mentions.ts`, `ai-visibility-analysis.ts`
 **Dashboard reads**: `useLlmMentionDetails()` → AiVisibilityPage
+
+**Note**: `ai-visibility-analysis.ts` writes `mention_text: null` and `citation_urls: []` — LLM Mentions API returns domains, not full URLs or snippet text. `source_domains` is populated.
 
 ---
 
@@ -606,6 +608,7 @@ Server-side view computing position changes from `ranking_snapshots`.
 | `pipeline-controls` | `recanonicalize` | `/recanonicalize` | `{domain, email}` | `{ok}` |
 | `pipeline-controls` | `track_rankings` | `/track-rankings` | `{domain, email}` | `{ok}` |
 | `pipeline-controls` | `track_llm_mentions` | `/track-llm-mentions` | `{domain, email}` | `{ok}` |
+| `pipeline-controls` | `ai_visibility_analysis` | `/ai-visibility-analysis` | `{domain, email, audit_id, keywords?, competitor_domains?}` | Full analysis result JSON |
 | `pipeline-controls` | `rerun_pipeline` | `/trigger-pipeline` | `{domain, email}` | `{ok}` |
 | `pipeline-controls` | `resume_pipeline` | `/trigger-pipeline` | `{domain, email, annotations?, audit_id}` | `{success, start_from:'1b'}` |
 | `cluster-action` | `activate` | `/activate-cluster` | `{audit_id, canonical_key, target_publish_date?, notes?}` | cluster status |
@@ -645,6 +648,8 @@ These files live on the pipeline server disk and are NOT in Supabase. They feed 
 | `audits/{domain}/research/{date}/ranked_keywords.json` | Jim | DataForSEO ranked keywords (geo-qualified volumes when `geo_mode != 'national'`) |
 | `audits/{domain}/research/{date}/ranked_keywords.national.json` | Jim | Original national volumes backup (only created when geo-qualifying Mode A) |
 | `audits/{domain}/research/{date}/llm_mentions.json` | Jim | AI platform mention data (domain + competitor mentions) |
+| `audits/{domain}/research/{date}/ai_visibility_data.json` | AI Visibility | Full structured analysis result (per-keyword mentions, competitor summary, costs) |
+| `audits/{domain}/research/{date}/ai_visibility_report.md` | AI Visibility | SOW 2.5 deliverable: executive summary, citation tables, structural gaps, recommendations |
 | `audits/{domain}/research/{date}/research_summary.md` | Jim | 10-11 section research narrative (Section 11 conditional: AI Visibility) |
 | `audits/{domain}/research/{date}/content_gap_analysis.md` | Gap | Authority + format gaps |
 | `audits/{domain}/research/{date}/coverage_validation.md` | Validator | Gap vs blueprint cross-check |

@@ -11,6 +11,7 @@ Trigger paths:
 - **Re-canonicalize:** Settings page → `pipeline-controls` Edge Function → `/recanonicalize` → `run-canonicalize.ts` (Phase 3c+3d only)
 - **Refresh rankings:** Settings page → `pipeline-controls` Edge Function → `/track-rankings` → `track-rankings.ts`
 - **Track AI visibility:** Settings page → `pipeline-controls` Edge Function → `/track-llm-mentions` → `track-llm-mentions.ts`
+- **AI visibility analysis:** Settings page → `pipeline-controls` Edge Function → `/ai-visibility-analysis` → `ai-visibility-analysis.ts`
 - **Re-run pipeline:** Settings page → `run-audit` Edge Function → `/trigger-pipeline` → `run-pipeline.sh`
 - **Cluster activation:** Clusters page → `cluster-action` Edge Function → `/activate-cluster` → `generate-cluster-strategy.ts`
 - **Export audit:** Settings page → `export-audit` Edge Function → `/export-audit` → ZIP stream of all `audits/{domain}/` artifacts
@@ -19,7 +20,7 @@ Edge Functions (deployed from [Lovable repo](https://github.com/disruptDevWS/mar
 - `run-audit` — validates audit, marks `running`, POSTs to `/trigger-pipeline`
 - `scout-config` — writes prospect config to disk, triggers scout, reads reports via `/scout-report` (auth: `validateSuperAdmin` + `has_role`)
 - `cluster-action` — proxies `/activate-cluster` and `/deactivate-cluster` (auth: `resolveAuthContext` + ownership check)
-- `pipeline-controls` — proxies `/recanonicalize`, `/track-rankings`, and `/track-llm-mentions` for Settings page (auth: `validateSuperAdmin` + `has_role`)
+- `pipeline-controls` — proxies `/recanonicalize`, `/track-rankings`, `/track-llm-mentions`, and `/ai-visibility-analysis` for Settings page (auth: `validateSuperAdmin` + `has_role`)
 - `export-audit` — streams ZIP of all pipeline artifacts for a domain (auth: `validateSuperAdmin` + `has_role`)
 
 Core scripts:

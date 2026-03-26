@@ -179,6 +179,62 @@ export function selectLlmCompetitors(
     .filter(Boolean);
 }
 
+// ── AI Keyword Volume type ───────────────────────────────────
+
+export interface AiKeywordVolume {
+  keyword: string;
+  ai_search_volume: number | null;
+}
+
+// ── AI Keyword Search Volume ─────────────────────────────────
+
+/**
+ * Fetch AI search volumes for a batch of keywords.
+ * Uses /v3/ai_optimization/ai_keyword_data/keywords_search_volume/live
+ * Non-fatal — returns empty array on failure.
+ */
+export async function fetchAiKeywordVolumes(
+  env: Record<string, string>,
+  keywords: string[],
+): Promise<{ volumes: AiKeywordVolume[]; cost: number }> {
+  if (keywords.length === 0) return { volumes: [], cost: 0 };
+
+  try {
+    const auth = makeAuthHeader(env);
+    const payload = [
+      {
+        language_name: 'English',
+        location_code: 2840,
+        keywords,
+      },
+    ];
+
+    const data = await apiCall(
+      '/ai_optimization/ai_keyword_data/keywords_search_volume/live',
+      auth,
+      payload,
+    );
+    const task = data?.tasks?.[0];
+    const cost = task?.cost ?? 0;
+    logCost('ai_keyword_volume', cost);
+
+    const volumes: AiKeywordVolume[] = [];
+    for (const item of task?.result ?? []) {
+      for (const kwItem of item?.items ?? []) {
+        volumes.push({
+          keyword: kwItem.keyword ?? '',
+          ai_search_volume: kwItem.ai_search_volume ?? null,
+        });
+      }
+    }
+
+    return { volumes, cost };
+  } catch (err: any) {
+    console.log(`  Warning: AI keyword volume fetch failed: ${err.message}`);
+    return { volumes: [], cost: 0 };
+  }
+}
+
 // ── Core API functions ────────────────────────────────────────
 
 const PLATFORMS = ['google', 'chat_gpt'] as const;
