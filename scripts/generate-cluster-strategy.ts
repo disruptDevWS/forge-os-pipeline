@@ -140,6 +140,24 @@ function resolveArtifactPath(domain: string, subdir: 'research' | 'architecture'
 // Main
 // ============================================================
 
+function mapContentTypeToRole(contentType: string): string {
+  const map: Record<string, string> = {
+    pillar_page: 'pillar',
+    service_page: 'cluster',
+    comparison: 'support',
+    comparison_page: 'support',
+    cost_guide: 'support',
+    faq: 'support',
+    faq_hub: 'support',
+    guide: 'support',
+    process_guide: 'support',
+    calculator: 'support',
+    informational: 'support',
+    location_page: 'cluster',
+  };
+  return map[contentType] ?? 'support';
+}
+
 async function main() {
   const args = parseArgs();
   const env = loadEnv();
@@ -338,6 +356,11 @@ Rules for related_entities:
 ### 1. Buyer Journey Map
 Map keywords to buyer stages (Awareness → Consideration → Decision → Retention). Identify which stages have coverage and which are gaps.
 
+For each stage, identify the SPECIFIC QUESTIONS a buyer in this vertical asks at that stage —
+not generic stage descriptions. For a medical training cluster, Consideration stage questions
+might be "How long does EMT certification take?", "What's the difference between EMT-Basic and AEMT?",
+"Is this program accredited?" These specific questions are the content targets for pages at that stage.
+
 Output as JSON:
 \`\`\`json
 { "stages": [{ "stage": "awareness|consideration|decision|retention", "keywords": ["kw1", "kw2"], "has_page": true/false, "gap_severity": "none|low|high" }] }
@@ -358,6 +381,14 @@ Output as JSON:
 \`\`\`json
 { "pages": [{ "url_slug": "/slug", "primary_keyword": "kw", "volume": 100, "buyer_stage": "consideration", "content_type": "service_page", "priority": 1, "rationale": "why" }] }
 \`\`\`
+
+Recommended pages must go BEYOND what the current page manifest already covers.
+Do not recommend pages that duplicate existing page slugs.
+For each recommended page, the rationale must name the specific buyer stage question it answers
+and why that question is not currently addressed by existing pages.
+Priority 1 = addresses a missing Consideration or Decision stage gap with keyword volume evidence.
+Priority 2 = addresses a missing Awareness or Retention stage with volume evidence.
+Priority 3 = format gap (comparison, calculator, cost guide) without strong keyword volume but with competitive evidence.
 
 When recommending new pages, cross-reference the entity map from Section 0:
 - Pages for related_entities where warrants_own_page: true should appear as priority 1 or 2 recommendations
@@ -459,6 +490,68 @@ REMINDER: Your response IS the cluster strategy document — start with "### 0. 
 
   if (clusterErr) console.warn(`  [cluster-strategy] Failed to activate cluster: ${clusterErr.message}`);
   else console.log(`  [cluster-strategy] Cluster status → active`);
+
+  // 11b. Write recommended pages from cluster strategy into execution_pages
+  const recPages = recommendedPages?.pages ?? [];
+  if (recPages.length > 0) {
+    const { data: existingPages } = await sb
+      .from('execution_pages')
+      .select('url_slug')
+      .eq('audit_id', auditId);
+
+    const existingSlugs = new Set((existingPages ?? []).map((p: any) =>
+      (p.url_slug as string).replace(/^\/+/, '').toLowerCase()
+    ));
+
+    const candidates = recPages
+      .filter((p: any) => !existingSlugs.has((p.url_slug ?? '').replace(/^\/+/, '').toLowerCase()));
+
+    let inserted = 0;
+    for (const p of candidates) {
+      const slug = (p.url_slug ?? '').replace(/^\/+/, '');
+      if (!slug) continue;
+
+      // Re-check at insert time (handles concurrent activations)
+      const { data: exists } = await sb
+        .from('execution_pages')
+        .select('id')
+        .eq('audit_id', auditId)
+        .or(`url_slug.eq.${slug},url_slug.eq./${slug}`)
+        .maybeSingle();
+      if (exists) continue;
+
+      const { error } = await (sb as any).from('execution_pages').insert({
+        audit_id: auditId,
+        url_slug: slug,
+        silo: cluster.canonical_topic ?? null,
+        canonical_key: args.canonicalKey,
+        priority: p.priority === 1 ? 1 : p.priority === 2 ? 2 : 3,
+        status: 'not_started',
+        page_brief: {
+          silo_name: cluster.canonical_topic ?? null,
+          role: mapContentTypeToRole(p.content_type ?? ''),
+          primary_keyword: p.primary_keyword ?? null,
+          primary_keyword_volume: p.volume ?? null,
+          action_required: 'create',
+          page_status: 'new',
+        },
+        cluster_active: true,
+        source: 'cluster_strategy',
+        buyer_stage: p.buyer_stage ?? null,
+        strategy_rationale: p.rationale ?? null,
+      });
+      if (error) {
+        console.warn(`  [cluster-strategy] Warning: Failed to insert page ${slug}: ${error.message}`);
+      } else {
+        inserted++;
+      }
+    }
+    if (inserted > 0) {
+      console.log(`  [cluster-strategy] Added ${inserted} buyer-journey pages to execution_pages`);
+    } else if (candidates.length > 0) {
+      console.log(`  [cluster-strategy] No new pages to add (all ${recPages.length} recommended pages already exist)`);
+    }
+  }
 
   // 12. Flag execution_pages as cluster_active
   const { error: pageErr, count: pageCount } = await sb

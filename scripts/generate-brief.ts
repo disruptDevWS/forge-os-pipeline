@@ -392,7 +392,11 @@ async function gatherContext(sb: SupabaseClient, req: PamRequest) {
     }
   }
 
-  return { auditMeta, brief, keywords, siblings, blueprintExcerpt, siloName, serpEnrichment, clientProfile, authorityGaps, formatGaps, marketContext, strategyContext, primaryEntityType, entityMap };
+  // 10. Buyer journey context from execution_pages
+  const buyerStage = (pageData as any)?.buyer_stage ?? null;
+  const strategyRationale = (pageData as any)?.strategy_rationale ?? null;
+
+  return { auditMeta, brief, keywords, siblings, blueprintExcerpt, siloName, serpEnrichment, clientProfile, authorityGaps, formatGaps, marketContext, strategyContext, primaryEntityType, entityMap, buyerStage, strategyRationale };
 }
 
 function escapeRegex(s: string): string {
@@ -646,7 +650,7 @@ function buildPrompt(
   req: PamRequest,
   ctx: Awaited<ReturnType<typeof gatherContext>>
 ): string {
-  const { auditMeta, brief, keywords, siblings, blueprintExcerpt, siloName, clientProfile, authorityGaps, formatGaps, marketContext, strategyContext, primaryEntityType, entityMap } = ctx;
+  const { auditMeta, brief, keywords, siblings, blueprintExcerpt, siloName, clientProfile, authorityGaps, formatGaps, marketContext, strategyContext, primaryEntityType, entityMap, buyerStage, strategyRationale } = ctx;
   const slug = req.page_url.replace(/^\/+/, '');
   const actionType = req.action_type || 'create';
   const pageRole = req.page_role ?? brief?.role ?? 'service page';
@@ -696,6 +700,13 @@ Your job is strategic content engineering. You are not producing a document temp
 - Primary Entity Type: ${primaryEntityType} (schema.org type — use for @type in JSON-LD)
 - Market: ${market_city}, ${market_state}
 
+${buyerStage ? `## Buyer Journey Context
+- Buyer Stage Target: ${buyerStage}
+- Source: Cluster strategy recommendation (not original architecture)
+${strategyRationale ? `- Strategic Rationale: ${strategyRationale}` : ''}
+IMPORTANT: This page was added to address a gap in the ${buyerStage} stage of the buyer journey.
+The content brief must directly address the questions buyers have at this stage, not just target
+the primary keyword. The page should guide the reader toward the next stage in their journey.` : ''}
 ## Target Keywords
 ${keywordTable}
 

@@ -1896,6 +1896,26 @@ You MUST produce output in this EXACT format. The parser depends on these headin
 [Minimum requirements: (1) identify the pillar-to-cluster linking pattern for each silo, (2) identify any cross-silo links that reinforce topical authority without creating cannibalization, (3) note any pages that currently have no internal links pointing to them (orphan risk). Be specific — name the pages and the recommended anchor text patterns.]
 \`\`\`
 
+## Buyer Journey Coverage Requirement (applies to ALL silos)
+
+For each silo, after the page table, include a coverage assessment block:
+
+### Silo N Coverage Assessment
+| Buyer Stage | Coverage | Pages Addressing | Gap |
+|-------------|----------|-----------------|-----|
+| Awareness (problem recognition, research queries) | Covered / Partial / Missing | [page slugs] | [what's missing] |
+| Consideration (comparison, evaluation, "how does X work") | Covered / Partial / Missing | [page slugs] | [what's missing] |
+| Decision (pricing, booking, contact, "best X near me") | Covered / Partial / Missing | [page slugs] | [what's missing] |
+| Retention (recertification, renewal, ongoing needs) | Present / Not applicable | [page slugs] | [if applicable] |
+
+Rules for coverage assessment:
+- "Covered" = at least one page in this silo directly addresses queries at this stage
+- "Partial" = stage is touched but not fully addressed (e.g., commercial page exists but no cost/comparison content)
+- "Missing" = no page addresses this stage — gap must be noted
+- If Consideration or Decision is "Missing", add at least one page to the silo table to address it before flagging it as a gap
+- Retention is optional — mark "Not applicable" for non-recurring services
+- Do not add pages for gap stages without keyword volume evidence; note the gap but mark as "low priority" if no volume data supports it
+
 ## Rules
 1. URL slugs: lowercase, hyphenated, no leading slash (e.g. "plumber-boise" not "/plumber-boise")
 2. Status: "new" for pages to create, "exists" for pages already on the site (match against existing URLs / crawl data)
@@ -1920,6 +1940,17 @@ You MUST produce output in this EXACT format. The parser depends on these headin
 12. If crawl data shows technical issues (broken pages, redirects), note them alongside affected URL slugs
 13. If Platform Constraints are provided, validate all URL slugs against CMS limitations. Flag any pattern not natively achievable with the workaround required.
 14. Do NOT use near-me keywords as primary_keyword. If the only available keyword for a page is a near-me variant, derive the location-modified equivalent (e.g., "commercial plumbing service near me" → "commercial plumbing boise") and use that as the primary keyword. Note the near-me variant as a secondary keyword in the Executive Summary or Cannibalization Warnings if relevant.
+15. Every silo must have at least one page covering Consideration stage and one covering Decision stage.
+    If keyword data doesn't support a dedicated page, combine stages on the pillar and note the constraint in the Coverage Assessment.
+16. GEO PAGES ARE ROLES WITHIN A SILO, NOT SEPARATE SILOS. For multi-market clients serving multiple cities/states:
+    - One silo per topic. "EMT Training" is one silo regardless of targeting Idaho, Washington, and Oregon.
+    - Geo hub pages (state-level) and geo-service pages (city-level) are page roles WITHIN the silo.
+    - Valid page roles for geo targeting: "cluster" for geo hub pages (e.g., /emt-training/washington), "support" for city-specific pages (e.g., /emt-training/boise-id)
+    - The pillar page is geography-agnostic (e.g., /emt-training) — it covers the topic nationally with schema and entity authority.
+    - Supporting content (cost guides, requirements, FAQs) informs all geos and belongs in the silo once, not duplicated per market.
+    - Topic authority accumulates to the silo's canonical entity across all geo variants. Splitting into "Idaho EMT Training" and "Washington EMT Training" as separate silos fragments this authority.
+    - Internal linking: geo pages link up to the pillar (reinforcing entity signal), pillar links down to geo hubs, geo hubs link down to city pages.
+    - Do NOT create separate silos for each market when the underlying service/topic is the same.
 
 REMINDER: Your response IS the blueprint content — start with "## Executive Summary" and output the full architecture. No preamble, no narration, no summary of what you did.`;
 
