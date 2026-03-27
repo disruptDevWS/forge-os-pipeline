@@ -12,6 +12,7 @@ Trigger paths:
 - **Refresh rankings:** Settings page → `pipeline-controls` Edge Function → `/track-rankings` → `track-rankings.ts`
 - **Track AI visibility:** Settings page → `pipeline-controls` Edge Function → `/track-llm-mentions` → `track-llm-mentions.ts`
 - **AI visibility analysis:** Settings page → `pipeline-controls` Edge Function → `/ai-visibility-analysis` → `ai-visibility-analysis.ts`
+- **Keyword lookup:** Keyword Lookup page → `pipeline-controls` Edge Function → `/lookup-keywords` → `lookupKeywordVolumes()` → `keyword_lookups` table
 - **Re-run pipeline:** Settings page → `run-audit` Edge Function → `/trigger-pipeline` → `run-pipeline.sh`
 - **Cluster activation:** Clusters page → `cluster-action` Edge Function → `/activate-cluster` → `generate-cluster-strategy.ts`
 - **Export audit:** Settings page → `export-audit` Edge Function → `/export-audit` → ZIP stream of all `audits/{domain}/` artifacts
@@ -20,7 +21,7 @@ Edge Functions (deployed from [Lovable repo](https://github.com/disruptDevWS/mar
 - `run-audit` — validates audit, marks `running`, POSTs to `/trigger-pipeline`
 - `scout-config` — writes prospect config to disk, triggers scout, reads reports via `/scout-report` (auth: `validateSuperAdmin` + `has_role`)
 - `cluster-action` — proxies `/activate-cluster` and `/deactivate-cluster` (auth: `resolveAuthContext` + ownership check)
-- `pipeline-controls` — proxies `/recanonicalize`, `/track-rankings`, `/track-llm-mentions`, and `/ai-visibility-analysis` for Settings page (auth: `validateSuperAdmin` + `has_role`)
+- `pipeline-controls` — proxies `/recanonicalize`, `/track-rankings`, `/track-llm-mentions`, `/ai-visibility-analysis`, and `/lookup-keywords` (auth: `validateSuperAdmin` + `has_role`)
 - `export-audit` — streams ZIP of all pipeline artifacts for a domain (auth: `validateSuperAdmin` + `has_role`)
 
 Core scripts:
@@ -833,6 +834,50 @@ Re-canonicalize runs Phase 3c + 3d without the full pipeline. Used from the Sett
 
 ---
 
+## Keyword Lookup (On-Demand)
+
+Ad-hoc keyword volume lookup via DataForSEO Keyword Data API. Super-admin only. Results are persisted to the `keyword_lookups` table so paid-for research is retained across sessions.
+
+### Pipeline Server Handler
+
+**Handler:** `handleLookupKeywords()` in `src/pipeline-server-standalone.ts`
+
+**Body:** `{ keywords[], location_codes?, audit_id?, user_id? }`
+
+**Steps:**
+1. Validate keywords (required, max 500)
+2. Call `lookupKeywordVolumes()` from `src/dataforseo-keywords.ts`
+3. If `audit_id` provided, best-effort insert results into `keyword_lookups` via `getSb()`:
+   - Generate `crypto.randomUUID()` for `batch_id`
+   - Upsert with `onConflict: 'audit_id,batch_id,keyword'` (prevents duplicates)
+   - Log errors but don't fail the HTTP response
+4. Return `{ results[], total, found, estimated_cost }` (cost formatted as `$X.XXX`)
+
+### Pipeline Server Endpoint
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | `/lookup-keywords` | Synchronous keyword volume lookup + persist |
+
+### Supabase Tables
+
+| Table | Purpose |
+|-------|---------|
+| `keyword_lookups` | One row per keyword result, `batch_id` groups a single lookup session |
+
+**Unique:** `(audit_id, batch_id, keyword)`
+**Index:** `(audit_id, looked_up_at DESC)` for history listing
+**RLS:** super_admin only (`has_role` check)
+**Migration:** `scripts/migrations/008-keyword-lookups.sql`
+
+### Dashboard
+
+- **Hook:** `useKeywordLookup(auditId)` — mutation passes `audit_id` to edge function, invalidates history on success
+- **Hook:** `useKeywordLookupHistory(auditId)` — reads `keyword_lookups` for last 90 days
+- **Page:** `KeywordLookupPage.tsx` — "Previous Lookups" card with collapsible batches
+
+---
+
 ## Cluster Activation (On-Demand)
 
 Cluster activation is an on-demand step that generates a strategy document for a specific topic cluster, marks it active, and flags its execution_pages. It runs outside the main pipeline, triggered via HTTP endpoint or CLI.
@@ -918,6 +963,7 @@ The pipeline server (`src/pipeline-server-standalone.ts`) is an HTTP server that
 | POST | `/recanonicalize` | Re-run Phase 3c+3d with status preservation (async, 202) |
 | POST | `/activate-cluster` | Start cluster strategy generation (async, 202) |
 | POST | `/deactivate-cluster` | Deactivate a cluster (sync, 200) |
+| POST | `/lookup-keywords` | Ad-hoc DataForSEO keyword volume lookup, persists to `keyword_lookups` |
 | POST | `/export-audit` | Stream ZIP of all artifacts for a domain |
 
 **Auth:** All endpoints (except `/health`) require `Authorization: Bearer <PIPELINE_TRIGGER_SECRET>`.

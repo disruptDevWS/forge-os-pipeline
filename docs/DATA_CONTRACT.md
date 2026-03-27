@@ -2,7 +2,7 @@
 
 > **Purpose**: Authoritative map of every Supabase table, who writes it (pipeline), who reads it (dashboard), and which columns matter. Use this before adding columns, changing sync logic, or building new UI components.
 >
-> **Last updated**: 2026-03-26
+> **Last updated**: 2026-03-27
 
 ---
 
@@ -11,13 +11,15 @@
 1. [Core Tables](#core-tables)
 2. [Agent Output Tables](#agent-output-tables)
 3. [Performance Tables](#performance-tables)
-4. [Content Factory Tables](#content-factory-tables)
-5. [Local Presence Tables](#local-presence-tables)
-6. [Reference Tables](#reference-tables)
-7. [Views](#views)
-8. [Edge Functions](#edge-functions)
-9. [RPC Functions](#rpc-functions)
-10. [Disk Artifacts](#disk-artifacts)
+4. [LLM Visibility Tables](#llm-visibility-tables)
+5. [Ad-Hoc Research Tables](#ad-hoc-research-tables)
+6. [Content Factory Tables](#content-factory-tables)
+7. [Local Presence Tables](#local-presence-tables)
+8. [Reference Tables](#reference-tables)
+9. [Views](#views)
+10. [Edge Functions](#edge-functions)
+11. [RPC Functions](#rpc-functions)
+12. [Disk Artifacts](#disk-artifacts)
 
 ---
 

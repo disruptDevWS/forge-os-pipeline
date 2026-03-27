@@ -4,6 +4,12 @@ Non-obvious choices that would look wrong without context. Check here before "fi
 
 ---
 
+**2026-03-27: Keyword lookups use single table with batch_id grouping, not a sessions table**
+
+`keyword_lookups` stores one row per keyword result. A UUID `batch_id` groups rows from the same lookup invocation. No separate `keyword_lookup_sessions` table — batch metadata (count, cost, timestamp) is derived client-side via `useMemo` grouping on `batch_id`. Rationale: a sessions table would add a write dependency (insert session first, then reference FK), complicate the best-effort insert pattern (if session insert fails, all keyword inserts fail), and provide no benefit — the only consumer is the history accordion which already groups client-side. The unique constraint `(audit_id, batch_id, keyword)` prevents duplicate rows from retries without needing session-level dedup. `estimated_cost` is stored as `numeric(10,4)` (not text) to enable future aggregation (total spend per audit, cost trends).
+
+---
+
 **2026-03-26: AI Visibility Analysis uses intent-driven query generation, not ranked keywords**
 
 The AI Visibility Assessment (SOW 2.5) generates queries from client context via Haiku rather than pulling top-ranked keywords. Rationale: top-ranked keywords bias toward organic search performance, which doesn't correlate with AI platform visibility. AI assistants answer natural-language questions ("best HVAC service in Boise") not keyword-shaped queries ("boise hvac repair"). Haiku generates 10-15 queries spanning discovery/consideration/comparison intents from `client_profiles` + `audits.client_context`. Deterministic fallback from `service_key` + `market_city` if client context is too sparse or Haiku fails.
