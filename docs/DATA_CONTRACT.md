@@ -399,6 +399,32 @@ Written by syncJim (Phase 3b) and `track-llm-mentions.ts`. Qualitative mention r
 
 ---
 
+## Ad-Hoc Research Tables
+
+### `keyword_lookups`
+
+Ad-hoc keyword volume lookups via DataForSEO. Each row = one keyword result; `batch_id` groups results from a single lookup session. Super-admin only.
+
+| Column | Type | Writer | Description |
+|--------|------|--------|-------------|
+| `id` | uuid PK | pipeline | Auto-generated |
+| `audit_id` | uuid FK→audits | pipeline | Audit this lookup belongs to |
+| `batch_id` | uuid | pipeline | Groups all keywords from one lookup invocation |
+| `keyword` | text | pipeline | The looked-up keyword |
+| `volume` | integer | pipeline | Monthly search volume (0 if not found) |
+| `cpc` | numeric(10,2) | pipeline | Cost per click |
+| `competition` | numeric(5,4) | pipeline | Competition score (0-1) |
+| `competition_level` | text | pipeline | LOW / MEDIUM / HIGH |
+| `looked_up_by` | uuid FK→auth.users | pipeline | User who ran the lookup |
+| `looked_up_at` | timestamptz | pipeline | When the lookup was performed |
+| `estimated_cost` | numeric(10,4) | pipeline | DataForSEO API cost for the batch |
+
+**Unique**: `(audit_id, batch_id, keyword)`
+**RLS**: super_admin only (`has_role` check)
+**Dashboard reads**: `useKeywordLookupHistory()` → KeywordLookupPage (history accordion, last 90 days)
+
+---
+
 ## Content Factory Tables
 
 ### `execution_pages`
@@ -608,6 +634,7 @@ Server-side view computing position changes from `ranking_snapshots`.
 | `pipeline-controls` | `recanonicalize` | `/recanonicalize` | `{domain, email}` | `{ok}` |
 | `pipeline-controls` | `track_rankings` | `/track-rankings` | `{domain, email}` | `{ok}` |
 | `pipeline-controls` | `track_llm_mentions` | `/track-llm-mentions` | `{domain, email}` | `{ok}` |
+| `pipeline-controls` | `lookup_keywords` | `/lookup-keywords` | `{keywords[], location_codes?, audit_id?}` | `{results[], total, found, estimated_cost}` |
 | `pipeline-controls` | `ai_visibility_analysis` | `/ai-visibility-analysis` | `{domain, email, audit_id, keywords?, competitor_domains?}` | Full analysis result JSON |
 | `pipeline-controls` | `rerun_pipeline` | `/trigger-pipeline` | `{domain, email}` | `{ok}` |
 | `pipeline-controls` | `resume_pipeline` | `/trigger-pipeline` | `{domain, email, annotations?, audit_id}` | `{success, start_from:'1b'}` |

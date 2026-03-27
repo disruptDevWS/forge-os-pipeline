@@ -7,6 +7,7 @@
 
 import http from 'http';
 import { spawn } from 'child_process';
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import archiver from 'archiver';
@@ -852,7 +853,7 @@ async function handleTrackLlmMentions(req: http.IncomingMessage, res: http.Serve
 async function handleLookupKeywords(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   if (!checkAuth(req, res)) return;
 
-  let payload: { keywords?: string[]; location_codes?: number[] };
+  let payload: { keywords?: string[]; location_codes?: number[]; audit_id?: string; user_id?: string };
   try {
     payload = JSON.parse(await readBody(req));
   } catch {
@@ -860,7 +861,7 @@ async function handleLookupKeywords(req: http.IncomingMessage, res: http.ServerR
     return;
   }
 
-  const { keywords, location_codes } = payload;
+  const { keywords, location_codes, audit_id, user_id } = payload;
   if (!keywords || !Array.isArray(keywords) || keywords.length === 0) {
     json(res, 400, { error: 'keywords array is required' });
     return;
@@ -874,7 +875,37 @@ async function handleLookupKeywords(req: http.IncomingMessage, res: http.ServerR
     const results = await lookupKeywordVolumes(process.env as Record<string, string>, keywords, location_codes);
     const found = results.filter((r) => r.volume > 0).length;
     const tasks = (location_codes?.length ?? 1) * Math.ceil(keywords.length / 1000);
-    const estimatedCost = `$${(0.075 * tasks).toFixed(3)}`;
+    const estimatedCostNum = 0.075 * tasks;
+    const estimatedCost = `$${estimatedCostNum.toFixed(3)}`;
+
+    // Best-effort persist to keyword_lookups
+    if (audit_id) {
+      const sb = getSb();
+      if (sb) {
+        const batchId = crypto.randomUUID();
+        const rows = results.map((r: any) => ({
+          audit_id,
+          batch_id: batchId,
+          keyword: r.keyword,
+          volume: r.volume,
+          cpc: r.cpc,
+          competition: r.competition,
+          competition_level: r.competition_level,
+          looked_up_by: user_id || null,
+          estimated_cost: estimatedCostNum,
+        }));
+        try {
+          const { error: insertErr } = await sb.from('keyword_lookups').upsert(rows, { onConflict: 'audit_id,batch_id,keyword' });
+          if (insertErr) {
+            console.warn(`keyword_lookups insert failed: ${insertErr.message}`);
+          } else {
+            console.log(`keyword_lookups: persisted ${rows.length} rows (batch ${batchId})`);
+          }
+        } catch (persistErr: any) {
+          console.warn(`keyword_lookups persist error: ${persistErr.message}`);
+        }
+      }
+    }
 
     json(res, 200, { results, total: results.length, found, estimated_cost: estimatedCost });
   } catch (err: any) {
