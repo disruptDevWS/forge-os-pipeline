@@ -803,6 +803,14 @@ AI platform mention tracking runs independently of the audit pipeline — monthl
 
 **RLS:** Both tables: SELECT for audit owners (`audits.user_id = auth.uid()`). INSERT/UPDATE/DELETE restricted to service_role.
 
+### AI Visibility Analysis / Jim Section 11 Overlap
+
+Jim (Phase 3) writes `llm_visibility_snapshots` during the pipeline run via `syncJim()`. The standalone AI Visibility Analysis (`/ai-visibility-analysis` → `ai-visibility-analysis.ts`) also writes to the same table.
+
+**Dedup behavior:** When AI Visibility Analysis runs, it checks `llm_visibility_snapshots` for entries matching this audit + today's date. If Jim data already exists (same-day pipeline run), it reuses that data instead of making redundant DataForSEO calls. The Sonnet synthesis (structural gaps + recommendations) still runs since that's the standalone-specific output Jim does not produce. The `agent_runs` metadata includes `jim_data_reused: true` when dedup applies.
+
+**Cost implication:** Running AI Visibility Analysis after a full pipeline costs only the Sonnet synthesis (~$0.03) instead of the full DataForSEO + synthesis cost (~$0.30-0.50).
+
 ---
 
 ## Re-Canonicalize (On-Demand)

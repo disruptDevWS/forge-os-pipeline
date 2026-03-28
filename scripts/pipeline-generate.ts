@@ -1856,7 +1856,13 @@ ${semanticSummary.rows}`;
     if (archDirective) parts.push(`## Architecture Directive\n${archDirective}`);
     if (riskFlags) parts.push(`## Risk Flags\n${riskFlags}`);
     if (parts.length > 0) {
-      michaelStrategyBlock = `## Strategy Brief (Phase 1b — strategic framing for this audit)\nThe following directives were produced by synthesizing the client profile, Scout data, and technical audit. Your architecture MUST align with these directives and address all BLOCKING risk flags.\n\n${parts.join('\n\n')}`;
+      michaelStrategyBlock = `## Strategy Brief (Phase 1b — pre-validated strategic framing)
+
+The following directives were produced by synthesizing the client profile, Scout data, and technical audit. They have been QA-validated.
+
+CRITICAL INSTRUCTION: The Architecture Directive below is pre-validated. Build on it — do not re-derive the competitive positioning or structural gaps it describes. Your silo structure must implement the requirements listed in the Architecture Directive. The Risk Flags section contains issues you must address — do not independently re-analyze the same technical findings.
+
+${parts.join('\n\n')}`;
       console.log(`  Strategy brief: loaded for Michael (${michaelStrategyBlock.length} chars)`);
     }
   }

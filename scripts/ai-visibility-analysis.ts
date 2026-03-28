@@ -420,26 +420,64 @@ export async function runAiVisibilityAnalysis(
     console.log(`  Generated ${keywords.length} queries (source: client context + Haiku)`);
   }
 
-  // 4. Fetch domain mentions
-  console.log('  Fetching domain mentions...');
-  const domainResult = await fetchDomainMentions(env, request.domain, keywords);
-  console.log(`  Domain mentions: ${domainResult.mentions.length} records ($${domainResult.cost.toFixed(4)})`);
+  // 3b. Dedup check — skip DataForSEO if Jim already wrote snapshots today
+  const { data: existingSnapshots } = await (sb as any)
+    .from('llm_visibility_snapshots')
+    .select('keyword, platform, mention_count, ai_search_volume, top_citation_domains')
+    .eq('audit_id', request.audit_id)
+    .eq('snapshot_date', snapshotDate)
+    .eq('domain', request.domain);
 
-  // 5. Fetch AI keyword volumes
-  console.log('  Fetching AI keyword volumes...');
-  const volumeResult = await fetchAiKeywordVolumes(env, keywords);
-  console.log(`  AI volumes: ${volumeResult.volumes.length} results ($${volumeResult.cost.toFixed(4)})`);
-
-  // 6. Fetch competitor mentions
-  const competitors = (request.competitor_domains ?? []).slice(0, 5);
+  const hasJimData = (existingSnapshots?.length ?? 0) > 0;
+  let domainResult: { mentions: LlmMention[]; cost: number };
+  let volumeResult: { volumes: AiKeywordVolume[]; cost: number };
   let competitorMentions: CompetitorMention[] = [];
   let competitorCost = 0;
-  if (competitors.length > 0) {
-    console.log(`  Fetching competitor mentions for ${competitors.length} domains...`);
-    const compResult = await fetchCompetitorMentions(env, competitors, keywords);
-    competitorMentions = compResult.mentions;
-    competitorCost = compResult.cost;
-    console.log(`  Competitor mentions: ${competitorMentions.length} records ($${competitorCost.toFixed(4)})`);
+  const competitors = (request.competitor_domains ?? []).slice(0, 5);
+
+  if (hasJimData) {
+    // Reuse existing snapshot data — skip DataForSEO calls
+    console.log(`  [dedup] Found ${existingSnapshots.length} existing snapshots for today — reusing Jim's data, skipping DataForSEO calls`);
+    const reusedMentions: LlmMention[] = existingSnapshots.map((s: any) => ({
+      keyword: s.keyword,
+      platform: s.platform,
+      mention_count: s.mention_count ?? 0,
+      ai_search_volume: s.ai_search_volume ?? 0,
+      citation_sources: s.top_citation_domains ?? [],
+      mention_texts: [],
+    }));
+    domainResult = { mentions: reusedMentions, cost: 0 };
+    volumeResult = { volumes: [], cost: 0 };
+    // Use ai_search_volume from existing snapshots
+    const volumesFromSnapshots: AiKeywordVolume[] = [];
+    const seenKw = new Set<string>();
+    for (const s of existingSnapshots as any[]) {
+      const key = (s.keyword ?? '').toLowerCase();
+      if (!seenKw.has(key)) {
+        seenKw.add(key);
+        volumesFromSnapshots.push({ keyword: s.keyword, ai_search_volume: s.ai_search_volume ?? null });
+      }
+    }
+    volumeResult = { volumes: volumesFromSnapshots, cost: 0 };
+  } else {
+    // 4. Fetch domain mentions
+    console.log('  Fetching domain mentions...');
+    domainResult = await fetchDomainMentions(env, request.domain, keywords);
+    console.log(`  Domain mentions: ${domainResult.mentions.length} records ($${domainResult.cost.toFixed(4)})`);
+
+    // 5. Fetch AI keyword volumes
+    console.log('  Fetching AI keyword volumes...');
+    volumeResult = await fetchAiKeywordVolumes(env, keywords);
+    console.log(`  AI volumes: ${volumeResult.volumes.length} results ($${volumeResult.cost.toFixed(4)})`);
+
+    // 6. Fetch competitor mentions
+    if (competitors.length > 0) {
+      console.log(`  Fetching competitor mentions for ${competitors.length} domains...`);
+      const compResult = await fetchCompetitorMentions(env, competitors, keywords);
+      competitorMentions = compResult.mentions;
+      competitorCost = compResult.cost;
+      console.log(`  Competitor mentions: ${competitorMentions.length} records ($${competitorCost.toFixed(4)})`);
+    }
   }
 
   // 7. Merge per-keyword results
@@ -566,6 +604,7 @@ export async function runAiVisibilityAnalysis(
       keyword_count: keywords.length,
       competitor_count: competitors.length,
       total_cost: costs.total,
+      jim_data_reused: hasJimData,
     },
   });
 
