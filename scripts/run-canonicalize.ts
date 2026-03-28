@@ -168,10 +168,11 @@ async function main() {
     const pk = (p.primary_keyword ?? '').toLowerCase().trim();
     const ck = pkToCanonical.get(pk);
     if (ck) {
+      // BUG-1 fix: use normalized slug with .eq() instead of broken .or() syntax
       const slug = p.url_slug.replace(/^\/+/, '');
       await sb.from('execution_pages').update({ canonical_key: ck })
         .eq('audit_id', auditId)
-        .or(`url_slug.eq.${slug},url_slug.eq./${slug}`);
+        .eq('url_slug', slug);
       canonicalUpdated++;
     }
   }

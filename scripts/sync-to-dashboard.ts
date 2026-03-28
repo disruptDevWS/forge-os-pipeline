@@ -781,9 +781,23 @@ export async function rebuildClustersAndRollups(sb: SupabaseClient, auditId: str
     });
 
   if (clusterRecords.length > 0) {
+    // Batch insert with decomposition fallback (DATA-2)
     const { error } = await (sb as any).from('audit_clusters').insert(clusterRecords);
-    if (error) throw new Error(`cluster insert failed: ${error.message}`);
-    console.log(`  [${label}] Inserted ${clusterRecords.length} clusters`);
+    if (error) {
+      console.warn(`  [${label}] Batch cluster insert failed: ${error.message}. Falling back to row-by-row.`);
+      let clusterInserted = 0;
+      for (const rec of clusterRecords) {
+        const { error: rowErr } = await (sb as any).from('audit_clusters').insert(rec);
+        if (rowErr) {
+          console.warn(`  [${label}] Cluster insert failed for "${rec.canonical_key}": ${rowErr.message}`);
+        } else {
+          clusterInserted++;
+        }
+      }
+      console.log(`  [${label}] Inserted ${clusterInserted}/${clusterRecords.length} clusters (row-by-row fallback)`);
+    } else {
+      console.log(`  [${label}] Inserted ${clusterRecords.length} clusters`);
+    }
 
     // Restore activation status for clusters that survived the rebuild
     if (statusMap.size > 0) {
@@ -815,6 +829,22 @@ export async function rebuildClustersAndRollups(sb: SupabaseClient, auditId: str
       const lostKeys = [...activeClusterKeys].filter(
         (k) => !clusterRecords.some((r) => r.canonical_key === k),
       );
+
+      // DATA-4: Log orphaned activations for audit trail
+      if (lostKeys.length > 0) {
+        console.warn(`  [${label}] WARNING: ${lostKeys.length} active cluster(s) orphaned by rebuild: ${lostKeys.join(', ')}`);
+        await sb.from('agent_runs').insert({
+          audit_id: auditId,
+          agent_name: label,
+          run_date: new Date().toISOString().slice(0, 10),
+          status: 'completed',
+          metadata: {
+            warning: 'orphaned_cluster_activations',
+            orphaned_keys: lostKeys,
+            surviving_keys: survivingActiveKeys,
+          },
+        });
+      }
 
       // Re-activate pages for surviving active clusters
       for (const key of survivingActiveKeys) {
@@ -875,14 +905,12 @@ async function syncJim(
 ) {
   const dir = agentDir(domain, 'research', date);
   if (!dir) {
-    console.log('  [jim] No research directory found, skipping');
-    return null;
+    throw new Error('[jim] No research directory found — cannot sync keywords. Check that Phase 3 completed.');
   }
 
   const kwFile = path.join(dir, 'ranked_keywords.json');
   if (!fs.existsSync(kwFile)) {
-    console.log('  [jim] No ranked_keywords.json found, skipping');
-    return null;
+    throw new Error(`[jim] No ranked_keywords.json found in ${dir} — cannot sync keywords.`);
   }
 
   console.log(`  [jim] Parsing ${kwFile}`);
@@ -995,13 +1023,33 @@ async function syncJim(
   });
 
   if (allKeywordRecords.length > 0) {
-    // Batch insert (Supabase limit is ~1000 per call)
+    // Batch insert with decomposition fallback (DATA-2)
+    let totalInserted = 0;
+    let totalFailed = 0;
     for (let i = 0; i < allKeywordRecords.length; i += 500) {
       const batch = allKeywordRecords.slice(i, i + 500);
       const { error } = await sb.from('audit_keywords').insert(batch);
-      if (error) throw new Error(`keyword insert failed: ${error.message}`);
+      if (error) {
+        // Batch failed — fall back to row-by-row insert
+        console.warn(`  [jim] Batch insert failed (rows ${i}-${i + batch.length}): ${error.message}. Falling back to row-by-row.`);
+        for (const row of batch) {
+          const { error: rowErr } = await sb.from('audit_keywords').insert(row);
+          if (rowErr) {
+            totalFailed++;
+            console.warn(`  [jim] Row insert failed for "${row.keyword}": ${rowErr.message}`);
+          } else {
+            totalInserted++;
+          }
+        }
+      } else {
+        totalInserted += batch.length;
+      }
     }
-    console.log(`  [jim] Inserted ${allKeywordRecords.length} keywords (${nearMiss.length} near-miss)`);
+    if (totalFailed > 0) {
+      console.warn(`  [jim] Inserted ${totalInserted} keywords, ${totalFailed} failed (${nearMiss.length} near-miss)`);
+    } else {
+      console.log(`  [jim] Inserted ${totalInserted} keywords (${nearMiss.length} near-miss)`);
+    }
   }
 
   // Build clusters + rollups from keyword data
@@ -1541,14 +1589,12 @@ async function syncDwight(
 ) {
   const dir = agentDir(domain, 'auditor', date);
   if (!dir) {
-    console.log('  [dwight] No auditor directory found, skipping');
-    return null;
+    throw new Error('[dwight] No auditor directory found — cannot sync technical data. Check that Phase 1 completed.');
   }
 
   const csvFile = path.join(dir, 'internal_all.csv');
   if (!fs.existsSync(csvFile)) {
-    console.log('  [dwight] No internal_all.csv found, skipping');
-    return null;
+    throw new Error(`[dwight] No internal_all.csv found in ${dir} — cannot sync technical data.`);
   }
 
   console.log(`  [dwight] Parsing ${csvFile}`);
@@ -1883,14 +1929,12 @@ async function syncMichael(
 ) {
   const dir = agentDir(domain, 'architecture', date);
   if (!dir) {
-    console.log('  [michael] No architecture directory found, skipping');
-    return null;
+    throw new Error('[michael] No architecture directory found — cannot sync blueprint. Check that Phase 6 completed.');
   }
 
   const blueprintFile = path.join(dir, 'architecture_blueprint.md');
   if (!fs.existsSync(blueprintFile)) {
-    console.log('  [michael] No architecture_blueprint.md found, skipping');
-    return null;
+    throw new Error(`[michael] No architecture_blueprint.md found in ${dir} — cannot sync blueprint.`);
   }
 
   console.log(`  [michael] Parsing ${blueprintFile}`);
