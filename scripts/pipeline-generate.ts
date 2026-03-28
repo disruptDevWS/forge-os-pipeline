@@ -4875,6 +4875,17 @@ const QA_RUBRICS: Record<string, QARubric> = {
       { name: 'parseable_structure', weight: 'medium', description: 'Document follows expected markdown structure' },
     ],
   },
+  'strategy-brief': {
+    phase: 'strategy-brief',
+    artifactFilename: 'strategy_brief.md',
+    artifactSubdir: 'research',
+    checks: [
+      { name: 'all_sections_present', weight: 'critical', description: 'All 4 section headers present: Visibility Posture, Keyword Research Directive, Architecture Directive, Risk Flags' },
+      { name: 'section_depth', weight: 'high', description: 'Each section has 50+ words of substantive content' },
+      { name: 'no_preamble', weight: 'high', description: 'Output starts with a section header (## Visibility Posture), no conversational preamble' },
+      { name: 'risk_severity_labels', weight: 'medium', description: 'Risk Flags section uses severity labels: [BLOCKING], [WARNING], or [INFO]' },
+    ],
+  },
   michael: {
     phase: 'michael',
     artifactFilename: 'architecture_blueprint.md',
@@ -4907,6 +4918,68 @@ async function runDeterministicChecks(
   phase: string,
 ): Promise<Array<{ name: string; passed: boolean; feedback: string }>> {
   const failures: Array<{ name: string; passed: boolean; feedback: string }> = [];
+
+  if (phase === 'strategy-brief') {
+    // Strategy Brief: deterministic section header + depth checks
+    const briefDir = path.join(AUDITS_BASE, '..', 'audits');
+    // Resolve artifact via standard pattern
+    const baseDir = path.join(AUDITS_BASE, '', ''); // placeholder — actual path resolved in runQA
+    // We read the artifact here since we have access to domain via audit lookup
+    // Note: The full artifact is loaded later in runQA — here we need to get the audit's domain
+    // Since we only have auditId, query the audit to get domain
+    const { data: auditRow } = await sb
+      .from('audits')
+      .select('domain')
+      .eq('id', auditId)
+      .maybeSingle();
+    if (auditRow?.domain) {
+      const researchBase = path.join(AUDITS_BASE, auditRow.domain, 'research');
+      if (fs.existsSync(researchBase)) {
+        const dateDirs = fs.readdirSync(researchBase).filter((e: string) => /^\d{4}-\d{2}-\d{2}$/.test(e)).sort();
+        const latestDir = dateDirs.length > 0 ? path.join(researchBase, dateDirs[dateDirs.length - 1]) : null;
+        const briefPath = latestDir ? path.join(latestDir, 'strategy_brief.md') : null;
+        if (briefPath && fs.existsSync(briefPath)) {
+          const content = fs.readFileSync(briefPath, 'utf-8');
+          const requiredHeaders = ['Visibility Posture', 'Keyword Research Directive', 'Architecture Directive', 'Risk Flags'];
+          const missingHeaders = requiredHeaders.filter((h) => !content.includes(`## ${h}`));
+          if (missingHeaders.length > 0) {
+            failures.push({
+              name: 'section_headers_missing',
+              passed: false,
+              feedback: `Strategy brief missing section headers: ${missingHeaders.join(', ')}`,
+            });
+          }
+
+          // Check each section has 50+ words
+          for (const header of requiredHeaders) {
+            const headerIdx = content.indexOf(`## ${header}`);
+            if (headerIdx === -1) continue;
+            const afterHeader = content.slice(headerIdx + `## ${header}`.length);
+            const nextHeaderIdx = afterHeader.search(/\n## /);
+            const sectionText = nextHeaderIdx > 0 ? afterHeader.slice(0, nextHeaderIdx) : afterHeader;
+            const wordCount = sectionText.trim().split(/\s+/).filter(Boolean).length;
+            if (wordCount < 50) {
+              failures.push({
+                name: `section_depth_${header.toLowerCase().replace(/\s+/g, '_')}`,
+                passed: false,
+                feedback: `"${header}" section has only ${wordCount} words (minimum: 50)`,
+              });
+            }
+          }
+
+          // Check no conversational preamble
+          const firstLine = content.trim().split('\n')[0].trim();
+          if (!firstLine.startsWith('## ')) {
+            failures.push({
+              name: 'no_preamble',
+              passed: false,
+              feedback: `Strategy brief starts with "${firstLine.slice(0, 80)}" instead of a section header`,
+            });
+          }
+        }
+      }
+    }
+  }
 
   if (phase === 'jim') {
     // Phase 2 QA: fail if 0 validated keywords were seeded

@@ -844,13 +844,26 @@ function parseOutput(output: string) {
   const schemaMatch = output.match(/---SCHEMA_START---\n([\s\S]*?)\n---SCHEMA_END---/);
   const outlineMatch = output.match(/---OUTLINE_START---\n([\s\S]*?)\n---OUTLINE_END---/);
 
-  if (!metadataMatch || !schemaMatch || !outlineMatch) {
-    throw new Error('Missing sentinel-delimited sections in Claude output');
+  const missingSections: string[] = [];
+  if (!metadataMatch) missingSections.push('METADATA');
+  if (!schemaMatch) missingSections.push('SCHEMA');
+  if (!outlineMatch) missingSections.push('OUTLINE');
+  if (missingSections.length > 0) {
+    throw new Error(`Missing sentinel-delimited sections in Claude output: ${missingSections.join(', ')}. Output starts with: ${output.slice(0, 200)}`);
   }
 
   const metadataMd = metadataMatch[1].trim();
   const schemaRaw = schemaMatch[1].trim();
   const outlineMd = outlineMatch[1].trim();
+
+  // Validate sections are non-empty
+  const emptySections: string[] = [];
+  if (metadataMd.length < 20) emptySections.push(`METADATA (${metadataMd.length} chars)`);
+  if (schemaRaw.length < 20) emptySections.push(`SCHEMA (${schemaRaw.length} chars)`);
+  if (outlineMd.length < 50) emptySections.push(`OUTLINE (${outlineMd.length} chars)`);
+  if (emptySections.length > 0) {
+    throw new Error(`Brief sections too short or empty: ${emptySections.join(', ')}`);
+  }
 
   // Parse schema JSON — handle markdown fences if present
   let schemaJson: any = null;
@@ -920,7 +933,7 @@ async function upsertExecutionPage(
     .from('execution_pages')
     .select('id, status')
     .eq('audit_id', auditId)
-    .or(`url_slug.eq.${normalizedSlug},url_slug.eq./${normalizedSlug}`)
+    .eq('url_slug', normalizedSlug)
     .maybeSingle();
 
   if (existing) {

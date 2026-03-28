@@ -190,6 +190,19 @@ if should_run_phase 1b; then
 echo ""
 echo "--- Phase 1b: Strategy Brief ---"
 npx tsx scripts/strategy-brief.ts --domain "$DOMAIN" --user-email "$EMAIL" --force
+
+# QA gate: Strategy Brief
+echo "--- QA: Strategy Brief ---"
+QA_RESULT=$(npx tsx scripts/pipeline-generate.ts qa --domain "$DOMAIN" --user-email "$EMAIL" --phase strategy-brief 2>&1) || {
+  echo "  QA ENHANCE for Strategy Brief — re-running..."
+  npx tsx scripts/strategy-brief.ts --domain "$DOMAIN" --user-email "$EMAIL" --force
+  npx tsx scripts/pipeline-generate.ts qa --domain "$DOMAIN" --user-email "$EMAIL" --phase strategy-brief || {
+    echo "  QA FAILED for Strategy Brief after retry — halting (upstream-critical)"
+    update_status failed
+    exit 1
+  }
+}
+echo "  QA PASSED: Strategy Brief"
 else echo "  [SKIP] Phase 1b: Strategy Brief"; fi
 
 # ─── Review Gate (opt-in pause after Phase 1b) ──────────────

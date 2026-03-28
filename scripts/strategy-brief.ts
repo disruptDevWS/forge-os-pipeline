@@ -455,12 +455,19 @@ async function runStrategyBrief(cliArgs: CliArgs) {
 
   const result = await callClaude(prompt, { model: 'sonnet', phase: 'strategy-brief', maxTokens: 8192 });
 
-  // 5. Write to disk
+  // 5. Validate section headers (warning-level — QA gate enforces)
+  const requiredHeaders = ['Visibility Posture', 'Keyword Research Directive', 'Architecture Directive', 'Risk Flags'];
+  const missingHeaders = requiredHeaders.filter((h) => !result.includes(`## ${h}`));
+  if (missingHeaders.length > 0) {
+    console.warn(`  WARNING: Strategy brief missing sections: ${missingHeaders.join(', ')}`);
+  }
+
+  // 6. Write to disk
   fs.mkdirSync(outDir, { recursive: true });
   fs.writeFileSync(outPath, result, 'utf-8');
   console.log(`  Written strategy_brief.md (${result.length} chars) to ${path.relative(process.cwd(), outDir)}/`);
 
-  // 6. Log agent_runs
+  // 7. Log agent_runs
   await sb.from('agent_runs').insert({
     audit_id: audit.id,
     agent_name: 'strategy_brief',
