@@ -359,6 +359,13 @@ echo "--- Phase 6d: Local Presence Diagnostic (GBP + Citations) ---"
 npx tsx scripts/local-presence.ts --domain "$DOMAIN" --user-email "$EMAIL" --force
 else echo "  [SKIP] Phase 6d: Local Presence"; fi
 
+# ─── Post-Pipeline: Client Intelligence Brief ─────────────────
+echo ""
+echo "--- Client Intelligence Brief ---"
+npx tsx scripts/generate-client-brief.ts --domain "$DOMAIN" --user-email "$EMAIL" || {
+  echo "  WARNING: Client brief generation failed (non-fatal)"
+}
+
 update_status complete
 
 # ─── Summary ──────────────────────────────────────────────────

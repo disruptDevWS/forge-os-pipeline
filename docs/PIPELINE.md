@@ -17,12 +17,13 @@ Trigger paths:
 - **Cluster activation:** Clusters page → `cluster-action` Edge Function → `/activate-cluster` → `generate-cluster-strategy.ts`
 - **Export audit:** Settings page → `export-audit` Edge Function → `/export-audit` → ZIP stream of all `audits/{domain}/` artifacts
 - **Prospect brief:** Auto after Scout (prospect mode) or on-demand → `pipeline-controls` Edge Function → `/generate-prospect-brief` → `generate-prospect-brief.ts`
+- **Client brief:** Auto after Phase 6d (full/sales pipeline) or on-demand → `pipeline-controls` Edge Function → `/generate-client-brief` → `generate-client-brief.ts`
 
 Edge Functions (deployed from [Lovable repo](https://github.com/disruptDevWS/market-position-audit-lovable)):
 - `run-audit` — validates audit, marks `running`, POSTs to `/trigger-pipeline`
 - `scout-config` — writes prospect config to disk, triggers scout, reads reports via `/scout-report` (auth: `validateSuperAdmin` + `has_role`)
 - `cluster-action` — proxies `/activate-cluster` and `/deactivate-cluster` (auth: `resolveAuthContext` + ownership check)
-- `pipeline-controls` — proxies `/recanonicalize`, `/track-rankings`, `/track-llm-mentions`, `/ai-visibility-analysis`, `/lookup-keywords`, and `/generate-prospect-brief` (auth: `validateSuperAdmin` + `has_role`)
+- `pipeline-controls` — proxies `/recanonicalize`, `/track-rankings`, `/track-llm-mentions`, `/ai-visibility-analysis`, `/lookup-keywords`, `/generate-prospect-brief`, and `/generate-client-brief` (auth: `validateSuperAdmin` + `has_role`)
 - `export-audit` — streams ZIP of all pipeline artifacts for a domain (auth: `validateSuperAdmin` + `has_role`)
 
 Core scripts:
@@ -167,6 +168,14 @@ Phase 6d (Local Presence)
              client_profiles (canonical NAP fallback)
   PRODUCES:  Supabase → gbp_snapshots, citation_snapshots (11 directories)
   EXTERNAL:  DataForSEO Business Data (GBP lookup), DataForSEO SERP (citation scan)
+      │
+      ▼
+Client Brief (auto after Phase 6d, non-fatal)
+  READS:     AUDIT_REPORT.md, research_summary.md, architecture_blueprint.md,
+             strategy_brief.md (disk) + Supabase ← audit_rollups, audit_clusters,
+             gbp_snapshots, citation_snapshots
+  PRODUCES:  reports/client_brief.html (Sonnet narrative + data tables)
+  SERVED:    /artifact endpoint (file=reports/client_brief.html)
 ```
 
 ---
@@ -225,6 +234,31 @@ Phase 6d (Local Presence)
 **Approach:** Structured sections (score cards, keyword tables, gap grids, topic coverage) are data-injected directly from scope.json. Three narrative sections (executive summary, opportunity analysis, next steps) generated via a single Sonnet call (~$0.06). Template uses the same CSS design system as the SMA/IMA static briefs (Oswald/Inter/JetBrains Mono, --bone/--charcoal/--orange vars).
 
 **Serving:** Via existing `/artifact` endpoint: `POST /artifact { domain, file: "reports/prospect_brief.html" }`. Accessible through the dashboard's existing artifact serving mechanism.
+
+### Client Intelligence Brief (auto after Phase 6d)
+
+**Script:** `scripts/generate-client-brief.ts` | **Model:** Claude Sonnet (narrative sections)
+
+**Invocation:** Runs automatically after Phase 6d completes in full/sales pipeline mode (non-fatal). Also available on-demand via `/generate-client-brief` endpoint or `pipeline-controls` edge function action `generate_client_brief`.
+
+**Reads (disk):**
+- `auditor/{date}/AUDIT_REPORT.md` — technical crawl findings
+- `research/{date}/research_summary.md` — keyword research narrative
+- `architecture/{date}/architecture_blueprint.md` — site architecture plan
+- `research/{date}/strategy_brief.md` — strategic framing
+
+**Reads (Supabase):**
+- `audit_rollups` — revenue model (total volume, weighted revenue, keyword count)
+- `audit_clusters` — top 15 clusters by weighted revenue (canonical_key, keyword_count, total_volume, weighted_revenue)
+- `gbp_snapshots` — GBP listing data (claimed status, rating, reviews, canonical NAP)
+- `citation_snapshots` — per-directory presence and NAP match status
+
+**Produces:**
+- `reports/client_brief.html` — Self-contained HTML intelligence brief (7 sections)
+
+**Approach:** Seven HTML sections: Executive Summary (score cards + Sonnet prose), Technical Health (Sonnet prose), Revenue Opportunity (3-tier revenue cards + cluster table + Sonnet prose), Topic Cluster Breakdown (data-injected table), Architecture Recommendations (Sonnet prose), Local Presence (GBP cards + citation grid + Sonnet prose), Next Steps (Sonnet prose). Single Sonnet call (~$0.06-0.10) for 6 narrative sections using sentinel-delimited output. Same CSS design system as prospect brief.
+
+**Serving:** Via existing `/artifact` endpoint: `POST /artifact { domain, file: "reports/client_brief.html" }`.
 
 ---
 

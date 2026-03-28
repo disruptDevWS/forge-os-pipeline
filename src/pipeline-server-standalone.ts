@@ -991,6 +991,86 @@ async function handleGenerateProspectBrief(req: http.IncomingMessage, res: http.
   json(res, 202, { status: 'brief_generation_started', domain, artifact: `reports/prospect_brief.html` });
 }
 
+async function handleGenerateClientBrief(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  if (!checkAuth(req, res)) return;
+
+  let payload: { domain?: string; email?: string };
+  try {
+    payload = JSON.parse(await readBody(req));
+  } catch {
+    json(res, 400, { error: 'Invalid JSON' });
+    return;
+  }
+
+  const { domain, email } = payload;
+  if (!domain || !email) {
+    json(res, 400, { error: 'domain and email are required' });
+    return;
+  }
+  if (!DOMAIN_RE.test(domain)) {
+    json(res, 400, { error: 'Invalid domain format' });
+    return;
+  }
+  if (!EMAIL_RE.test(email)) {
+    json(res, 400, { error: 'Invalid email format' });
+    return;
+  }
+
+  const briefKey = `client-brief:${domain}`;
+  if (inFlight.has(briefKey)) {
+    json(res, 409, { error: `Client brief already generating for ${domain}` });
+    return;
+  }
+
+  inFlight.add(briefKey);
+  console.log(`Client brief triggered: ${domain} (${email})`);
+
+  const child = spawn('npx', ['tsx', 'scripts/generate-client-brief.ts', '--domain', domain, '--user-email', email], {
+    detached: true,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    cwd: process.cwd(),
+  });
+  child.unref();
+
+  const logLines: string[] = [];
+  const collect = (stream: NodeJS.ReadableStream | null, prefix: string) => {
+    if (!stream) return;
+    let buf = '';
+    stream.on('data', (chunk: Buffer) => {
+      buf += chunk.toString();
+      const lines = buf.split('\n');
+      buf = lines.pop() || '';
+      for (const line of lines) {
+        console.log(`[client-brief:${domain}] ${prefix}: ${line}`);
+        logLines.push(`${prefix}: ${line}`);
+      }
+    });
+    stream.on('end', () => {
+      if (buf) {
+        console.log(`[client-brief:${domain}] ${prefix}: ${buf}`);
+        logLines.push(`${prefix}: ${buf}`);
+      }
+    });
+  };
+  collect(child.stdout, 'OUT');
+  collect(child.stderr, 'ERR');
+
+  child.on('close', (code) => {
+    inFlight.delete(briefKey);
+    console.log(`Client brief finished: ${domain} (exit ${code})`);
+    if (code !== 0) {
+      console.error(`Client brief failed: ${domain} — last 10 lines:\n${logLines.slice(-10).join('\n')}`);
+    }
+  });
+
+  child.on('error', (err) => {
+    inFlight.delete(briefKey);
+    console.error(`Client brief spawn error: ${domain}`, err);
+  });
+
+  json(res, 202, { status: 'brief_generation_started', domain, artifact: 'reports/client_brief.html' });
+}
+
 async function handleAiVisibilityAnalysis(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   if (!checkAuth(req, res)) return;
 
@@ -1156,6 +1236,8 @@ const server = http.createServer((req, res) => {
     handleAiVisibilityAnalysis(req, res);
   } else if (req.method === 'POST' && req.url === '/generate-prospect-brief') {
     handleGenerateProspectBrief(req, res);
+  } else if (req.method === 'POST' && req.url === '/generate-client-brief') {
+    handleGenerateClientBrief(req, res);
   } else {
     json(res, 404, { error: 'Not found' });
   }
