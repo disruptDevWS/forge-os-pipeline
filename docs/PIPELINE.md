@@ -16,12 +16,13 @@ Trigger paths:
 - **Re-run pipeline:** Settings page → `run-audit` Edge Function → `/trigger-pipeline` → `run-pipeline.sh`
 - **Cluster activation:** Clusters page → `cluster-action` Edge Function → `/activate-cluster` → `generate-cluster-strategy.ts`
 - **Export audit:** Settings page → `export-audit` Edge Function → `/export-audit` → ZIP stream of all `audits/{domain}/` artifacts
+- **Prospect brief:** Auto after Scout (prospect mode) or on-demand → `pipeline-controls` Edge Function → `/generate-prospect-brief` → `generate-prospect-brief.ts`
 
 Edge Functions (deployed from [Lovable repo](https://github.com/disruptDevWS/market-position-audit-lovable)):
 - `run-audit` — validates audit, marks `running`, POSTs to `/trigger-pipeline`
 - `scout-config` — writes prospect config to disk, triggers scout, reads reports via `/scout-report` (auth: `validateSuperAdmin` + `has_role`)
 - `cluster-action` — proxies `/activate-cluster` and `/deactivate-cluster` (auth: `resolveAuthContext` + ownership check)
-- `pipeline-controls` — proxies `/recanonicalize`, `/track-rankings`, `/track-llm-mentions`, `/ai-visibility-analysis`, and `/lookup-keywords` (auth: `validateSuperAdmin` + `has_role`)
+- `pipeline-controls` — proxies `/recanonicalize`, `/track-rankings`, `/track-llm-mentions`, `/ai-visibility-analysis`, `/lookup-keywords`, and `/generate-prospect-brief` (auth: `validateSuperAdmin` + `has_role`)
 - `export-audit` — streams ZIP of all pipeline artifacts for a domain (auth: `validateSuperAdmin` + `has_role`)
 
 Core scripts:
@@ -47,8 +48,14 @@ The `run-audit` Edge Function writes **nothing** to keyword/cluster/rollup table
 ```
 Phase 0 (Scout) ← prospect mode only, exits after completion
   READS:     prospect-config.json (local file)
-  PRODUCES:  scout-{domain}-{date}.md, scope.json
+  PRODUCES:  scout-{domain}-{date}.md, scope.json, prospect-narrative.md
              Supabase → prospects (upsert)
+      │
+      ▼
+Prospect Brief (auto after Scout, non-fatal)
+  READS:     scope.json, prospect-narrative.md, ranked_keywords.json
+  PRODUCES:  reports/prospect_brief.html (Sonnet narrative + data tables)
+  SERVED:    /artifact endpoint (file=reports/prospect_brief.html)
       │
       ▼ (exits — full pipeline runs separately after conversion)
 
@@ -200,6 +207,24 @@ Phase 6d (Local Presence)
 **Supabase writes:** `prospects` (INSERT or UPDATE status/scout_run_at/scout_output_path)
 
 **Important:** Scout exits after completion. The full pipeline (Phases 1–6c) runs separately after the prospect converts to a client.
+
+### Prospect Intelligence Brief (auto after Scout)
+
+**Script:** `scripts/generate-prospect-brief.ts` | **Model:** Claude Sonnet (narrative sections)
+
+**Invocation:** Runs automatically after Scout completes in prospect mode (non-fatal). Also available on-demand via `/generate-prospect-brief` endpoint or `pipeline-controls` edge function action `generate_prospect_brief`.
+
+**Reads:**
+- `scout/{date}/scope.json` — gap summary, topics, locales, opportunity volume
+- `scout/{date}/prospect-narrative.md` — existing narrative (optional, for tone reference)
+- `research/{date}/ranked_keywords.json` — current rankings (optional)
+
+**Produces:**
+- `reports/prospect_brief.html` — Self-contained HTML intelligence brief matching Forge Growth design system
+
+**Approach:** Structured sections (score cards, keyword tables, gap grids, topic coverage) are data-injected directly from scope.json. Three narrative sections (executive summary, opportunity analysis, next steps) generated via a single Sonnet call (~$0.06). Template uses the same CSS design system as the SMA/IMA static briefs (Oswald/Inter/JetBrains Mono, --bone/--charcoal/--orange vars).
+
+**Serving:** Via existing `/artifact` endpoint: `POST /artifact { domain, file: "reports/prospect_brief.html" }`. Accessible through the dashboard's existing artifact serving mechanism.
 
 ---
 

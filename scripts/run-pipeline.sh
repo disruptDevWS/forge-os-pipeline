@@ -140,6 +140,13 @@ if [[ "$MODE" = "prospect" ]]; then
   echo "--- Phase 0: Scout (Prospect Discovery) ---"
   npx tsx scripts/pipeline-generate.ts scout \
     --domain "$DOMAIN" --prospect-config "$PROSPECT_CONFIG"
+
+  echo ""
+  echo "--- Prospect Intelligence Brief ---"
+  npx tsx scripts/generate-prospect-brief.ts --domain "$DOMAIN" || {
+    echo "  WARNING: Prospect brief generation failed (non-fatal)"
+  }
+
   echo ""
   echo "=== Scout Complete ==="
   exit 0

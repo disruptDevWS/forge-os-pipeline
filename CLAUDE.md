@@ -160,6 +160,7 @@ Run commands directly — don't tell the user to run them.
 | `scripts/generate-content.ts` | Oscar: HTML content production from briefs |
 | `scripts/run-canonicalize.ts` | Standalone Phase 3c+3d runner (re-canonicalize from Settings page) |
 | `scripts/generate-cluster-strategy.ts` | Cluster activation: Opus strategy generation (on-demand, per-cluster) |
+| `scripts/generate-prospect-brief.ts` | Prospect brief: HTML intelligence brief from Scout data (Sonnet narrative + data injection) |
 | `scripts/local-presence.ts` | Phase 6d: GBP lookup + SERP citation scan → gbp_snapshots, citation_snapshots |
 | `scripts/dataforseo-business.ts` | DataForSEO client: GBP lookup + SERP citation scan |
 | `scripts/verify-dwight.ts` | Phase 1a: HTTP verification of Dwight findings (sitemap, schema, redirects) |

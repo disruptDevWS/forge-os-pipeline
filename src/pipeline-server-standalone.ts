@@ -915,6 +915,82 @@ async function handleLookupKeywords(req: http.IncomingMessage, res: http.ServerR
   }
 }
 
+async function handleGenerateProspectBrief(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  if (!checkAuth(req, res)) return;
+
+  let payload: { domain?: string };
+  try {
+    payload = JSON.parse(await readBody(req));
+  } catch {
+    json(res, 400, { error: 'Invalid JSON' });
+    return;
+  }
+
+  const { domain } = payload;
+  if (!domain) {
+    json(res, 400, { error: 'domain is required' });
+    return;
+  }
+  if (!DOMAIN_RE.test(domain)) {
+    json(res, 400, { error: 'Invalid domain format' });
+    return;
+  }
+
+  const briefKey = `prospect-brief:${domain}`;
+  if (inFlight.has(briefKey)) {
+    json(res, 409, { error: `Prospect brief already generating for ${domain}` });
+    return;
+  }
+
+  inFlight.add(briefKey);
+  console.log(`Prospect brief triggered: ${domain}`);
+
+  const child = spawn('npx', ['tsx', 'scripts/generate-prospect-brief.ts', '--domain', domain], {
+    detached: true,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    cwd: process.cwd(),
+  });
+  child.unref();
+
+  const logLines: string[] = [];
+  const collect = (stream: NodeJS.ReadableStream | null, prefix: string) => {
+    if (!stream) return;
+    let buf = '';
+    stream.on('data', (chunk: Buffer) => {
+      buf += chunk.toString();
+      const lines = buf.split('\n');
+      buf = lines.pop() || '';
+      for (const line of lines) {
+        console.log(`[prospect-brief:${domain}] ${prefix}: ${line}`);
+        logLines.push(`${prefix}: ${line}`);
+      }
+    });
+    stream.on('end', () => {
+      if (buf) {
+        console.log(`[prospect-brief:${domain}] ${prefix}: ${buf}`);
+        logLines.push(`${prefix}: ${buf}`);
+      }
+    });
+  };
+  collect(child.stdout, 'OUT');
+  collect(child.stderr, 'ERR');
+
+  child.on('close', (code) => {
+    inFlight.delete(briefKey);
+    console.log(`Prospect brief finished: ${domain} (exit ${code})`);
+    if (code !== 0) {
+      console.error(`Prospect brief failed: ${domain} — last 10 lines:\n${logLines.slice(-10).join('\n')}`);
+    }
+  });
+
+  child.on('error', (err) => {
+    inFlight.delete(briefKey);
+    console.error(`Prospect brief spawn error: ${domain}`, err);
+  });
+
+  json(res, 202, { status: 'brief_generation_started', domain, artifact: `reports/prospect_brief.html` });
+}
+
 async function handleAiVisibilityAnalysis(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   if (!checkAuth(req, res)) return;
 
@@ -1078,6 +1154,8 @@ const server = http.createServer((req, res) => {
     handleLookupKeywords(req, res);
   } else if (req.method === 'POST' && req.url === '/ai-visibility-analysis') {
     handleAiVisibilityAnalysis(req, res);
+  } else if (req.method === 'POST' && req.url === '/generate-prospect-brief') {
+    handleGenerateProspectBrief(req, res);
   } else {
     json(res, 404, { error: 'Not found' });
   }
