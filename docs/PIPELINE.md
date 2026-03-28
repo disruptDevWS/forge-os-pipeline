@@ -980,9 +980,11 @@ The pipeline server (`src/pipeline-server-standalone.ts`) is an HTTP server that
 
 Edge functions read `PIPELINE_BASE_URL` with fallback to `PIPELINE_TRIGGER_URL` (deprecated).
 
-### Public IP Considerations
+### Public IP Considerations (SEC-2 — Critical)
 
-The pipeline server currently runs on a residential ISP connection. Supabase Edge Functions reach it via public IP + port 3847 (forwarded through EERO router).
+> **Decision (v3.0 review):** Cloudflare Tunnel is the chosen remediation. Removes ISP dependency, provides stable hostname, zero infrastructure cost. Implement before scaling beyond current client volume.
+
+The pipeline server currently runs on a residential ISP connection. Supabase Edge Functions reach it via public IP + port 3847 (forwarded through EERO router). **Security risk:** Port 3847 is publicly accessible. The only protection is `TRIGGER_SECRET`. If the token leaks, all pipeline operations are exposed.
 
 **Known risk:** ISP may reassign the public IP on DHCP lease renewal or router reboot. If the pipeline stops triggering:
 

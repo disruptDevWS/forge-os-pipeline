@@ -177,14 +177,13 @@ async function main() {
   }
   console.log(`  Re-backfilled canonical_key for ${canonicalUpdated} of ${(pages ?? []).length} pages`);
 
-  // Log agent_runs entry
+  // Log agent_runs entry (DATA-5: fixed field names to match schema)
   await sb.from('agent_runs').insert({
     audit_id: auditId,
-    agent: 'recanonicalize',
+    agent_name: 'recanonicalize',
+    run_date: new Date().toISOString().slice(0, 10),
     status: 'completed',
-    started_at: new Date().toISOString(),
-    completed_at: new Date().toISOString(),
-    notes: `Re-canonicalized ${domain}: ${canonicalUpdated} pages updated`,
+    metadata: { notes: `Re-canonicalized ${domain}: ${canonicalUpdated} pages updated` },
   });
 
   console.log(`\nRe-canonicalize complete: ${domain}`);
