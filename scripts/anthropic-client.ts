@@ -73,6 +73,27 @@ export class TruncationError extends Error {
   }
 }
 
+// ── Retry helper (DATA-6) ────────────────────────────────────
+
+const RETRY_MAX_ATTEMPTS = 3;
+const RETRY_BASE_DELAY_MS = 1000;
+
+function isRetryable(error: unknown): boolean {
+  if (error instanceof Anthropic.APIError) {
+    // 429 = rate limited, 529 = overloaded, 5xx = server error
+    return error.status === 429 || error.status === 529 || (error.status >= 500 && error.status < 600);
+  }
+  // Network errors (fetch failures, timeouts)
+  if (error instanceof Error && (error.message.includes('ECONNRESET') || error.message.includes('fetch failed') || error.message.includes('ETIMEDOUT'))) {
+    return true;
+  }
+  return false;
+}
+
+async function sleepMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 // ── Core call function ────────────────────────────────────────
 
 export interface CallClaudeOptions {
@@ -85,7 +106,7 @@ export interface CallClaudeOptions {
 
 /**
  * Call Claude via the Anthropic SDK.
- * Drop-in replacement for both callClaude() and callClaudeAsync().
+ * Retries on 429/529/5xx with exponential backoff (1s, 4s, 16s).
  */
 export async function callClaude(
   prompt: string,
@@ -99,46 +120,62 @@ export async function callClaude(
     ?? PHASE_MAX_TOKENS[opts.phase ?? '']
     ?? PHASE_MAX_TOKENS.default;
   const timeoutMs = opts.timeoutMs ?? 600_000;
+  const phase = opts.phase ?? 'unknown';
 
   const client = getClient();
 
-  const response = await client.messages.create(
-    {
-      model,
-      max_tokens: maxTokens,
-      messages: [{ role: 'user', content: prompt }],
-    },
-    { timeout: timeoutMs },
-  );
-
-  // Extract text from response
-  const textBlocks = response.content.filter((b) => b.type === 'text');
-  const output = textBlocks.map((b) => b.text).join('\n').trim();
-
-  if (!output) {
-    throw new Error(
-      `Anthropic API returned empty response (model: ${model}, stop_reason: ${response.stop_reason})`,
-    );
-  }
-
-  if (output.startsWith('Error:')) {
-    throw new Error(`Anthropic API returned error: ${output.slice(0, 200)}`);
-  }
-
-  // Truncation detection
-  if (response.stop_reason === 'max_tokens') {
-    const phase = opts.phase ?? 'unknown';
-    const tail = output.slice(-100);
-    console.warn(`  [truncation] Phase "${phase}" hit max_tokens (${maxTokens}). Last 100 chars: …${tail}`);
-    if (opts.warnOnTruncation) {
-      throw new TruncationError(
-        `Phase "${phase}" output truncated at ${maxTokens} tokens`,
-        output,
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= RETRY_MAX_ATTEMPTS; attempt++) {
+    try {
+      const response = await client.messages.create(
+        {
+          model,
+          max_tokens: maxTokens,
+          messages: [{ role: 'user', content: prompt }],
+        },
+        { timeout: timeoutMs },
       );
+
+      // Extract text from response
+      const textBlocks = response.content.filter((b) => b.type === 'text');
+      const output = textBlocks.map((b) => b.text).join('\n').trim();
+
+      if (!output) {
+        throw new Error(
+          `Anthropic API returned empty response (model: ${model}, stop_reason: ${response.stop_reason})`,
+        );
+      }
+
+      if (output.startsWith('Error:')) {
+        throw new Error(`Anthropic API returned error: ${output.slice(0, 200)}`);
+      }
+
+      // Truncation detection
+      if (response.stop_reason === 'max_tokens') {
+        const tail = output.slice(-100);
+        console.warn(`  [truncation] Phase "${phase}" hit max_tokens (${maxTokens}). Last 100 chars: …${tail}`);
+        if (opts.warnOnTruncation) {
+          throw new TruncationError(
+            `Phase "${phase}" output truncated at ${maxTokens} tokens`,
+            output,
+          );
+        }
+      }
+
+      return output;
+    } catch (error) {
+      lastError = error;
+      if (attempt < RETRY_MAX_ATTEMPTS && isRetryable(error)) {
+        const delay = RETRY_BASE_DELAY_MS * Math.pow(4, attempt - 1); // 1s, 4s, 16s
+        const status = error instanceof Anthropic.APIError ? error.status : 'network';
+        console.warn(`  [retry] Phase "${phase}" attempt ${attempt}/${RETRY_MAX_ATTEMPTS} failed (${status}). Retrying in ${delay}ms...`);
+        await sleepMs(delay);
+        continue;
+      }
+      throw error;
     }
   }
-
-  return output;
+  throw lastError;
 }
 
 /**

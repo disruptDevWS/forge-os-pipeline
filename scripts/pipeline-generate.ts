@@ -196,7 +196,7 @@ function repairJSON(raw: string, arrayKey?: string): any {
     }
   }
 
-  throw new Error('JSON repair failed');
+  throw new Error(`JSON repair failed. Input starts with: ${raw.slice(0, 200)}… (length: ${raw.length})`);
 }
 
 /** Validate that an artifact file has real content (not an error message or empty). */

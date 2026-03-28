@@ -101,26 +101,52 @@ function getCompetitorBudget(env: Record<string, string>): number {
   return DEFAULT_COMPETITOR_BUDGET;
 }
 
+const RETRY_MAX = 3;
+const RETRY_BASE_MS = 1000;
+
 async function apiCall(
   endpoint: string,
   auth: string,
   body: any,
 ): Promise<any> {
   const url = `${DATAFORSEO_API}${endpoint}`;
-  const resp = await fetch(url, {
+  const init: RequestInit = {
     method: 'POST',
     headers: {
       Authorization: auth,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(body),
-  });
+  };
 
-  if (!resp.ok) {
-    const text = await resp.text().catch(() => '');
-    throw new Error(`DataForSEO ${endpoint} HTTP ${resp.status}: ${text.slice(0, 300)}`);
+  let lastError: Error | null = null;
+  for (let attempt = 1; attempt <= RETRY_MAX; attempt++) {
+    try {
+      const resp = await fetch(url, init);
+      if (resp.status >= 500 && attempt < RETRY_MAX) {
+        const delay = RETRY_BASE_MS * Math.pow(4, attempt - 1);
+        console.warn(`  [retry] DataForSEO ${endpoint} returned ${resp.status}. Retrying in ${delay}ms...`);
+        await new Promise((r) => setTimeout(r, delay));
+        continue;
+      }
+      if (!resp.ok) {
+        const text = await resp.text().catch(() => '');
+        throw new Error(`DataForSEO ${endpoint} HTTP ${resp.status}: ${text.slice(0, 300)}`);
+      }
+      return resp.json();
+    } catch (err: any) {
+      lastError = err;
+      const isNetwork = err.message?.includes('fetch failed') || err.message?.includes('ECONNRESET') || err.message?.includes('ETIMEDOUT');
+      if (isNetwork && attempt < RETRY_MAX) {
+        const delay = RETRY_BASE_MS * Math.pow(4, attempt - 1);
+        console.warn(`  [retry] DataForSEO ${endpoint} network error: ${err.message}. Retrying in ${delay}ms...`);
+        await new Promise((r) => setTimeout(r, delay));
+        continue;
+      }
+      throw err;
+    }
   }
-  return resp.json();
+  throw lastError!;
 }
 
 // ── Keyword & competitor selection ────────────────────────────

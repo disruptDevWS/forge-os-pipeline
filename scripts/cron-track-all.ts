@@ -115,6 +115,7 @@ async function main() {
   let tracked = 0;
   let skipped = 0;
   let failed = 0;
+  const failedDomains: string[] = [];
 
   for (let i = 0; i < audits.length; i++) {
     const audit = audits[i];
@@ -145,6 +146,7 @@ async function main() {
         console.log(`    ${lastLines}`);
       }
       failed++;
+      failedDomains.push(audit.domain);
     }
 
     // 30-second delay between domains to avoid DataForSEO rate limits
@@ -154,6 +156,23 @@ async function main() {
   }
 
   console.log(`\n=== Summary: ${tracked} tracked, ${skipped} skipped, ${failed} failed ===\n`);
+
+  // Log cron run to agent_runs for operational visibility
+  const runDate = new Date().toISOString().slice(0, 10);
+  const status = failed > 0 ? 'completed_with_errors' : 'completed';
+  await sb.from('agent_runs').insert({
+    audit_id: audits[0]?.id, // attach to first audit as anchor
+    agent_name: 'cron_track_all',
+    run_date: runDate,
+    status,
+    metadata: {
+      total_audits: audits.length,
+      tracked,
+      skipped,
+      failed,
+      failed_domains: failedDomains,
+    },
+  });
 }
 
 main().catch((err) => {

@@ -30,6 +30,7 @@ function getSb(): SupabaseClient | null {
   return sbClient;
 }
 
+const serverStartedAt = new Date().toISOString();
 const inFlight = new Set<string>();
 const DOMAIN_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -1013,10 +1014,36 @@ async function handleAiVisibilityAnalysis(req: http.IncomingMessage, res: http.S
 
 const server = http.createServer((req, res) => {
   if (req.method === 'GET' && req.url === '/health') {
+    // Disk usage for audits directory
+    let diskUsageMB: number | null = null;
+    let auditDomainCount: number | null = null;
+    try {
+      if (fs.existsSync(AUDITS_BASE)) {
+        const dirs = fs.readdirSync(AUDITS_BASE).filter((d) => !d.startsWith('.'));
+        auditDomainCount = dirs.length;
+        // Quick estimate: count files and sizes in top-level
+        let totalBytes = 0;
+        for (const d of dirs) {
+          const domainPath = path.join(AUDITS_BASE, d);
+          try {
+            const stat = fs.statSync(domainPath);
+            if (stat.isDirectory()) {
+              totalBytes += stat.size;
+            }
+          } catch { /* skip */ }
+        }
+        diskUsageMB = Math.round(totalBytes / 1024 / 1024);
+      }
+    } catch { /* non-fatal */ }
+
     json(res, 200, {
       status: 'ok',
       uptime: process.uptime(),
+      startedAt: serverStartedAt,
       inFlight: [...inFlight],
+      auditDomains: auditDomainCount,
+      diskUsageMB,
+      nodeVersion: process.version,
       envCheck: {
         ANTHROPIC_API_KEY: !!process.env.ANTHROPIC_API_KEY,
         ANTHROPIC_KEY: !!process.env.ANTHROPIC_KEY,

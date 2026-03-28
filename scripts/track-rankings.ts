@@ -129,6 +129,36 @@ async function resolveAudit(sb: SupabaseClient, domain: string, userEmail: strin
 }
 
 // ============================================================
+// Fetch with retry (DATA-6)
+// ============================================================
+
+async function fetchWithRetry(url: string, init: RequestInit, label: string, maxAttempts = 3): Promise<Response> {
+  let lastError: Error | null = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const resp = await fetch(url, init);
+      // Retry on 5xx server errors
+      if (resp.status >= 500 && attempt < maxAttempts) {
+        const delay = 1000 * Math.pow(4, attempt - 1);
+        console.warn(`  [retry] ${label} returned ${resp.status}. Retrying in ${delay}ms...`);
+        await new Promise((r) => setTimeout(r, delay));
+        continue;
+      }
+      return resp;
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      if (attempt < maxAttempts) {
+        const delay = 1000 * Math.pow(4, attempt - 1);
+        console.warn(`  [retry] ${label} network error: ${lastError.message}. Retrying in ${delay}ms...`);
+        await new Promise((r) => setTimeout(r, delay));
+        continue;
+      }
+    }
+  }
+  throw lastError ?? new Error(`${label} failed after ${maxAttempts} attempts`);
+}
+
+// ============================================================
 // DataForSEO: Fetch current rankings
 // ============================================================
 
@@ -154,11 +184,15 @@ async function fetchRankedKeywords(domain: string, env: Record<string, string>):
   }];
 
   console.log('  Fetching ranked keywords from DataForSEO...');
-  const resp = await fetch('https://api.dataforseo.com/v3/dataforseo_labs/google/ranked_keywords/live', {
-    method: 'POST',
-    headers: { Authorization: `Basic ${authString}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
+  const resp = await fetchWithRetry(
+    'https://api.dataforseo.com/v3/dataforseo_labs/google/ranked_keywords/live',
+    {
+      method: 'POST',
+      headers: { Authorization: `Basic ${authString}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+    'DataForSEO ranked_keywords',
+  );
 
   if (!resp.ok) throw new Error(`DataForSEO HTTP ${resp.status}: ${await resp.text()}`);
   const data = await resp.json();
