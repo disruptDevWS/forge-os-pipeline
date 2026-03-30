@@ -711,6 +711,14 @@ export async function rebuildClustersAndRollups(sb: SupabaseClient, auditId: str
   // Read tar_position from assumptions (default 5 for pre-migration audits)
   const tarPosition = (assumptions as any).tar_position ?? 5;
 
+  // If observed CR is enabled and available, override cr_used_mid for TAR calculation
+  const useObservedCr = (assumptions as any).use_observed_cr === true;
+  const observedCr = (assumptions as any).observed_cr;
+  if (useObservedCr && observedCr != null) {
+    console.log(`  [${label}] Using observed CR from GA4: ${(observedCr * 100).toFixed(4)}% (overriding cr_used_mid)`);
+    (assumptions as any).cr_used_mid = observedCr;
+  }
+
   // Preserve cluster activation + hidden status before delete
   const { data: existingStatuses } = await sb
     .from('audit_clusters')

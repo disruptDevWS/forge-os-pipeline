@@ -4,6 +4,36 @@ Non-obvious choices that would look wrong without context. Check here before "fi
 
 ---
 
+**2026-03-30: Service account auth over OAuth for GSC/GA4**
+
+Single operator model. The Forge Analytics service account (`fg-analytics@concise-vertex-490015-d0.iam.gserviceaccount.com`) already has read-only access to test clients' GSC + GA4 properties. This eliminates per-user OAuth flows, refresh token storage, and an OAuth callback edge function. `analytics_connections` stores only property IDs (not tokens). New clients require adding the SA as read-only user to their GSC/GA4 properties.
+
+---
+
+**2026-03-30: GSC as Phase 1c (not post-pipeline)**
+
+GSC data enriches Strategy Brief (1b), Jim (Phase 3), and Pam (OPTIMIZE). Running before Strategy Brief maximizes downstream value. Non-fatal — pipeline continues if no analytics_connections row exists or if GSC API fails. Positioned after Phase 1a (Verify Dwight) to keep technical crawl data fresh before GSC overlay.
+
+---
+
+**2026-03-30: GA4 extends track-rankings (not in pipeline)**
+
+GA4 behavioral data (sessions, engagement, conversions) only meaningful for published pages. `track-rankings.ts` already runs weekly for completed audits with published content — natural fit. GA4 fetch is non-fatal (step 9 in try/catch). Dynamic import to avoid loading google-auth when no GA4 connection.
+
+---
+
+**2026-03-30: Observed CR is opt-in, never auto-enabled**
+
+`audit_assumptions.use_observed_cr` defaults FALSE. `track-rankings.ts` writes `observed_cr` from GA4 data but never sets `use_observed_cr = true`. Operator must toggle manually via Settings page. Prevents surprise revenue projection changes when GA4 data first arrives.
+
+---
+
+**2026-03-30: Raw HTTP + JWT over googleapis package**
+
+Node.js built-in `crypto.sign()` handles RS256 JWT signing for Google service account auth. No `googleapis` npm dependency needed. GSC Search Analytics API and GA4 Data API are simple REST endpoints with straightforward request/response shapes. Keeps dependency footprint minimal.
+
+---
+
 **2026-03-30: Cluster Strategy Section 5 outputs structured JSON, not prose**
 
 Section 5 (AI & Search Optimization) was converted from markdown prose to structured JSON (`ai_targets[]` with `query`, `target_type`, `structural_pattern`, `applies_to_page`, `condition`, `rationale`). Rationale: Pam needs machine-readable targets to inject into per-page briefs — prose recommendations can't be filtered by page or mapped to specific structural patterns. The structured format lets Pam filter targets relevant to the current page (`applies_to_page` match or null for cluster-wide) and inject them as typed guidance for Oscar. The prose fallback (`ai_optimization_notes`) is preserved for backward compatibility and for rendering the full strategy document in the dashboard. `ai_optimization_targets` stored as JSONB on `cluster_strategy` (migration 010).

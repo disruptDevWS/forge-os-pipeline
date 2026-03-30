@@ -1071,6 +1071,89 @@ async function handleGenerateClientBrief(req: http.IncomingMessage, res: http.Se
   json(res, 202, { status: 'brief_generation_started', domain, artifact: 'reports/client_brief.html' });
 }
 
+async function handleTrackGsc(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  if (!checkAuth(req, res)) return;
+
+  let payload: { domain?: string; email?: string; force?: boolean };
+  try {
+    payload = JSON.parse(await readBody(req));
+  } catch {
+    json(res, 400, { error: 'Invalid JSON' });
+    return;
+  }
+
+  const { domain, email, force } = payload;
+  if (!domain || !email) {
+    json(res, 400, { error: 'domain and email are required' });
+    return;
+  }
+  if (!DOMAIN_RE.test(domain)) {
+    json(res, 400, { error: 'Invalid domain format' });
+    return;
+  }
+  if (!EMAIL_RE.test(email)) {
+    json(res, 400, { error: 'Invalid email format' });
+    return;
+  }
+
+  const trackKey = `gsc:${domain}`;
+  if (inFlight.has(trackKey)) {
+    json(res, 409, { error: `GSC tracking already running for ${domain}` });
+    return;
+  }
+
+  inFlight.add(trackKey);
+  console.log(`Track GSC triggered: ${domain} (${email})${force ? ' [force]' : ''}`);
+
+  const args = ['tsx', 'scripts/track-gsc.ts', '--domain', domain, '--user-email', email];
+  if (force) args.push('--force');
+
+  const child = spawn('npx', args, {
+    detached: true,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    cwd: process.cwd(),
+  });
+  child.unref();
+
+  const logLines: string[] = [];
+  const collect = (stream: NodeJS.ReadableStream | null, prefix: string) => {
+    if (!stream) return;
+    let buf = '';
+    stream.on('data', (chunk: Buffer) => {
+      buf += chunk.toString();
+      const lines = buf.split('\n');
+      buf = lines.pop() || '';
+      for (const line of lines) {
+        console.log(`[gsc:${domain}] ${prefix}: ${line}`);
+        logLines.push(`${prefix}: ${line}`);
+      }
+    });
+    stream.on('end', () => {
+      if (buf) {
+        console.log(`[gsc:${domain}] ${prefix}: ${buf}`);
+        logLines.push(`${prefix}: ${buf}`);
+      }
+    });
+  };
+  collect(child.stdout, 'OUT');
+  collect(child.stderr, 'ERR');
+
+  child.on('close', (code) => {
+    inFlight.delete(trackKey);
+    console.log(`Track GSC finished: ${domain} (exit ${code})`);
+    if (code !== 0) {
+      console.error(`Track GSC failed: ${domain} — last 10 lines:\n${logLines.slice(-10).join('\n')}`);
+    }
+  });
+
+  child.on('error', (err) => {
+    inFlight.delete(trackKey);
+    console.error(`Track GSC spawn error: ${domain}`, err);
+  });
+
+  json(res, 202, { status: 'gsc_tracking_started', domain });
+}
+
 async function handleAiVisibilityAnalysis(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   if (!checkAuth(req, res)) return;
 
@@ -1206,6 +1289,7 @@ const server = http.createServer((req, res) => {
         DATAFORSEO_LOGIN: !!process.env.DATAFORSEO_LOGIN,
         SUPABASE_URL: !!process.env.SUPABASE_URL,
         PIPELINE_TRIGGER_SECRET: !!process.env.PIPELINE_TRIGGER_SECRET,
+        GOOGLE_SERVICE_ACCOUNT_JSON: !!process.env.GOOGLE_SERVICE_ACCOUNT_JSON,
       },
     });
   } else if (req.method === 'POST' && req.url === '/trigger-pipeline') {
@@ -1228,6 +1312,8 @@ const server = http.createServer((req, res) => {
     handleStrategyBrief(req, res);
   } else if (req.method === 'POST' && req.url === '/export-audit') {
     handleExportAudit(req, res);
+  } else if (req.method === 'POST' && req.url === '/track-gsc') {
+    handleTrackGsc(req, res);
   } else if (req.method === 'POST' && req.url === '/track-llm-mentions') {
     handleTrackLlmMentions(req, res);
   } else if (req.method === 'POST' && req.url === '/lookup-keywords') {

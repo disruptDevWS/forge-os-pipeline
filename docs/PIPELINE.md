@@ -10,6 +10,7 @@ Trigger paths:
 - **Scout:** Dashboard Scout UI → `scout-config` Edge Function → Forge OS pipeline server (`/scout-config` + `/trigger-pipeline` with `--mode prospect`)
 - **Re-canonicalize:** Settings page → `pipeline-controls` Edge Function → `/recanonicalize` → `run-canonicalize.ts` (Phase 3c+3d only)
 - **Refresh rankings:** Settings page → `pipeline-controls` Edge Function → `/track-rankings` → `track-rankings.ts`
+- **Refresh GSC data:** Settings page → `pipeline-controls` Edge Function → `/track-gsc` → `track-gsc.ts`
 - **Track AI visibility:** Settings page → `pipeline-controls` Edge Function → `/track-llm-mentions` → `track-llm-mentions.ts`
 - **AI visibility analysis:** Settings page → `pipeline-controls` Edge Function → `/ai-visibility-analysis` → `ai-visibility-analysis.ts`
 - **Keyword lookup:** Keyword Lookup page → `pipeline-controls` Edge Function → `/lookup-keywords` → `lookupKeywordVolumes()` → `keyword_lookups` table
@@ -23,7 +24,7 @@ Edge Functions (deployed from [Lovable repo](https://github.com/disruptDevWS/mar
 - `run-audit` — validates audit, marks `running`, POSTs to `/trigger-pipeline`
 - `scout-config` — writes prospect config to disk, triggers scout, reads reports via `/scout-report` (auth: `validateSuperAdmin` + `has_role`)
 - `cluster-action` — proxies `/activate-cluster` and `/deactivate-cluster` (auth: `resolveAuthContext` + ownership check)
-- `pipeline-controls` — proxies `/recanonicalize`, `/track-rankings`, `/track-llm-mentions`, `/ai-visibility-analysis`, `/lookup-keywords`, `/generate-prospect-brief`, and `/generate-client-brief` (auth: `validateSuperAdmin` + `has_role`)
+- `pipeline-controls` — proxies `/recanonicalize`, `/track-rankings`, `/track-gsc`, `/track-llm-mentions`, `/ai-visibility-analysis`, `/lookup-keywords`, `/generate-prospect-brief`, and `/generate-client-brief` (auth: `validateSuperAdmin` + `has_role`)
 - `export-audit` — streams ZIP of all pipeline artifacts for a domain (auth: `validateSuperAdmin` + `has_role`)
 
 Core scripts:
@@ -76,6 +77,13 @@ Phase 1a (Verify Dwight)
   CHECKS:    Sitemap existence (HEAD), Schema presence (GET+parse), Redirect chain integrity (follow 3xx)
   PRODUCES:  verification_results.json (structured corrections map)
              Annotates AUDIT_REPORT.md with verification section
+      │
+      ▼
+Phase 1c (GSC Data Fetch)
+  READS:     Supabase ← analytics_connections (gsc_property_id)
+  EXTERNAL:  Google Search Console Search Analytics API (service account JWT)
+  PRODUCES:  Supabase → gsc_page_snapshots (per-URL clicks, impressions, CTR, position)
+             Disk → research/{date}/gsc_summary.json (top pages + aggregate stats)
       │
       ▼
 Phase 1b (Strategy Brief)
@@ -308,6 +316,32 @@ Client Brief (auto after Phase 6d, non-fatal)
 **Idempotency:** Skips if `AUDIT_REPORT.md` already contains the verification section header.
 
 **Cost:** $0 (HTTP only, no LLM calls). Runtime: ~2-5 seconds.
+
+---
+
+### Phase 1c: GSC Data Fetch
+
+**Script:** `scripts/fetch-gsc-data.ts` | **Model:** None (pure HTTP)
+
+**Purpose:** Fetches Google Search Console Search Analytics data for the audit domain. Provides real click/impression/CTR/position data per URL to enrich Strategy Brief (Phase 1b), Jim (Phase 3), and Pam (OPTIMIZE briefs).
+
+**Prerequisites:** `analytics_connections` row with `gsc_property_id` for the audit. If no connection exists, phase skips silently (non-fatal).
+
+**Steps:**
+1. Look up `analytics_connections` for the audit's `gsc_property_id`
+2. Authenticate via `fg-analytics@` service account (RS256 JWT signed with built-in Node.js crypto)
+3. Fetch Search Analytics data (last 90 days, per-URL aggregation)
+4. Write `gsc_page_snapshots` to Supabase (per-URL clicks, impressions, CTR, avg position)
+5. Write `gsc_summary.json` to disk for downstream phases
+
+**Downstream consumption:**
+- **Phase 1b (Strategy Brief):** GSC summary injected as real performance data
+- **Phase 3 (Jim):** GSC context block enriches research narrative
+- **Pam (OPTIMIZE):** Per-URL GSC data injected into brief for pages being optimized
+
+**Cost:** $0 (Google API, no per-call charges). Runtime: ~2-5 seconds.
+
+**Graceful degradation:** No `analytics_connections` row or no `gsc_property_id` → skip. API error → log warning, continue pipeline.
 
 ---
 

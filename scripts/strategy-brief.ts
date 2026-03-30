@@ -169,6 +169,7 @@ interface BriefInputs {
   marketGeos: any;
   serviceKey: string;
   domain: string;
+  gscSummary: string | null;
 }
 
 async function gatherInputs(sb: SupabaseClient, audit: any, domain: string): Promise<BriefInputs> {
@@ -236,6 +237,18 @@ async function gatherInputs(sb: SupabaseClient, audit: any, domain: string): Pro
     // Table may not exist
   }
 
+  // 6. GSC summary (optional — Phase 1c may not have run)
+  let gscSummary: string | null = null;
+  const gscSummaryPath = resolveArtifact(domain, 'research', 'gsc_summary.md');
+  if (gscSummaryPath) {
+    gscSummary = fs.readFileSync(gscSummaryPath, 'utf-8');
+    // Truncate to 8KB
+    if (gscSummary.length > 8_000) {
+      gscSummary = gscSummary.slice(0, 8_000) + '\n\n[... truncated to 8KB ...]';
+    }
+    console.log(`  gsc_summary.md: ${gscSummary.length} chars`);
+  }
+
   return {
     auditReport,
     scopeJson,
@@ -247,6 +260,7 @@ async function gatherInputs(sb: SupabaseClient, audit: any, domain: string): Pro
     marketGeos: audit.market_geos || {},
     serviceKey: audit.service_key || audit.custom_service_label || '',
     domain,
+    gscSummary,
   };
 }
 
@@ -299,6 +313,13 @@ function buildPrompt(inputs: BriefInputs): string {
   if (inputs.auditReport) {
     sections.push(`## Technical Audit (Dwight — AUDIT_REPORT.md)
 ${inputs.auditReport}`);
+  }
+
+  if (inputs.gscSummary) {
+    sections.push(`## Google Search Console Data (first-party, verified)
+${inputs.gscSummary}
+
+NOTE: GSC data is verified first-party search performance. Compare observed CTR against modeled CTR assumption. Where observed CTR is significantly below modeled CTR at equivalent positions, the priority is title/meta optimization, not ranking improvement.`);
   }
 
   if (inputs.scopeJson) {

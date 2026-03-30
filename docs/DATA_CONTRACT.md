@@ -2,7 +2,7 @@
 
 > **Purpose**: Authoritative map of every Supabase table, who writes it (pipeline), who reads it (dashboard), and which columns matter. Use this before adding columns, changing sync logic, or building new UI components.
 >
-> **Last updated**: 2026-03-27
+> **Last updated**: 2026-03-30
 
 ---
 
@@ -348,7 +348,81 @@ Written by `track-rankings.ts` for published execution pages.
 | `keywords_gained_p1_10` | |
 | `keywords_total` | |
 
+New GA4 behavioral columns (written by `track-rankings.ts` step 9):
+
+| Column | Notes |
+|--------|-------|
+| `organic_sessions` | GA4 organic sessions |
+| `organic_engagement_rate` | GA4 organic engagement rate |
+| `organic_cr` | GA4 organic conversion rate |
+| `organic_conversions` | GA4 organic key events/conversions |
+| `ga4_snapshot_date` | Date of GA4 data fetch |
+
 **Dashboard reads**: `usePagePerformance()` → PerformancePage (Published Page Performance)
+
+---
+
+### `analytics_connections`
+
+Stores GSC/GA4 property IDs per audit. Service account handles auth centrally.
+
+| Column | Writer | Notes |
+|--------|--------|-------|
+| `audit_id` | Manual insert | FK audits, UNIQUE |
+| `gsc_property_url` | Manual insert | e.g. `https://www.example.com/` |
+| `ga4_property_id` | Manual insert | e.g. `513955424` |
+| `last_gsc_sync_at` | Pipeline | Updated by fetch-gsc-data.ts |
+| `last_ga4_sync_at` | Pipeline | Updated by fetch-ga4-data.ts |
+| `status` | Manual | `active`, `disabled`, or `error` |
+
+**RLS**: service_role ALL + super_admin SELECT
+
+---
+
+### `gsc_page_snapshots`
+
+Written by `fetch-gsc-data.ts` (Phase 1c + track-gsc.ts weekly).
+
+| Column | Notes |
+|--------|-------|
+| `page_url` | Normalized path (e.g. `/services/hvac`) |
+| `snapshot_date` | |
+| `clicks`, `impressions`, `ctr`, `avg_position` | GSC metrics |
+| `top_queries` | JSONB array of top 5 queries per page |
+
+**Dashboard reads**: Deferred (Phase 4 dashboard UI)
+
+---
+
+### `ga4_page_snapshots`
+
+Written by `track-rankings.ts` step 9 (GA4 fetch).
+
+| Column | Notes |
+|--------|-------|
+| `page_url` | Normalized path |
+| `snapshot_date` | |
+| `total_sessions`, `total_conversions`, `total_revenue` | All-channel metrics |
+| `organic_sessions`, `organic_engaged_sessions` | Organic Search channel |
+| `organic_engagement_rate`, `organic_cr` | Derived rates |
+| `organic_conversions`, `organic_avg_session_dur` | Organic behavioral |
+
+**Dashboard reads**: Deferred (Phase 4 dashboard UI)
+
+---
+
+### `audit_assumptions` (new columns)
+
+New observed CR columns (written by `track-rankings.ts` step 9):
+
+| Column | Writer | Notes |
+|--------|--------|-------|
+| `observed_cr` | Pipeline | Computed from GA4 pages with 30+ organic sessions |
+| `observed_cr_source` | Pipeline | Always `'ga4'` |
+| `observed_cr_updated_at` | Pipeline | Timestamp |
+| `use_observed_cr` | Dashboard/manual | Boolean, defaults FALSE, never auto-enabled |
+
+When `use_observed_cr = true`, `sync-to-dashboard.ts` uses `observed_cr` as `cr_used_mid` in TAR calculation.
 
 ---
 
@@ -636,6 +710,7 @@ Server-side view computing position changes from `ranking_snapshots`.
 | `scout-config` | `get_share_report` | (Supabase-only, **no auth**) | `{token}` | `{prospect, markdown, scope, narrative}` |
 | `pipeline-controls` | `recanonicalize` | `/recanonicalize` | `{domain, email}` | `{ok}` |
 | `pipeline-controls` | `track_rankings` | `/track-rankings` | `{domain, email}` | `{ok}` |
+| `pipeline-controls` | `track_gsc` | `/track-gsc` | `{domain, email}` | `{ok}` |
 | `pipeline-controls` | `track_llm_mentions` | `/track-llm-mentions` | `{domain, email}` | `{ok}` |
 | `pipeline-controls` | `lookup_keywords` | `/lookup-keywords` | `{keywords[], location_codes?, audit_id?}` | `{results[], total, found, estimated_cost}` |
 | `pipeline-controls` | `ai_visibility_analysis` | `/ai-visibility-analysis` | `{domain, email, audit_id, keywords?, competitor_domains?}` | Full analysis result JSON |
@@ -673,6 +748,8 @@ These files live on the pipeline server disk and are NOT in Supabase. They feed 
 | `audits/{domain}/auditor/{date}/AUDIT_REPORT.md` | Dwight | Full technical audit |
 | `audits/{domain}/auditor/{date}/internal_all.csv` | Dwight | Crawl data (all internal URLs) |
 | `audits/{domain}/auditor/{date}/*.csv` | Dwight | Supplementary crawl exports |
+| `audits/{domain}/research/{date}/gsc_data.json` | Phase 1c | GSC page data + zero-click queries + date range |
+| `audits/{domain}/research/{date}/gsc_summary.md` | Phase 1c | GSC performance summary (markdown, injected into Strategy Brief) |
 | `audits/{domain}/research/{date}/strategy_brief.md` | Phase 1b | Strategic framing (4 sections) |
 | `audits/{domain}/research/{date}/keyword_research_matrix.json` | Phase 2 | Service × city × intent matrix |
 | `audits/{domain}/research/{date}/ranked_keywords.json` | Jim | DataForSEO ranked keywords (geo-qualified volumes when `geo_mode != 'national'`) |

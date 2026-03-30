@@ -93,7 +93,8 @@ Each pipeline phase (Dwight, Jim, Michael, etc.) is a **prompt template**, not a
 Phase 0  Scout           (prospect mode only, exits after + prospect-narrative.md)
 Phase 1  Dwight          Technical crawl + audit report
 Phase 1a Verify Dwight   HTTP checks: sitemap, schema, redirect integrity
-Phase 1b Strategy Brief  Synthesize Dwight + Scout + client profile → strategic framing
+Phase 1c GSC Data Fetch  Google Search Console data (non-fatal, requires analytics_connections)
+Phase 1b Strategy Brief  Synthesize Dwight + Scout + GSC + client profile → strategic framing
      ── Review Gate ──  (opt-in: if review_gate_enabled=true, pauses with awaiting_review)
 Phase 2  KeywordResearch Service × city × intent keyword matrix
 Phase 3  Jim             DataForSEO research + narrative
@@ -148,7 +149,7 @@ Run commands directly — don't tell the user to run them.
 
 | File | Purpose |
 |------|---------|
-| `src/pipeline-server-standalone.ts` | HTTP server: `/trigger-pipeline`, `/recanonicalize`, `/track-rankings`, `/activate-cluster`, `/deactivate-cluster`, `/scout-config`, `/scout-report`, `/artifact`, `/health` |
+| `src/pipeline-server-standalone.ts` | HTTP server: `/trigger-pipeline`, `/recanonicalize`, `/track-rankings`, `/track-gsc`, `/activate-cluster`, `/deactivate-cluster`, `/scout-config`, `/scout-report`, `/artifact`, `/health` |
 | `scripts/pipeline-generate.ts` | All phase runners: `runDwight()`, `runJim()`, `runMichael()`, `runCanonicalize()`, etc. + QA agent |
 | `scripts/sync-to-dashboard.ts` | Supabase sync: `syncJim()`, `syncMichael()`, `syncDwight()`, `rebuildClustersAndRollups()` (with cluster status preservation) |
 | `scripts/anthropic-client.ts` | Anthropic SDK wrapper — `callClaude()` / `callClaudeAsync()` for all Claude calls |
@@ -165,8 +166,12 @@ Run commands directly — don't tell the user to run them.
 | `scripts/local-presence.ts` | Phase 6d: GBP lookup + SERP citation scan → gbp_snapshots, citation_snapshots |
 | `scripts/dataforseo-business.ts` | DataForSEO client: GBP lookup + SERP citation scan |
 | `scripts/verify-dwight.ts` | Phase 1a: HTTP verification of Dwight findings (sitemap, schema, redirects) |
-| `scripts/strategy-brief.ts` | Phase 1b: synthesize Dwight + Scout + client profile → strategy_brief.md |
-| `scripts/track-rankings.ts` | Performance tracking: DataForSEO ranked_keywords snapshot + authority scoring |
+| `scripts/google-auth.ts` | Google service account auth: JWT signing, token cache, `getAnalyticsConnection()` |
+| `scripts/fetch-gsc-data.ts` | Phase 1c: GSC Search Analytics fetcher → gsc_data.json + gsc_summary.md + gsc_page_snapshots |
+| `scripts/fetch-ga4-data.ts` | GA4 Data API fetcher (library module, called from track-rankings) |
+| `scripts/track-gsc.ts` | Weekly GSC refresh (mirrors track-rankings pattern) |
+| `scripts/strategy-brief.ts` | Phase 1b: synthesize Dwight + Scout + GSC + client profile → strategy_brief.md |
+| `scripts/track-rankings.ts` | Performance tracking: DataForSEO ranked_keywords + GA4 behavioral data + authority scoring |
 | `scripts/backfill-authority-scores.ts` | Backfill authority scores for existing snapshots |
 | `scripts/cron-track-all.ts` | Batch runner: tracks all completed audits weekly |
 | `scripts/client-context.ts` | Shared utility: `loadClientContext()`, `buildClientContextPrompt()` |

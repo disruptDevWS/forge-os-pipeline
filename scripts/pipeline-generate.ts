@@ -1374,6 +1374,38 @@ All other formatting rules still apply.\n`
   const { context: jimClientCtx } = await loadClientContextAsync(domain, sb, auditId);
   const jimClientContextBlock = jimClientCtx ? `\n${buildClientContextPrompt(jimClientCtx, 'jim')}\n` : '';
 
+  // Load GSC data (Phase 1c, optional)
+  let gscBlock = '';
+  const gscDataPath = resolveArtifactPath(domain, 'research', 'gsc_data.json');
+  if (gscDataPath) {
+    try {
+      const gscRaw = JSON.parse(fs.readFileSync(gscDataPath, 'utf-8'));
+      const gscPages = (gscRaw.pages ?? []).slice(0, 20);
+      const zeroClick = (gscRaw.zeroClickQueries ?? []).slice(0, 10);
+      if (gscPages.length > 0) {
+        let gscTable = '## Google Search Console Data (first-party, verified)\n';
+        gscTable += `Data range: ${gscRaw.dateRange?.start ?? 'unknown'} to ${gscRaw.dateRange?.end ?? 'unknown'}\n\n`;
+        gscTable += '### Top Pages by Clicks\n';
+        gscTable += '| Page | Clicks | Impressions | CTR | Avg Position |\n|---|---|---|---|---|\n';
+        for (const p of gscPages) {
+          gscTable += `| ${p.page_url} | ${p.clicks} | ${p.impressions} | ${(p.ctr * 100).toFixed(2)}% | ${p.avg_position} |\n`;
+        }
+        if (zeroClick.length > 0) {
+          gscTable += '\n### Zero-Click Queries (high impressions, 0 clicks — title/meta optimization targets)\n';
+          gscTable += '| Query | Impressions | Avg Position |\n|---|---|---|\n';
+          for (const q of zeroClick) {
+            gscTable += `| ${q.query} | ${q.impressions} | ${q.position} |\n`;
+          }
+        }
+        gscTable += '\nNOTE: GSC data is verified first-party. When GSC and DataForSEO differ on position for the same URL, GSC is authoritative.\n';
+        gscBlock = gscTable;
+        console.log(`  GSC data injected: ${gscPages.length} pages, ${zeroClick.length} zero-click queries`);
+      }
+    } catch (err: any) {
+      console.log(`  Warning: Failed to parse gsc_data.json: ${err.message}`);
+    }
+  }
+
   const narrativePrompt = `You are Jim, The Scout — a foundational search intelligence analyst. You have full DataForSEO data for ${domain}.
 
 YOUR ENTIRE RESPONSE IS THE REPORT. Output ONLY the markdown content of research_summary.md — start with "# Research Summary" heading. Do NOT narrate, summarize what you did, or describe the file. Do NOT say "I'll write" or "Here's the report" or use backtick file paths. Just output the formatted report that Michael (The Architect) will use to plan the site's information architecture.
@@ -1393,7 +1425,7 @@ ${allUrls.join('\n')}
 - Total keywords tracked: ${totalKeywords}
 - Total competitors found: ${rawCompetitors.length}
 ${aiVisibilityBlock}
-
+${gscBlock}
 ## REQUIRED OUTPUT FORMAT — SECTION HEADINGS AND CONTENT RULES
 
 Every section heading in your output MUST use exactly this format: ## N. Section Name

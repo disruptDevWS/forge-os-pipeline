@@ -362,7 +362,106 @@ async function trackRankings(cliArgs: CliArgs) {
   // 8. Track published page performance
   await trackPublishedPages(sb, audit.id, snapshotDate);
 
-  // 9. Log agent_runs
+  // 9. GA4 behavioral data (non-fatal)
+  let ga4PageCount = 0;
+  try {
+    // Get published slugs
+    const { data: publishedPages } = await sb
+      .from('execution_pages')
+      .select('url_slug')
+      .eq('audit_id', audit.id)
+      .not('published_at', 'is', null);
+
+    const publishedSlugs = (publishedPages ?? []).map((p: any) => p.url_slug).filter(Boolean);
+
+    if (publishedSlugs.length > 0) {
+      // Set env vars for google-auth.ts (loadEnv already ran)
+      if (env.GOOGLE_SERVICE_ACCOUNT_JSON) {
+        process.env.GOOGLE_SERVICE_ACCOUNT_JSON = env.GOOGLE_SERVICE_ACCOUNT_JSON;
+      }
+      if (env.GOOGLE_APPLICATION_CREDENTIALS) {
+        process.env.GOOGLE_APPLICATION_CREDENTIALS = env.GOOGLE_APPLICATION_CREDENTIALS;
+      }
+
+      // Dynamic import to avoid loading when no GA4 connection
+      const { runGa4Fetch } = await import('./fetch-ga4-data.js');
+      const ga4Data = await runGa4Fetch(audit.id, publishedSlugs, sb);
+
+      if (ga4Data.length > 0) {
+        // Upsert ga4_page_snapshots
+        const ga4Records = ga4Data.map((p) => ({
+          audit_id: audit.id,
+          snapshot_date: snapshotDate,
+          page_url: p.page_url,
+          total_sessions: p.total_sessions,
+          total_conversions: p.total_conversions,
+          total_revenue: p.total_revenue,
+          organic_sessions: p.organic_sessions,
+          organic_engaged_sessions: p.organic_engaged_sessions,
+          organic_engagement_rate: p.organic_engagement_rate,
+          organic_conversions: p.organic_conversions,
+          organic_avg_session_dur: p.organic_avg_session_dur,
+          organic_cr: p.organic_cr,
+        }));
+
+        for (let i = 0; i < ga4Records.length; i += 500) {
+          const batch = ga4Records.slice(i, i + 500);
+          const { error: ga4Err } = await (sb as any)
+            .from('ga4_page_snapshots')
+            .upsert(batch, { onConflict: 'audit_id,snapshot_date,page_url' });
+          if (ga4Err) {
+            console.warn(`  [ga4] ga4_page_snapshots upsert failed: ${ga4Err.message}`);
+          }
+        }
+        console.log(`  [ga4] Upserted ${ga4Records.length} GA4 page snapshots`);
+        ga4PageCount = ga4Records.length;
+
+        // Update page_performance with GA4 behavioral columns
+        for (const p of ga4Data) {
+          const slug = p.page_url.replace(/^\/+/, '');
+          if (!slug) continue;
+          await (sb as any)
+            .from('page_performance')
+            .update({
+              organic_sessions: p.organic_sessions,
+              organic_engagement_rate: p.organic_engagement_rate,
+              organic_cr: p.organic_cr,
+              organic_conversions: p.organic_conversions,
+              ga4_snapshot_date: snapshotDate,
+            })
+            .eq('audit_id', audit.id)
+            .eq('url_slug', slug)
+            .eq('snapshot_date', snapshotDate);
+        }
+
+        // Compute observed CR from pages with 30+ organic sessions
+        const qualifiedPages = ga4Data.filter((p) => p.organic_sessions >= 30);
+        if (qualifiedPages.length >= 3) {
+          const totalSessions = qualifiedPages.reduce((s, p) => s + p.organic_sessions, 0);
+          const totalConversions = qualifiedPages.reduce((s, p) => s + p.organic_conversions, 0);
+          const observedCr = totalSessions > 0 ? totalConversions / totalSessions : 0;
+
+          await (sb as any)
+            .from('audit_assumptions')
+            .update({
+              observed_cr: Number(observedCr.toFixed(6)),
+              observed_cr_source: 'ga4',
+              observed_cr_updated_at: new Date().toISOString(),
+              // Never set use_observed_cr = true — operator must enable manually
+            })
+            .eq('audit_id', audit.id);
+
+          console.log(`  [ga4] Observed CR: ${(observedCr * 100).toFixed(4)}% (from ${qualifiedPages.length} pages, ${totalSessions} sessions)`);
+        } else {
+          console.log(`  [ga4] Insufficient data for observed CR (${qualifiedPages.length} pages with 30+ sessions, need 3+)`);
+        }
+      }
+    }
+  } catch (ga4Err: any) {
+    console.warn(`  [ga4] GA4 fetch failed (non-fatal): ${ga4Err.message}`);
+  }
+
+  // 10. Log agent_runs
   await sb.from('agent_runs').insert({
     audit_id: audit.id,
     agent_name: 'performance_tracker',
@@ -372,6 +471,7 @@ async function trackRankings(cliArgs: CliArgs) {
       keyword_count: snapshotRecords.length,
       dataforseo_total: totalCount,
       ranked_count: currentRankings.length,
+      ga4_page_count: ga4PageCount,
       snapshot_date: snapshotDate,
     },
   });

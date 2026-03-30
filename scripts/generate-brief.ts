@@ -540,6 +540,44 @@ async function gatherContext(sb: SupabaseClient, req: PamRequest) {
         }
         performanceContextSection += `\nIMPORTANT: The change specification for this OPTIMIZE page must prioritize striking distance keywords above all other changes. Content changes that do not address these specific ranking opportunities are lower priority.\n`;
       }
+
+      // GSC first-party data for this page (if available)
+      try {
+        const { data: gscSnap } = await (sb as any)
+          .from('gsc_page_snapshots')
+          .select('clicks, impressions, ctr, avg_position, top_queries, snapshot_date')
+          .eq('audit_id', req.audit_id)
+          .eq('page_url', `/${normalizedSlug}`)
+          .order('snapshot_date', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (gscSnap) {
+          performanceContextSection += `\n### GSC First-Party Data (${(gscSnap as any).snapshot_date})\n`;
+          performanceContextSection += `- Clicks: ${(gscSnap as any).clicks}\n`;
+          performanceContextSection += `- Impressions: ${(gscSnap as any).impressions}\n`;
+          performanceContextSection += `- CTR: ${((gscSnap as any).ctr * 100).toFixed(2)}%\n`;
+          performanceContextSection += `- Avg Position: ${(gscSnap as any).avg_position}\n`;
+          const topQueries = (gscSnap as any).top_queries ?? [];
+          if (topQueries.length > 0) {
+            performanceContextSection += `\n#### Top Queries for This Page\n`;
+            performanceContextSection += `| Query | Clicks | Impressions | CTR | Position |\n|---|---|---|---|---|\n`;
+            for (const q of topQueries) {
+              performanceContextSection += `| ${q.query} | ${q.clicks} | ${q.impressions} | ${(q.ctr * 100).toFixed(2)}% | ${q.position?.toFixed(1) ?? '-'} |\n`;
+            }
+          }
+          // Flag zero-click queries as table stakes
+          const zeroClickQueries = topQueries.filter((q: any) => q.impressions >= 10 && q.clicks === 0);
+          if (zeroClickQueries.length > 0) {
+            performanceContextSection += `\n**[TABLE STAKES]** These queries have impressions but zero clicks — title/meta optimization targets:\n`;
+            for (const q of zeroClickQueries) {
+              performanceContextSection += `- "${q.query}" (${q.impressions} impressions, pos ${q.position?.toFixed(1) ?? '-'})\n`;
+            }
+          }
+        }
+      } catch {
+        // GSC data is optional enrichment
+      }
     } catch {
       // Performance data is optional enrichment
     }

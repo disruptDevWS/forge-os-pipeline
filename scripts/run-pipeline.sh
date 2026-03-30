@@ -103,7 +103,7 @@ for i in "$@"; do
 done
 
 # Phase ordering for --start-from / --stop-after
-PHASE_ORDER=(1 1a 1b 2 3 3b 3c 3d 4 5 6 6.5 6b 6c 6d)
+PHASE_ORDER=(1 1a 1c 1b 2 3 3b 3c 3d 4 5 6 6.5 6b 6c 6d)
 should_run_phase() {
   local phase="$1"
   [[ -z "$START_FROM" && -z "$STOP_AFTER" ]] && return 0
@@ -191,6 +191,15 @@ echo ""
 echo "--- Phase 1a: Verify Dwight (HTTP checks) ---"
 npx tsx scripts/verify-dwight.ts --domain "$DOMAIN"
 else echo "  [SKIP] Phase 1a: Verify Dwight"; fi
+
+# ─── Phase 1c: GSC Data Fetch ─────────────────────────────────
+if should_run_phase 1c; then
+echo ""
+echo "--- Phase 1c: GSC Data Fetch ---"
+npx tsx scripts/fetch-gsc-data.ts --domain "$DOMAIN" --user-email "$EMAIL" || {
+  echo "  WARNING: GSC data fetch failed (non-fatal)"
+}
+else echo "  [SKIP] Phase 1c: GSC Data Fetch"; fi
 
 # ─── Phase 1b: Strategy Brief ────────────────────────────────
 if should_run_phase 1b; then
@@ -372,6 +381,7 @@ update_status complete
 echo ""
 echo "=== Pipeline Complete [mode=$MODE] ==="
 echo "  Phase 1:  Dwight   — DataForSEO OnPage crawl → AUDIT_REPORT.md [QA ✓]"
+echo "  Phase 1c: GSC      — Google Search Console data fetch (non-fatal)"
 echo "  Phase 2:  KWRes.   — Service × city × intent matrix → keyword_research_summary.md"
 echo "  Phase 3:  Jim      — DataForSEO ranked-keywords + competitors → research_summary.md [QA ✓]"
 echo "  Phase 3b: sync     — ranked_keywords.json → audit_keywords (preliminary clusters)"
