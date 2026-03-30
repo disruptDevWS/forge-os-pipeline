@@ -81,7 +81,7 @@ Phase 1a (Verify Dwight)
       ▼
 Phase 1c (GSC Data Fetch)
   READS:     Supabase ← analytics_connections (gsc_property_id)
-  EXTERNAL:  Google Search Console Search Analytics API (service account JWT)
+  EXTERNAL:  Google Search Console Search Analytics API (ADC + SA impersonation)
   PRODUCES:  Supabase → gsc_page_snapshots (per-URL clicks, impressions, CTR, position)
              Disk → research/{date}/gsc_summary.json (top pages + aggregate stats)
       │
@@ -329,7 +329,7 @@ Client Brief (auto after Phase 6d, non-fatal)
 
 **Steps:**
 1. Look up `analytics_connections` for the audit's `gsc_property_id`
-2. Authenticate via `fg-analytics@` service account (RS256 JWT signed with built-in Node.js crypto)
+2. Authenticate via ADC + impersonation of `fg-analytics@` service account (custom OAuth client → IAM generateAccessToken)
 3. Fetch Search Analytics data (last 90 days, per-URL aggregation)
 4. Write `gsc_page_snapshots` to Supabase (per-URL clicks, impressions, CTR, avg position)
 5. Write `gsc_summary.json` to disk for downstream phases
