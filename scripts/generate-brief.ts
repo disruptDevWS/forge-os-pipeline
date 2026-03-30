@@ -469,6 +469,24 @@ async function gatherContext(sb: SupabaseClient, req: PamRequest) {
       if (g.review_count) {
         gbpEntitySection += `- Reviews: ${g.review_count} (${g.rating} avg)\n`;
       }
+
+      // Auto-populate GBP listing URL from citation_snapshots (Phase 6d writes this)
+      try {
+        const { data: googleCitation } = await sb
+          .from('citation_snapshots')
+          .select('listing_url')
+          .eq('audit_id', req.audit_id)
+          .eq('directory_name', 'Google')
+          .order('snapshot_date', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if ((googleCitation as any)?.listing_url) {
+          gbpEntitySection += `- GBP URL: ${(googleCitation as any).listing_url}\n`;
+        }
+      } catch {
+        // citation_snapshots may not exist
+      }
+
       gbpEntitySection += `\nIMPORTANT: Use these values verbatim in the Organization schema @graph. These are the canonical NAP values — do not derive name/address/phone from client_profiles if these values exist. Consistency between schema and GBP listing is required for entity disambiguation.\n`;
     }
   } catch {
@@ -1019,7 +1037,7 @@ CONDITIONAL ENTITIES (add when appropriate):
 
 ENTITY AUTHORITY REQUIREMENTS:
 - If GBP Canonical Entity data is provided above, use those values verbatim for Organization name, address, and telephone. Do not substitute values from client_profiles if GBP data exists — GBP is the authoritative external identifier.
-- sameAs: Include on the Organization entity. Add all known external identifiers: Google Business Profile URL, LinkedIn company URL, state licensing or accreditation registry URL if applicable. Use [PLACEHOLDER: sameAs_gbp], [PLACEHOLDER: sameAs_linkedin], [PLACEHOLDER: sameAs_accreditation] for unknowns. Do not omit the sameAs property — placeholder every value rather than omitting it.
+- sameAs: Include on the Organization entity. Add all known external identifiers: Google Business Profile URL, LinkedIn company URL, state licensing or accreditation registry URL if applicable. If the GBP Canonical Entity section above includes a "GBP URL" value, use it directly as the first sameAs entry — do not placeholder it. Use [PLACEHOLDER: sameAs_linkedin], [PLACEHOLDER: sameAs_accreditation] for identifiers not provided above. Do not omit the sameAs property — placeholder unknown values rather than omitting them.
 - Specificity: Use the most specific Schema.org @type available. For vocational training programs, prefer EducationalOccupationalProgram over Service. For content pages about a program, prefer Course over Article. Generic types (Service, Article) are last resort.
 - Property saturation: Beyond @type, use relationship properties where they apply: teaches, occupationalCredentialAwarded, programPrerequisites for educational programs; hasPart, about, mentions for content pages; aggregateRating nested within the primary entity (never standalone).
 - Agentic callability: On transactional and commercial pages, include a potentialAction on the primary Service or EducationalOccupationalProgram entity:
