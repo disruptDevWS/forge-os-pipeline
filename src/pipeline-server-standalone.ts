@@ -1154,6 +1154,162 @@ async function handleTrackGsc(req: http.IncomingMessage, res: http.ServerRespons
   json(res, 202, { status: 'gsc_tracking_started', domain });
 }
 
+// ── Brief generation (Pam) ────────────────────────────────────────────
+
+async function handleGenerateBrief(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  if (!checkAuth(req, res)) return;
+
+  let payload: { domain?: string };
+  try {
+    payload = JSON.parse(await readBody(req));
+  } catch {
+    json(res, 400, { error: 'Invalid JSON' });
+    return;
+  }
+
+  const { domain } = payload;
+  if (!domain) {
+    json(res, 400, { error: 'domain is required' });
+    return;
+  }
+  if (!DOMAIN_RE.test(domain)) {
+    json(res, 400, { error: 'Invalid domain format' });
+    return;
+  }
+
+  const briefKey = `pam:${domain}`;
+  if (inFlight.has(briefKey)) {
+    json(res, 409, { error: `Brief generation already running for ${domain}` });
+    return;
+  }
+
+  inFlight.add(briefKey);
+  console.log(`Brief generation triggered: ${domain}`);
+
+  const child = spawn('npx', ['tsx', 'scripts/generate-brief.ts', '--domain', domain], {
+    detached: true,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    cwd: process.cwd(),
+  });
+  child.unref();
+
+  const logLines: string[] = [];
+  const collect = (stream: NodeJS.ReadableStream | null, prefix: string) => {
+    if (!stream) return;
+    let buf = '';
+    stream.on('data', (chunk: Buffer) => {
+      buf += chunk.toString();
+      const lines = buf.split('\n');
+      buf = lines.pop() || '';
+      for (const line of lines) {
+        console.log(`[pam:${domain}] ${prefix}: ${line}`);
+        logLines.push(`${prefix}: ${line}`);
+      }
+    });
+    stream.on('end', () => {
+      if (buf) {
+        console.log(`[pam:${domain}] ${prefix}: ${buf}`);
+        logLines.push(`${prefix}: ${buf}`);
+      }
+    });
+  };
+  collect(child.stdout, 'OUT');
+  collect(child.stderr, 'ERR');
+
+  child.on('close', (code) => {
+    inFlight.delete(briefKey);
+    console.log(`Brief generation finished: ${domain} (exit ${code})`);
+    if (code !== 0) {
+      console.error(`Brief generation failed: ${domain} — last 10 lines:\n${logLines.slice(-10).join('\n')}`);
+    }
+  });
+
+  child.on('error', (err) => {
+    inFlight.delete(briefKey);
+    console.error(`Brief generation spawn error: ${domain}`, err);
+  });
+
+  json(res, 202, { status: 'brief_generation_started', domain });
+}
+
+// ── Content generation (Oscar) ────────────────────────────────────────
+
+async function handleGenerateContent(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  if (!checkAuth(req, res)) return;
+
+  let payload: { domain?: string };
+  try {
+    payload = JSON.parse(await readBody(req));
+  } catch {
+    json(res, 400, { error: 'Invalid JSON' });
+    return;
+  }
+
+  const { domain } = payload;
+  if (!domain) {
+    json(res, 400, { error: 'domain is required' });
+    return;
+  }
+  if (!DOMAIN_RE.test(domain)) {
+    json(res, 400, { error: 'Invalid domain format' });
+    return;
+  }
+
+  const oscarKey = `oscar:${domain}`;
+  if (inFlight.has(oscarKey)) {
+    json(res, 409, { error: `Content generation already running for ${domain}` });
+    return;
+  }
+
+  inFlight.add(oscarKey);
+  console.log(`Content generation triggered: ${domain}`);
+
+  const child = spawn('npx', ['tsx', 'scripts/generate-content.ts', '--domain', domain], {
+    detached: true,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    cwd: process.cwd(),
+  });
+  child.unref();
+
+  const logLines: string[] = [];
+  const collect = (stream: NodeJS.ReadableStream | null, prefix: string) => {
+    if (!stream) return;
+    let buf = '';
+    stream.on('data', (chunk: Buffer) => {
+      buf += chunk.toString();
+      const lines = buf.split('\n');
+      buf = lines.pop() || '';
+      for (const line of lines) {
+        console.log(`[oscar:${domain}] ${prefix}: ${line}`);
+        logLines.push(`${prefix}: ${line}`);
+      }
+    });
+    stream.on('end', () => {
+      if (buf) {
+        console.log(`[oscar:${domain}] ${prefix}: ${buf}`);
+        logLines.push(`${prefix}: ${buf}`);
+      }
+    });
+  };
+  collect(child.stdout, 'OUT');
+  collect(child.stderr, 'ERR');
+
+  child.on('close', (code) => {
+    inFlight.delete(oscarKey);
+    console.log(`Content generation finished: ${domain} (exit ${code})`);
+    if (code !== 0) {
+      console.error(`Content generation failed: ${domain} — last 10 lines:\n${logLines.slice(-10).join('\n')}`);
+    }
+  });
+
+  child.on('error', (err) => {
+    inFlight.delete(oscarKey);
+    console.error(`Content generation spawn error: ${domain}`, err);
+  });
+
+  json(res, 202, { status: 'content_generation_started', domain });
+}
+
 async function handleAiVisibilityAnalysis(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   if (!checkAuth(req, res)) return;
 
@@ -1324,6 +1480,10 @@ const server = http.createServer((req, res) => {
     handleGenerateProspectBrief(req, res);
   } else if (req.method === 'POST' && req.url === '/generate-client-brief') {
     handleGenerateClientBrief(req, res);
+  } else if (req.method === 'POST' && req.url === '/generate-brief') {
+    handleGenerateBrief(req, res);
+  } else if (req.method === 'POST' && req.url === '/generate-content') {
+    handleGenerateContent(req, res);
   } else {
     json(res, 404, { error: 'Not found' });
   }
