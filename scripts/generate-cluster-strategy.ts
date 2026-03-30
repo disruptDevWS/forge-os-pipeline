@@ -403,13 +403,32 @@ Output as JSON:
 { "gaps": [{ "format": "faq_schema", "priority": "high|medium|low", "rationale": "why" }] }
 \`\`\`
 
-### 5. AI & Search Optimization Notes
-Specific recommendations for AI overview optimization, featured snippet targeting, and People Also Ask coverage for this cluster's keywords.
+### 5. AI & Search Optimization Targets
 
-Entity-based AI optimization priorities:
-- Which pages are strongest candidates for establishing the primary entity as a citable entity in AI platforms?
-- Which key_attributes from the entity map are absent from existing pages? Missing attributes reduce AI citation likelihood.
-- Are related entities adequately covered? AI platforms frequently answer comparison and adjacent queries — gaps in related entity coverage are AI visibility gaps.
+Identify the 3–5 highest-value AI/search optimization opportunities for this cluster.
+
+Output as JSON:
+\`\`\`json
+{
+  "ai_targets": [
+    {
+      "query": "the specific query to target",
+      "target_type": "ai_overview|featured_snippet|voice|paa",
+      "structural_pattern": "direct_answer|list|table|prose_elaboration",
+      "applies_to_page": "/url-slug or null if cluster-wide",
+      "condition": "why this query warrants this specific pattern — the intent signal that justifies the structural choice",
+      "rationale": "why this page/cluster should own this answer"
+    }
+  ]
+}
+\`\`\`
+
+Focus on queries where:
+- The cluster has topical authority signals (strong keyword positions or volume)
+- A specific structural pattern would create a clear retrieval advantage
+- The answer is verifiable, specific, and attributable to this business
+
+Do not produce generic optimization recommendations (e.g., "add FAQ schema"). Produce specific query targets with explicit structural justifications.
 
 ### 6. Production Sequence
 Ordered list of content to produce first for maximum impact.
@@ -417,8 +436,8 @@ Ordered list of content to produce first for maximum impact.
 ---
 
 IMPORTANT FORMATTING RULES:
-- Sections 0, 1, 3, and 4 MUST contain valid JSON blocks (fenced with \`\`\`json ... \`\`\`).
-- Sections 2, 5, and 6 are markdown prose.
+- Sections 0, 1, 3, 4, and 5 MUST contain valid JSON blocks (fenced with \`\`\`json ... \`\`\`).
+- Sections 2 and 6 are markdown prose.
 - Do not include any preamble before "### 0. Entity Map".
 
 REMINDER: Your response IS the cluster strategy document — start with "### 0. Entity Map". No preamble, no narration.`;
@@ -455,7 +474,17 @@ REMINDER: Your response IS the cluster strategy document — start with "### 0. 
   const recommendedPages = extractJsonBySection(result, /### 3\.\s*Recommended New Pages/i);
   const formatGaps = extractJsonBySection(result, /### 4\.\s*Format Gaps/i);
 
-  // Extract AI optimization notes (Section 5)
+  // Extract AI optimization targets (Section 5 — structured JSON)
+  let aiOptimizationTargets: any[] = [];
+  try {
+    const section5Json = extractJsonBySection(result, /### 5\.\s*AI.*?Optimization.*?Targets/i);
+    if (section5Json?.ai_targets && Array.isArray(section5Json.ai_targets)) {
+      aiOptimizationTargets = section5Json.ai_targets;
+    }
+  } catch (e) {
+    console.warn('[cluster-strategy] Could not parse Section 5 AI targets:', e);
+  }
+  // Fallback: extract prose for ai_optimization_notes (backward compat)
   const aiNotesMatch = result.match(/### 5\.\s*AI.*?Optimization.*?\n([\s\S]*?)(?=### 6\.|$)/i);
   const aiOptimizationNotes = aiNotesMatch ? aiNotesMatch[1].trim() : null;
 
@@ -469,9 +498,10 @@ REMINDER: Your response IS the cluster strategy document — start with "### 0. 
     buyer_stages: buyerStages,
     format_gaps: formatGaps,
     ai_optimization_notes: aiOptimizationNotes,
+    ai_optimization_targets: aiOptimizationTargets.length > 0 ? aiOptimizationTargets : null,
     entity_map: entityMap,
     generated_at: new Date().toISOString(),
-    model_used: 'opus',
+    model_used: 'claude-opus-4-6',
   }, { onConflict: 'audit_id,canonical_key' });
 
   if (stratErr) throw new Error(`cluster_strategy upsert failed: ${stratErr.message}`);

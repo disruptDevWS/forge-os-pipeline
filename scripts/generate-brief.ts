@@ -160,6 +160,7 @@ interface SiblingPage {
   page_brief: any;
   status: string;
   meta_title: string | null;
+  content_outline_markdown: string | null;
 }
 
 async function gatherContext(sb: SupabaseClient, req: PamRequest) {
@@ -211,7 +212,7 @@ async function gatherContext(sb: SupabaseClient, req: PamRequest) {
   if (siloName) {
     const { data } = await sb
       .from('execution_pages')
-      .select('url_slug, silo, page_brief, status, meta_title')
+      .select('url_slug, silo, page_brief, status, meta_title, content_outline_markdown')
       .eq('audit_id', req.audit_id)
       .eq('silo', siloName);
     siblings = (data ?? []) as SiblingPage[];
@@ -396,7 +397,177 @@ async function gatherContext(sb: SupabaseClient, req: PamRequest) {
   const buyerStage = (pageData as any)?.buyer_stage ?? null;
   const strategyRationale = (pageData as any)?.strategy_rationale ?? null;
 
-  return { auditMeta, brief, keywords, siblings, blueprintExcerpt, siloName, serpEnrichment, clientProfile, authorityGaps, formatGaps, marketContext, strategyContext, primaryEntityType, entityMap, buyerStage, strategyRationale };
+  // 11. Technical baseline from Dwight snapshot (agentic readiness + structured data issues)
+  let technicalBaselineSection = '';
+  try {
+    const { data: dwightSnapshot } = await sb
+      .from('audit_snapshots')
+      .select('agentic_readiness, structured_data_issues')
+      .eq('audit_id', req.audit_id)
+      .eq('agent_name', 'dwight')
+      .order('snapshot_version', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (dwightSnapshot) {
+      const agenticReadiness = (dwightSnapshot as any).agentic_readiness ?? [];
+      const structuredDataIssues = (dwightSnapshot as any).structured_data_issues ?? [];
+      if (agenticReadiness.length > 0 || structuredDataIssues.length > 0) {
+        technicalBaselineSection = `## Technical Baseline (from Dwight)\n`;
+        if (agenticReadiness.length > 0) {
+          technicalBaselineSection += `### Agentic Readiness Flags\n`;
+          technicalBaselineSection += agenticReadiness.map((r: any) => `- ${typeof r === 'string' ? r : JSON.stringify(r)}`).join('\n');
+          technicalBaselineSection += '\n';
+        }
+        if (structuredDataIssues.length > 0) {
+          technicalBaselineSection += `### Structured Data Issues\n`;
+          technicalBaselineSection += structuredDataIssues.map((r: any) => `- ${typeof r === 'string' ? r : JSON.stringify(r)}`).join('\n');
+          technicalBaselineSection += '\n';
+        }
+        technicalBaselineSection += `IMPORTANT: These are site-level technical findings. Schema you produce must work within these constraints. If structured data issues are present, produce schema that resolves or works around them — do not produce schema that assumes a clean baseline.\n`;
+      }
+    }
+  } catch {
+    // Dwight snapshot may not exist
+  }
+
+  // 12. AI citation gaps from Gap agent snapshot
+  let aiCitationGaps: any[] = [];
+  try {
+    // Reuse the gap snapshot data already fetched in step 8
+    const { data: gapSnapshotForCitations } = await sb
+      .from('audit_snapshots')
+      .select('keyword_overview')
+      .eq('audit_id', req.audit_id)
+      .eq('agent_name', 'gap')
+      .order('snapshot_version', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (gapSnapshotForCitations?.keyword_overview) {
+      aiCitationGaps = ((gapSnapshotForCitations.keyword_overview as any).ai_citation_gaps ?? []);
+    }
+  } catch {
+    // Gap snapshot may not exist
+  }
+
+  // 13. GBP canonical entity data
+  let gbpEntitySection = '';
+  try {
+    const { data: gbpSnapshot } = await sb
+      .from('gbp_snapshots')
+      .select('listing_found, is_claimed, review_count, rating, canonical_name, canonical_address, canonical_phone')
+      .eq('audit_id', req.audit_id)
+      .order('snapshot_date', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if ((gbpSnapshot as any)?.listing_found && (gbpSnapshot as any)?.canonical_name) {
+      const g = gbpSnapshot as any;
+      gbpEntitySection = `## GBP Canonical Entity (Authoritative — use for Organization schema)\n`;
+      gbpEntitySection += `- Canonical Name: ${g.canonical_name ?? '[PLACEHOLDER: business_name]'}\n`;
+      gbpEntitySection += `- Canonical Address: ${g.canonical_address ?? '[PLACEHOLDER: address]'}\n`;
+      gbpEntitySection += `- Canonical Phone: ${g.canonical_phone ?? '[PLACEHOLDER: phone]'}\n`;
+      gbpEntitySection += `- Claimed: ${g.is_claimed ? 'yes' : 'no'}\n`;
+      if (g.review_count) {
+        gbpEntitySection += `- Reviews: ${g.review_count} (${g.rating} avg)\n`;
+      }
+      gbpEntitySection += `\nIMPORTANT: Use these values verbatim in the Organization schema @graph. These are the canonical NAP values — do not derive name/address/phone from client_profiles if these values exist. Consistency between schema and GBP listing is required for entity disambiguation.\n`;
+    }
+  } catch {
+    // GBP snapshot may not exist
+  }
+
+  // 14. Sibling content coverage (avoid duplication)
+  let siblingCoverageSection = '';
+  const siblingsWithBriefs = siblings.filter(
+    (s) => s.content_outline_markdown && s.status !== 'not_started'
+  );
+  if (siblingsWithBriefs.length > 0) {
+    siblingCoverageSection = `## Sibling Content Coverage (existing briefs — avoid duplication)\n`;
+    siblingCoverageSection += `These sibling pages already have content briefs. Do not duplicate their coverage.\n\n`;
+    for (const sib of siblingsWithBriefs) {
+      const h2s = (sib.content_outline_markdown ?? '')
+        .split('\n')
+        .filter((line: string) => line.startsWith('## '))
+        .map((line: string) => line.replace('## ', '').trim())
+        .filter((h: string) => !h.toLowerCase().includes('outline') && !h.toLowerCase().includes('brief'))
+        .slice(0, 6);
+      if (h2s.length > 0) {
+        siblingCoverageSection += `**/${sib.url_slug}** (${(sib.page_brief as any)?.role ?? 'unknown'}):\n`;
+        siblingCoverageSection += h2s.map((h: string) => `  - ${h}`).join('\n') + '\n\n';
+      }
+    }
+    siblingCoverageSection += `This page's outline must cover DIFFERENT angles from the above. Note explicitly in the outline which topics you are NOT covering because a sibling already covers them, and where to cross-link instead.\n`;
+  }
+
+  // 15. Performance context (OPTIMIZE mode only)
+  let performanceContextSection = '';
+  const actionType = req.action_type || 'create';
+  if (actionType === 'optimize' && canonicalKey) {
+    try {
+      const { data: pagePerf } = await sb
+        .from('page_performance')
+        .select('current_avg_position, pre_publish_avg_position, keywords_gained_p1_10, keywords_total, published_at')
+        .eq('audit_id', req.audit_id)
+        .eq('url_slug', normalizedSlug)
+        .order('snapshot_date', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      const { data: rankingData } = await sb
+        .from('ranking_snapshots')
+        .select('keyword, position, search_volume, snapshot_date')
+        .eq('audit_id', req.audit_id)
+        .eq('canonical_key', canonicalKey)
+        .order('snapshot_date', { ascending: false })
+        .limit(30);
+
+      if (pagePerf || (rankingData && rankingData.length > 0)) {
+        performanceContextSection = `## Page Performance Context (OPTIMIZE — use to calibrate change scope)\n`;
+        if (pagePerf) {
+          const pp = pagePerf as any;
+          performanceContextSection += `- Current avg position: ${pp.current_avg_position ?? 'unknown'}\n`;
+          performanceContextSection += `- Pre-publish avg position: ${pp.pre_publish_avg_position ?? 'unknown'}\n`;
+          performanceContextSection += `- Keywords in P1-10: ${pp.keywords_gained_p1_10 ?? 0} of ${pp.keywords_total ?? 0}\n`;
+        }
+        if (rankingData && rankingData.length > 0) {
+          const strikingDistance = rankingData.filter((r: any) => r.position >= 11 && r.position <= 30);
+          if (strikingDistance.length > 0) {
+            performanceContextSection += `### Striking Distance Keywords (positions 11-30 — highest optimization priority)\n`;
+            performanceContextSection += `| Keyword | Position | Volume |\n|---------|----------|--------|\n`;
+            for (const kw of strikingDistance.slice(0, 10)) {
+              performanceContextSection += `| ${(kw as any).keyword} | ${(kw as any).position} | ${(kw as any).search_volume} |\n`;
+            }
+          }
+        }
+        performanceContextSection += `\nIMPORTANT: The change specification for this OPTIMIZE page must prioritize striking distance keywords above all other changes. Content changes that do not address these specific ranking opportunities are lower priority.\n`;
+      }
+    } catch {
+      // Performance data is optional enrichment
+    }
+  }
+
+  // 16. Cluster strategy AI optimization targets
+  let clusterAiTargets: any[] = [];
+  if (canonicalKey) {
+    try {
+      const { data: strategyRow2 } = await (sb as any)
+        .from('cluster_strategy')
+        .select('ai_optimization_targets')
+        .eq('audit_id', req.audit_id)
+        .eq('canonical_key', canonicalKey)
+        .maybeSingle();
+      const targets = (strategyRow2 as any)?.ai_optimization_targets ?? [];
+      if (Array.isArray(targets) && targets.length > 0) {
+        const slug = req.page_url.replace(/^\/+/, '');
+        clusterAiTargets = targets.filter(
+          (t: any) => !t.applies_to_page || t.applies_to_page === `/${slug}` || t.applies_to_page === null
+        );
+      }
+    } catch {
+      // Column may not exist yet
+    }
+  }
+
+  return { auditMeta, brief, keywords, siblings, blueprintExcerpt, siloName, serpEnrichment, clientProfile, authorityGaps, formatGaps, aiCitationGaps, marketContext, strategyContext, primaryEntityType, entityMap, buyerStage, strategyRationale, canonicalKey, technicalBaselineSection, gbpEntitySection, siblingCoverageSection, performanceContextSection, clusterAiTargets };
 }
 
 function escapeRegex(s: string): string {
@@ -650,7 +821,7 @@ function buildPrompt(
   req: PamRequest,
   ctx: Awaited<ReturnType<typeof gatherContext>>
 ): string {
-  const { auditMeta, brief, keywords, siblings, blueprintExcerpt, siloName, clientProfile, authorityGaps, formatGaps, marketContext, strategyContext, primaryEntityType, entityMap, buyerStage, strategyRationale } = ctx;
+  const { auditMeta, brief, keywords, siblings, blueprintExcerpt, siloName, clientProfile, authorityGaps, formatGaps, aiCitationGaps, marketContext, strategyContext, primaryEntityType, entityMap, buyerStage, strategyRationale, technicalBaselineSection, gbpEntitySection, siblingCoverageSection, performanceContextSection, clusterAiTargets } = ctx;
   const slug = req.page_url.replace(/^\/+/, '');
   const actionType = req.action_type || 'create';
   const pageRole = req.page_role ?? brief?.role ?? 'service page';
@@ -685,12 +856,40 @@ function buildPrompt(
   const market_city = auditMeta.market_city;
   const market_state = auditMeta.market_state;
 
+  // Build AI citation gaps section
+  let aiCitationGapsSection = '';
+  if (aiCitationGaps.length > 0) {
+    aiCitationGapsSection = `## AI Citation Gaps (from Gap Analysis)\n`;
+    aiCitationGapsSection += `These gaps represent topics where competitors are cited in AI answers and this domain is not.\n\n`;
+    aiCitationGapsSection += `| Topic | Gap Severity | Client Mentions | Competitor Mentions | Recommended Action |\n`;
+    aiCitationGapsSection += `|-------|-------------|-----------------|--------------------|-----------------|\n`;
+    for (const gap of aiCitationGaps) {
+      aiCitationGapsSection += `| ${gap.topic} | ${gap.gap_severity} | ${gap.client_mentions ?? 0} | ${gap.competitor_mentions ?? 0} | ${gap.recommended_action ?? ''} |\n`;
+    }
+    aiCitationGapsSection += `\nFor sections addressing these topics, label them [AI CITATION GAP] in the Required Content Coverage section of the outline. Oscar will apply direct-answer structure to these sections.\n`;
+  }
+
+  // Build cluster AI targets section
+  let clusterAiTargetsSection = '';
+  if (clusterAiTargets.length > 0) {
+    clusterAiTargetsSection = `## Cluster AI Optimization Targets (from Cluster Strategy — Opus)\n`;
+    clusterAiTargetsSection += `These targets were identified by the Cluster Strategy agent. Use them as the basis for the Agentic and Voice Search Targets section of this brief.\n\n`;
+    for (const target of clusterAiTargets) {
+      clusterAiTargetsSection += `**Query:** ${target.query}\n`;
+      clusterAiTargetsSection += `- Type: ${target.target_type}\n`;
+      clusterAiTargetsSection += `- Pattern: ${target.structural_pattern}\n`;
+      clusterAiTargetsSection += `- Condition: ${target.condition}\n`;
+      clusterAiTargetsSection += `- Rationale: ${target.rationale}\n\n`;
+    }
+  }
+
   return `You are Pam, The Synthesizer — a content engineering agent for Forge Growth.
 
 Your job is strategic content engineering. You are not producing a document template — you are making decisions about what this page needs to be, who it serves, how it builds topical authority, and what Oscar needs to know to write content that is genuinely useful to the reader and correctly optimized by construction.
 
 ## Action Type: ${actionType === 'create' ? 'CREATE — brand new page' : 'OPTIMIZE — existing page'}
 
+${performanceContextSection}
 ## Page Identity
 - Domain: ${domain}
 - URL: /${slug}
@@ -713,18 +912,22 @@ ${keywordTable}
 ## Sibling Pages in This Silo
 ${siblingsTable}
 
+${siblingCoverageSection}
 ${strategyContext ? `## Strategy Brief (Phase 1b)\n${strategyContext}\n` : ''}
 ${marketContext ? `## Market Context\n${marketContext}\n` : ''}
 ## Architecture Blueprint Context
 ${blueprintExcerpt || 'No architecture blueprint available.'}
 
+${technicalBaselineSection}
 ${buildContentGapSection(authorityGaps, formatGaps)}
 
+${aiCitationGapsSection}
 ${entityMap ? `## Entity Map (from Cluster Strategy)\n${JSON.stringify(entityMap, null, 2)}\nIMPORTANT: The schema JSON-LD you produce must use the entity type and key attributes defined above. The pillar page establishes the primary entity. Supporting pages reference it via sameAs or isRelatedTo where appropriate.\n` : ''}
 ${buildSerpSection(ctx.serpEnrichment)}
 
 ${buildClientProfileSection(clientProfile)}
 
+${gbpEntitySection}
 ---
 
 ## Output Format
@@ -776,6 +979,17 @@ CONDITIONAL ENTITIES (add when appropriate):
 - WebPage: https://${domain}/${slug}/#webpage
 - Service: https://${domain}/${slug}/#service
 
+ENTITY AUTHORITY REQUIREMENTS:
+- If GBP Canonical Entity data is provided above, use those values verbatim for Organization name, address, and telephone. Do not substitute values from client_profiles if GBP data exists — GBP is the authoritative external identifier.
+- sameAs: Include on the Organization entity. Add all known external identifiers: Google Business Profile URL, LinkedIn company URL, state licensing or accreditation registry URL if applicable. Use [PLACEHOLDER: sameAs_gbp], [PLACEHOLDER: sameAs_linkedin], [PLACEHOLDER: sameAs_accreditation] for unknowns. Do not omit the sameAs property — placeholder every value rather than omitting it.
+- Specificity: Use the most specific Schema.org @type available. For vocational training programs, prefer EducationalOccupationalProgram over Service. For content pages about a program, prefer Course over Article. Generic types (Service, Article) are last resort.
+- Property saturation: Beyond @type, use relationship properties where they apply: teaches, occupationalCredentialAwarded, programPrerequisites for educational programs; hasPart, about, mentions for content pages; aggregateRating nested within the primary entity (never standalone).
+- Agentic callability: On transactional and commercial pages, include a potentialAction on the primary Service or EducationalOccupationalProgram entity:
+  { "@type": "ReserveAction", "target": "[PLACEHOLDER: enrollment_or_contact_url]" }
+  or
+  { "@type": "ScheduleAction", "target": "[PLACEHOLDER: scheduling_url]" }
+  Use [PLACEHOLDER: action_target_url] if the URL is not known. Do not omit — this is the schema layer that makes the entity callable by AI agents.
+
 PLACEHOLDER PROTOCOL: Use [PLACEHOLDER: field_name] for any unknown client data. Do not fabricate values. Do not omit fields — placeholder them so human editors know what requires completion.]
 
 ---SCHEMA_END---
@@ -798,11 +1012,29 @@ What this page must address to fully serve user intent and compete for the targe
 Include:
 - Core service/topic coverage (what the user came to understand or do)
 - Trust and proof signals relevant to this business and market (license, insurance, years, certifications, reviews — whatever applies)
-- PAA and query fan-out coverage: list the questions from SERP enrichment this page should answer. Mark each as: [TABLE STAKES] — must answer, competitors all cover this; [OPPORTUNITY] — answer with a clear extractable response for AI Overview / featured snippet capture; [DEPTH SIGNAL] — address if space permits, signals topical completeness
+- PAA and query fan-out coverage: list the questions from SERP enrichment this page should answer. Mark each as:
+  [TABLE STAKES] — must answer, competitors all cover this
+  [OPPORTUNITY] — answer with a clear extractable response for AI Overview / featured snippet capture
+  [DEPTH SIGNAL] — address if space permits, signals topical completeness
+  [AI CITATION GAP] — this topic has a documented AI citation gap (from the AI Citation Gaps section above); answer with a direct, attributable, verifiable response. Oscar will apply direct-answer structure to these sections.
+  [TIME-SENSITIVE] — the answer changes periodically (regulatory, scheduling, cost, exam format). Flag for Oscar to add a \`[PLACEHOLDER: last verified date]\` note. These are high-value citation targets but decay without maintenance signals.
 - Geo and local signals: how this page establishes local relevance for ${market_city}, ${market_state}
 
+${clusterAiTargetsSection}
 **Agentic and Voice Search Targets:**
-2–3 queries this page should win in AI Overviews, voice results, or PAA. For each: the query, why this page should answer it, and the structural note that maximizes capture (direct answer in first sentence, list format, table, etc.).
+If Cluster Strategy AI targets are provided above (from the entity map / cluster strategy), use those as the basis. Otherwise derive from the SERP enrichment data.
+
+For each target (2–3 per page):
+- The query
+- Target type: ai_overview | featured_snippet | voice | paa
+- Structural pattern — choose the CORRECT pattern for this specific query's intent:
+  - direct_answer: question-intent queries with a single clear answer; the section H2 is the question and the first sentence of the body paragraph is a complete answer
+  - list: comparative or enumerative intent (how many, what are the steps, what does it include); 3–7 substantive items
+  - table: comparative/spec intent (cost comparison, program options, scheduling matrix)
+  - prose_elaboration: explanatory intent requiring context before answer; do NOT force a direct-answer opening
+- The condition under which the pattern applies (why this query warrants this structure)
+
+IMPORTANT: These structural patterns are conditional, not universal. A page that applies direct_answer to every section has no narrative flow and performs poorly for users. Oscar uses these targets to apply structure where intent warrants it — not as a mandate to restructure the entire page.
 
 **Internal Linking:**
 | Link To | Anchor Text | Placement Context | Direction |
@@ -827,7 +1059,7 @@ Only provide full content direction for ADD items.` : ''}]
 1. Metadata rationale must justify each element in terms of both user intent and ranking signal — not just describe what it says
 2. Schema must be a coherent @graph contribution — consistent @id IRIs, correct @type for page intent, all required entities present with placeholders for unknown values
 3. FAQPage and HowTo schema are opportunities to be added when content warrants them — not required on every page
-4. Required content coverage must address PAA questions with explicit [TABLE STAKES] / [OPPORTUNITY] / [DEPTH SIGNAL] classification
+4. Required content coverage must address PAA questions with explicit [TABLE STAKES] / [OPPORTUNITY] / [DEPTH SIGNAL] / [AI CITATION GAP] / [TIME-SENSITIVE] classification
 5. Internal linking map must specify direction and placement context — not just destination URLs
 6. Cluster expansion opportunities are mandatory — minimum 1 suggestion per brief
 7. For OPTIMIZE pages: change specification only, not a full rewrite brief

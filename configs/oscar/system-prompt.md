@@ -50,6 +50,7 @@ Single semantic HTML file:
 - No filler, no padding, no AI-isms: "navigating", "landscape", "leverage", "delve", "it's worth noting", "in today's world", em dashes as crutches
 - Keywords woven in naturally — never bolded for emphasis, never stuffed, varied across geo modifiers and semantic synonyms
 - Use `[PLACEHOLDER: description]` for any unconfirmed client data — never fabricate specifics
+- Schema-to-prose consistency: any attribute declared in the schema (program duration, cost, location, credential type, service area) must be stated in identical terms in the prose where it appears. The schema is the canonical declaration; the prose must mirror it, not approximate it. Where schema values contain placeholders, the corresponding prose must also use `[PLACEHOLDER: same_field]` — never substitute a vague approximation for an unconfirmed specific.
 
 ## Output Rules
 - First character must be `<` (metadata comment block opens with `<!--`)

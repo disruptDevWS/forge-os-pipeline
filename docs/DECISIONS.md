@@ -4,6 +4,24 @@ Non-obvious choices that would look wrong without context. Check here before "fi
 
 ---
 
+**2026-03-30: Cluster Strategy Section 5 outputs structured JSON, not prose**
+
+Section 5 (AI & Search Optimization) was converted from markdown prose to structured JSON (`ai_targets[]` with `query`, `target_type`, `structural_pattern`, `applies_to_page`, `condition`, `rationale`). Rationale: Pam needs machine-readable targets to inject into per-page briefs — prose recommendations can't be filtered by page or mapped to specific structural patterns. The structured format lets Pam filter targets relevant to the current page (`applies_to_page` match or null for cluster-wide) and inject them as typed guidance for Oscar. The prose fallback (`ai_optimization_notes`) is preserved for backward compatibility and for rendering the full strategy document in the dashboard. `ai_optimization_targets` stored as JSONB on `cluster_strategy` (migration 010).
+
+---
+
+**2026-03-30: Pam injects 5 new context blocks conditionally, not unconditionally**
+
+Five new context sections added to Pam's prompt: Technical Baseline (Dwight), AI Citation Gaps (Gap agent), GBP Canonical Entity, Sibling Content Coverage, Performance Context (OPTIMIZE only). All are conditionally injected — if the data doesn't exist (no Dwight snapshot, no GBP listing, no gap analysis, no sibling briefs, not OPTIMIZE mode), the section is an empty string and adds zero tokens. This avoids bloating the prompt for early-stage audits where most enrichment data doesn't exist yet. All queries are wrapped in try/catch with empty-string defaults — a failed enrichment query never blocks brief generation.
+
+---
+
+**2026-03-30: GBP canonical NAP takes priority over client_profiles for schema Organization entity**
+
+When GBP data exists, Pam's prompt instructs schema generation to use GBP canonical name/address/phone verbatim, not client_profiles values. Rationale: GBP is the authoritative external identifier that Google's Knowledge Graph uses for entity disambiguation. Schema Organization attributes must match what Google already knows about the business. If GBP says "Veterans Plumbing Corp" and client_profiles says "Veterans Plumbing Corporation", the schema must use the GBP version. Column names in gbp_snapshots are `canonical_name`, `canonical_address`, `canonical_phone` (separate columns, not a nested JSONB object).
+
+---
+
 **2026-03-27: Keyword lookups use single table with batch_id grouping, not a sessions table**
 
 `keyword_lookups` stores one row per keyword result. A UUID `batch_id` groups rows from the same lookup invocation. No separate `keyword_lookup_sessions` table — batch metadata (count, cost, timestamp) is derived client-side via `useMemo` grouping on `batch_id`. Rationale: a sessions table would add a write dependency (insert session first, then reference FK), complicate the best-effort insert pattern (if session insert fails, all keyword inserts fail), and provide no benefit — the only consumer is the history accordion which already groups client-side. The unique constraint `(audit_id, batch_id, keyword)` prevents duplicate rows from retries without needing session-level dedup. `estimated_cost` is stored as `numeric(10,4)` (not text) to enable future aggregation (total spend per audit, cost trends).

@@ -497,7 +497,8 @@ Written by `generate-cluster-strategy.ts` (on-demand, per-cluster via `/activate
 | `buyer_stages` | JSON |
 | `format_gaps` | JSON |
 | `entity_map` | JSONB — entity type mapping from Section 0 |
-| `ai_optimization_notes` | |
+| `ai_optimization_notes` | Section 5 prose fallback |
+| `ai_optimization_targets` | JSONB — structured AI/search targets from Section 5: `[{query, target_type, structural_pattern, applies_to_page, condition, rationale}]` |
 | `model_used` | |
 
 **Dashboard reads**: `useClusterStrategy()`, `useClusterStrategyPoll()` → StrategyPage
