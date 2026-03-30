@@ -377,7 +377,7 @@ async function processOscarRequest(sb: SupabaseClient, req: OscarRequest) {
 
     // 7. Call Claude
     console.log('  Running claude --print (sonnet)...');
-    const htmlOutput = await callClaudeAsync(prompt, 'sonnet');
+    const htmlOutput = await callClaudeAsync(prompt, { model: 'sonnet', phase: 'content' });
     console.log(`  Claude output: ${htmlOutput.length} chars`);
 
     // 8. Write debug output (raw, before parsing)
