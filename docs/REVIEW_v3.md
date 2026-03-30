@@ -183,7 +183,7 @@ QA gates exist for Dwight, Jim, Gap, and Michael. **The following agents could s
 
 **SEC-1: Docker container runs as root.** `Dockerfile.railway` has no `USER` directive. The pipeline server and all spawned child processes run as uid 0. If an attacker achieves code execution (e.g., via command injection through a malformed domain name), they have full container access including the ability to read environment variables (API keys, Supabase service role key). **Severity: Critical.** Fix: Add `USER node` after the build step.
 
-**SEC-2: Pipeline server exposed on public IP without network-level access control.** Port 3847 is accessible from the internet. The only protection is a Bearer token (`TRIGGER_SECRET`). If the token leaks (e.g., in logs, in a misconfigured edge function deployment), all pipeline operations are accessible. The Cloudflare Tunnel remediation documented in `PIPELINE.md` has not been implemented. **Severity: Critical.** Fix: Implement Cloudflare Tunnel or restrict to Railway's internal networking.
+**SEC-2: Pipeline server network access — RESOLVED.** Originally the server ran locally with port 3847 exposed via public IP. A Cloudflare Tunnel was implemented as an intermediate fix. Now the server runs on Railway (cloud-hosted) at `https://nanoclaw-production-e8b7.up.railway.app` with HTTPS natively provided. Auth via `PIPELINE_TRIGGER_SECRET` bearer token. No local port exposure, no tunnel required. **Severity: Resolved.**
 
 ### High
 
@@ -358,7 +358,7 @@ Given that the system already has 8 completed audits and appears to be in active
 | # | Finding | Severity | Category | Affected Component |
 |---|---------|----------|----------|-------------------|
 | SEC-1 | Docker container runs as root | **Critical** | Security | `Dockerfile.railway` |
-| SEC-2 | Pipeline server on public IP without network access control | **Critical** | Security | `pipeline-server-standalone.ts`, Railway config |
+| SEC-2 | Pipeline server network access — **RESOLVED** (Railway direct URL) | ~~Critical~~ Resolved | Security | `pipeline-server-standalone.ts`, Railway config |
 | SEC-3 | Route-level role guards missing | **High** | Security | `App.tsx`, `ProtectedRoute.tsx` |
 | SEC-4 | `canManage` includes unauthenticated users | **High** | Security | `AuthContext.tsx` |
 | SEC-5 | Path injection in scout-config edge function | **High** | Security | `scout-config/index.ts` |

@@ -6,7 +6,7 @@
 > **Sizing:** Each session is scoped for a single Claude Code context window (~100K tokens of working memory). Sessions average 2-4 files changed, with explicit completion criteria.
 >
 > **Decisions resolved:**
-> - SEC-2: Cloudflare Tunnel (not Railway private networking)
+> - SEC-2: Railway direct URL (Cloudflare Tunnel retired — server is cloud-hosted, no local port exposure)
 > - Brief build location: Phase 0 prospect-mode first (Option A), post-pipeline version deferred
 > - UX-3 (Agentic Readiness Score): Remove the card, don't compute a placeholder metric
 > - Session 10 dependency relaxed: can run after Session 3 (schema), not gated on Sessions 4-6
@@ -45,7 +45,7 @@
 **Work:**
 - Add a non-root user to `Dockerfile.railway`: create `appuser` with a fixed UID, `chown` the app directory, add `USER appuser` after the build step. Ensure the `audits/` volume mount directory is writable by the new user.
 - Verify that `run-pipeline.sh` and all spawned child processes function correctly without root (no `/root/` path dependencies, no privileged port bindings — port 3847 is unprivileged).
-- For SEC-2, document in `PIPELINE.md` the concrete steps to implement Cloudflare Tunnel. **Decision: Cloudflare Tunnel** — stable hostname, zero infrastructure cost, removes ISP dependency permanently. This is an infrastructure change, not a code change, so the session produces the runbook rather than the implementation.
+- For SEC-2, document in `PIPELINE.md` the network access control path. **Original decision: Cloudflare Tunnel** — subsequently superseded by Railway direct access. The server now runs on Railway (cloud-hosted) with HTTPS natively provided. No local port exposure, no tunnel required. `PIPELINE_BASE_URL` = `https://nanoclaw-production-e8b7.up.railway.app`.
 
 **Definition of done:** `docker build` succeeds with the new Dockerfile. Container starts, `/health` responds, and a test pipeline trigger works. No process runs as uid 0 inside the container.
 

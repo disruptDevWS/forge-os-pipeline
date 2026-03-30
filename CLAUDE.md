@@ -289,7 +289,7 @@ Automatic GBP lookup + citation scan across 11 directories, runs at end of every
 
 Pipeline server (`pipeline-server-standalone.ts`) on port 3847, 9 endpoints. Supabase Edge Functions as auth layer (2 patterns: `validateSuperAdmin` for admin ops, `resolveAuthContext` for user ops). DataForSEO OnPage API replaced Screaming Frog. Anthropic SDK replaced Claude CLI binary. `loadEnv()` falls through to `process.env` for Railway deployment.
 
-**Key decisions**: 409 from pipeline server = success in edge function (already running). `PIPELINE_BASE_URL` secret serves all endpoints. Public IP exposure is temporary — Cloudflare Tunnel recommended.
+**Key decisions**: 409 from pipeline server = success in edge function (already running). `PIPELINE_BASE_URL` secret serves all endpoints (`https://nanoclaw-production-e8b7.up.railway.app`). Railway provides HTTPS natively; auth via `PIPELINE_TRIGGER_SECRET` bearer token.
 
 ### Pre-Audit Client Context Intake
 

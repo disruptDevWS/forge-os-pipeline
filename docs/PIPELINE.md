@@ -1075,37 +1075,19 @@ The pipeline server (`src/pipeline-server-standalone.ts`) is an HTTP server that
 
 | Secret | Value | Purpose |
 |--------|-------|---------|
-| `PIPELINE_BASE_URL` | `http://<public-ip>:3847` | Pipeline server base URL (edge functions append endpoint paths) |
+| `PIPELINE_BASE_URL` | `https://nanoclaw-production-e8b7.up.railway.app` | Pipeline server base URL (edge functions append endpoint paths) |
 | `PIPELINE_TRIGGER_SECRET` | Bearer token | Shared secret between edge functions and pipeline server |
 | `DEFAULT_PIPELINE_EMAIL` | `matt@forgegrowth.ai` | Fallback email for pipeline trigger when no user JWT |
 
 Edge functions read `PIPELINE_BASE_URL` with fallback to `PIPELINE_TRIGGER_URL` (deprecated).
 
-### Public IP Considerations (SEC-2 — Critical)
+### Network Access (SEC-2 — Resolved)
 
-> **Decision (v3.0 review):** Cloudflare Tunnel is the chosen remediation. Removes ISP dependency, provides stable hostname, zero infrastructure cost. Implement before scaling beyond current client volume.
+> **Status (2026-03-30):** SEC-2 is resolved. The pipeline server runs on Railway (cloud-hosted), which provides HTTPS natively via `https://nanoclaw-production-e8b7.up.railway.app`. There is no local port exposure. Auth is handled by `PIPELINE_TRIGGER_SECRET` bearer token.
 
-The pipeline server currently runs on a residential ISP connection. Supabase Edge Functions reach it via public IP + port 3847 (forwarded through EERO router). **Security risk:** Port 3847 is publicly accessible. The only protection is `TRIGGER_SECRET`. If the token leaks, all pipeline operations are exposed.
+The pipeline server runs on Railway's managed infrastructure. Supabase Edge Functions reach it via Railway's public HTTPS URL. No local ports are exposed, no residential ISP connection is involved, and no tunneling is required.
 
-**Known risk:** ISP may reassign the public IP on DHCP lease renewal or router reboot. If the pipeline stops triggering:
-
-1. **Diagnose:** `curl -s ifconfig.me` on the pipeline server host — compare against the `PIPELINE_BASE_URL` secret
-2. **Quick fix:** Update the Supabase secret: `supabase secrets set PIPELINE_BASE_URL=http://<new-ip>:3847 --project-ref hohuimkcpihdufunrzvg`
-3. **Permanent fix:** Replace the public IP with a Cloudflare Tunnel for a stable hostname:
-   ```bash
-   # Install cloudflared
-   curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o /usr/local/bin/cloudflared
-   chmod +x /usr/local/bin/cloudflared
-
-   # Create tunnel (one-time)
-   cloudflared tunnel login
-   cloudflared tunnel create forge-os-pipeline
-   cloudflared tunnel route dns forge-os-pipeline pipeline.forgegrowth.ai
-
-   # Run tunnel (point to local pipeline server)
-   cloudflared tunnel run --url http://localhost:3847 forge-os-pipeline
-   ```
-   Then update the secret to `PIPELINE_BASE_URL=https://pipeline.forgegrowth.ai` — stable across IP changes, reboots, and ISP migrations.
+**History:** The server originally ran on a local machine with port 3847 forwarded through an EERO router. A Cloudflare Tunnel (`pipeline.forgegrowth.ai`) was implemented as an intermediate fix (SEC-2 remediation). Now that the server runs on Railway, the tunnel is unnecessary and has been retired. Railway provides HTTPS + stable hostname natively.
 
 ---
 

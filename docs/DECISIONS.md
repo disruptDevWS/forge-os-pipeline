@@ -239,9 +239,9 @@ Oscar's `gatherBrief()` had a dual-source pattern: query `execution_pages` from 
 
 Edge functions (`run-audit`, `scout-config`) were inconsistent: `run-audit` used `PIPELINE_TRIGGER_URL` as a full endpoint URL, while `scout-config` treated it as a base URL and appended paths. Standardized to `PIPELINE_BASE_URL` — edge functions append `/trigger-pipeline`, `/scout-config`, `/scout-report` in code. Both functions fall back to `PIPELINE_TRIGGER_URL` for backward compatibility. This means one Supabase secret serves all three pipeline server endpoints.
 
-**2026-03-12: Pipeline server exposed via public IP (Cloudflare Tunnel recommended)**
+**2026-03-12: Pipeline server network access (SEC-2 — resolved 2026-03-30)**
 
-Supabase Edge Functions need to reach the Forge OS pipeline server running on a residential ISP connection. Currently exposed via public IP + port 3847 forwarded through EERO router. This works but the IP may change on DHCP lease renewal. If pipelines stop triggering, check `curl -s ifconfig.me` against the `PIPELINE_BASE_URL` secret. Recommended permanent fix: Cloudflare Tunnel with a stable hostname (e.g., `pipeline.forgegrowth.ai`), which survives IP changes and adds TLS.
+Originally the pipeline server ran on a local machine with port 3847 forwarded through an EERO router. Public IP exposure was a security risk (SEC-2). A Cloudflare Tunnel (`pipeline.forgegrowth.ai` -> `localhost:3847`) was implemented as an intermediate fix. Now that the server runs on Railway (cloud-hosted), both the local port exposure and the Cloudflare Tunnel are unnecessary. `PIPELINE_BASE_URL` points directly to Railway's public HTTPS URL (`https://nanoclaw-production-e8b7.up.railway.app`). Auth is handled by `PIPELINE_TRIGGER_SECRET` bearer token. The tunnel has been retired.
 
 **2026-03-12: Convert-to-client wired end-to-end (Scout → Pipeline)**
 
