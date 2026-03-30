@@ -376,8 +376,8 @@ async function trackRankings(cliArgs: CliArgs) {
 
     if (publishedSlugs.length > 0) {
       // Set env vars for google-auth.ts (loadEnv already ran)
-      if (env.GOOGLE_SERVICE_ACCOUNT_JSON) {
-        process.env.GOOGLE_SERVICE_ACCOUNT_JSON = env.GOOGLE_SERVICE_ACCOUNT_JSON;
+      if (env.GOOGLE_ADC_JSON) {
+        process.env.GOOGLE_ADC_JSON = env.GOOGLE_ADC_JSON;
       }
       if (env.GOOGLE_APPLICATION_CREDENTIALS) {
         process.env.GOOGLE_APPLICATION_CREDENTIALS = env.GOOGLE_APPLICATION_CREDENTIALS;

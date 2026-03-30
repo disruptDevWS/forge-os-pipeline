@@ -166,7 +166,7 @@ Run commands directly — don't tell the user to run them.
 | `scripts/local-presence.ts` | Phase 6d: GBP lookup + SERP citation scan → gbp_snapshots, citation_snapshots |
 | `scripts/dataforseo-business.ts` | DataForSEO client: GBP lookup + SERP citation scan |
 | `scripts/verify-dwight.ts` | Phase 1a: HTTP verification of Dwight findings (sitemap, schema, redirects) |
-| `scripts/google-auth.ts` | Google service account auth: JWT signing, token cache, `getAnalyticsConnection()` |
+| `scripts/google-auth.ts` | Google auth: ADC + SA impersonation, token cache, `getAnalyticsConnection()` |
 | `scripts/fetch-gsc-data.ts` | Phase 1c: GSC Search Analytics fetcher → gsc_data.json + gsc_summary.md + gsc_page_snapshots |
 | `scripts/fetch-ga4-data.ts` | GA4 Data API fetcher (library module, called from track-rankings) |
 | `scripts/track-gsc.ts` | Weekly GSC refresh (mirrors track-rankings pattern) |

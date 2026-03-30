@@ -1289,7 +1289,7 @@ const server = http.createServer((req, res) => {
         DATAFORSEO_LOGIN: !!process.env.DATAFORSEO_LOGIN,
         SUPABASE_URL: !!process.env.SUPABASE_URL,
         PIPELINE_TRIGGER_SECRET: !!process.env.PIPELINE_TRIGGER_SECRET,
-        GOOGLE_SERVICE_ACCOUNT_JSON: !!process.env.GOOGLE_SERVICE_ACCOUNT_JSON,
+        GOOGLE_ADC_JSON: !!process.env.GOOGLE_ADC_JSON,
       },
     });
   } else if (req.method === 'POST' && req.url === '/trigger-pipeline') {

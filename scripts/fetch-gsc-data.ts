@@ -7,7 +7,7 @@
  *   npx tsx scripts/fetch-gsc-data.ts --domain <domain> --user-email <email> [--force]
  *
  * Environment variables:
- *   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, GOOGLE_SERVICE_ACCOUNT_JSON
+ *   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, GOOGLE_ADC_JSON (or ADC from gcloud)
  */
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
@@ -460,8 +460,8 @@ async function main() {
   const env = loadEnv();
 
   // Set env vars for google-auth.ts to pick up
-  if (env.GOOGLE_SERVICE_ACCOUNT_JSON) {
-    process.env.GOOGLE_SERVICE_ACCOUNT_JSON = env.GOOGLE_SERVICE_ACCOUNT_JSON;
+  if (env.GOOGLE_ADC_JSON) {
+    process.env.GOOGLE_ADC_JSON = env.GOOGLE_ADC_JSON;
   }
   if (env.GOOGLE_APPLICATION_CREDENTIALS) {
     process.env.GOOGLE_APPLICATION_CREDENTIALS = env.GOOGLE_APPLICATION_CREDENTIALS;

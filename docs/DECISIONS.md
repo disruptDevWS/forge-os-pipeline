@@ -4,9 +4,9 @@ Non-obvious choices that would look wrong without context. Check here before "fi
 
 ---
 
-**2026-03-30: Service account auth over OAuth for GSC/GA4**
+**2026-03-30: ADC + SA impersonation over SA key or OAuth for GSC/GA4**
 
-Single operator model. The Forge Analytics service account (`fg-analytics@concise-vertex-490015-d0.iam.gserviceaccount.com`) already has read-only access to test clients' GSC + GA4 properties. This eliminates per-user OAuth flows, refresh token storage, and an OAuth callback edge function. `analytics_connections` stores only property IDs (not tokens). New clients require adding the SA as read-only user to their GSC/GA4 properties.
+Single operator model. The Forge Analytics service account (`fg-analytics@concise-vertex-490015-d0.iam.gserviceaccount.com`) already has read-only access to test clients' GSC + GA4 properties. Auth uses Application Default Credentials (ADC) + IAM impersonation — not SA JSON keys (blocked by org policy `iam.disableServiceAccountKeyCreation`, correctly). ADC identity (matt@forgegrowth.ai) gets `roles/iam.serviceAccountTokenCreator` on the SA, then `generateAccessToken` produces scoped SA tokens. Local dev: `gcloud auth application-default login`. Railway: `GOOGLE_ADC_JSON` env var (stringified ADC credentials). This eliminates per-user OAuth flows, refresh token storage, and SA key security liability. `analytics_connections` stores only property IDs (not tokens). New clients require adding the SA as read-only user to their GSC/GA4 properties.
 
 ---
 
@@ -28,9 +28,9 @@ GA4 behavioral data (sessions, engagement, conversions) only meaningful for publ
 
 ---
 
-**2026-03-30: Raw HTTP + JWT over googleapis package**
+**2026-03-30: Raw HTTP over googleapis package**
 
-Node.js built-in `crypto.sign()` handles RS256 JWT signing for Google service account auth. No `googleapis` npm dependency needed. GSC Search Analytics API and GA4 Data API are simple REST endpoints with straightforward request/response shapes. Keeps dependency footprint minimal.
+No `googleapis` npm dependency. GSC Search Analytics API, GA4 Data API, and IAM Credentials API (for SA impersonation) are simple REST endpoints with straightforward request/response shapes. ADC token refresh uses standard OAuth2 `refresh_token` grant. Keeps dependency footprint minimal.
 
 ---
 
