@@ -124,17 +124,21 @@ export async function callClaude(
 
   const client = getClient();
 
+  // Anthropic API requires streaming for requests that may exceed 10 minutes
+  const useStreaming = maxTokens > 16384;
+
   let lastError: unknown;
   for (let attempt = 1; attempt <= RETRY_MAX_ATTEMPTS; attempt++) {
     try {
-      const response = await client.messages.create(
-        {
-          model,
-          max_tokens: maxTokens,
-          messages: [{ role: 'user', content: prompt }],
-        },
-        { timeout: timeoutMs },
-      );
+      const params = {
+        model,
+        max_tokens: maxTokens,
+        messages: [{ role: 'user' as const, content: prompt }],
+      };
+
+      const response = useStreaming
+        ? await client.messages.stream(params, { timeout: timeoutMs }).finalMessage()
+        : await client.messages.create(params, { timeout: timeoutMs });
 
       // Extract text from response
       const textBlocks = response.content.filter((b) => b.type === 'text');
