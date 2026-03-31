@@ -4,6 +4,36 @@ Non-obvious choices that would look wrong without context. Check here before "fi
 
 ---
 
+**2026-03-31: Streaming for high-token API requests (>16K max_tokens)**
+
+Anthropic API requires streaming for operations that may exceed 10 minutes. `callClaude()` in `anthropic-client.ts` automatically uses `client.messages.stream().finalMessage()` when `max_tokens > 16384`. Returns the same `Message` shape — transparent to all callers. Threshold set at 16K because only `content` (65536) and potentially future phases exceed it. Without this, Oscar requests fail with "Streaming is required for operations that may take longer than 10 minutes."
+
+---
+
+**2026-03-31: Oscar phase name must be passed explicitly**
+
+`callClaudeAsync(prompt, 'sonnet')` only sets the model — it does NOT pass the phase name, so `PHASE_MAX_TOKENS` lookup falls through to `default: 8192`. Oscar must use `callClaudeAsync(prompt, { model: 'sonnet', phase: 'content' })` to get the configured 65536 tokens. This was the root cause of all truncated Oscar output.
+
+---
+
+**2026-03-31: Cloudflare Tunnel retired — Railway direct URL**
+
+`PIPELINE_BASE_URL` points directly to `https://nanoclaw-production-e8b7.up.railway.app`. The Cloudflare Tunnel (`pipeline.forgegrowth.ai` → `localhost:3847`) was originally needed when the pipeline server ran locally behind an Eero router (SEC-2). Railway eliminated that need. Railway provides HTTPS natively; `PIPELINE_TRIGGER_SECRET` bearer token handles auth.
+
+---
+
+**2026-03-31: Docker removed — Railway Railpack**
+
+`Dockerfile.railway` and `railway.toml` deleted. Railway uses Railpack (their default builder) which auto-detects Node.js from `package.json`. No shell scripts depend on Docker-specific tools (curl/jq removed). Eliminates EACCES permission issues with volume mounts and the node user UID mismatch.
+
+---
+
+**2026-03-31: Oscar status mapping — `in_progress` not `review`**
+
+`execution_pages.status` CHECK constraint allows: `not_started`, `brief_ready`, `in_progress`, `review`, `published`. Dashboard maps `in_progress` → "Draft Ready" and `review` → "In Review". Oscar writes `in_progress` so drafts appear as "Draft Ready" automatically. The `review` status is reserved for manual user promotion (i.e., "I'm reviewing this draft").
+
+---
+
 **2026-03-30: ADC + SA impersonation over SA key or OAuth for GSC/GA4**
 
 Single operator model. The Forge Analytics service account (`fg-analytics@concise-vertex-490015-d0.iam.gserviceaccount.com`) already has read-only access to test clients' GSC + GA4 properties. Auth uses Application Default Credentials (ADC) + IAM impersonation — not SA JSON keys (blocked by org policy `iam.disableServiceAccountKeyCreation`, correctly). ADC identity (matt@forgegrowth.ai) gets `roles/iam.serviceAccountTokenCreator` on the SA, then `generateAccessToken` produces scoped SA tokens. Local dev: `gcloud auth application-default login`. Railway: `GOOGLE_ADC_JSON` env var (stringified ADC credentials). This eliminates per-user OAuth flows, refresh token storage, and SA key security liability. `analytics_connections` stores only property IDs (not tokens). New clients require adding the SA as read-only user to their GSC/GA4 properties.

@@ -515,14 +515,14 @@ Written by syncMichael (Phase 6b) and Cluster Strategy (on-demand), updated by P
 | `source` | syncMichael / Cluster Strategy | `michael` (default) or `cluster_strategy` |
 | `buyer_stage` | Cluster Strategy | `awareness`, `consideration`, `decision`, `retention` — null for architecture pages |
 | `strategy_rationale` | Cluster Strategy | Why this page was recommended — null for architecture pages |
-| `status` | Pipeline + Dashboard | `not_started` → `brief_generated` → `content_generated` → `published` |
+| `status` | Pipeline + Dashboard | `not_started` → `brief_ready` → `in_progress` → `review` → `published`. Oscar writes `in_progress` (dashboard shows "Draft Ready"). `review` = manual user action ("In Review"). |
 | `page_brief` | syncMichael | JSONB |
 | `canonical_key` | syncMichael | Join to `audit_clusters` |
 | `cluster_active` | Pipeline (rebuild) | Boolean, gates content production |
 | `metadata_markdown` | Pam | |
 | `content_outline_markdown` | Pam | |
 | `schema_json` | Pam | JSON-LD |
-| `html_content` | Oscar | Production HTML |
+| `content_html` | Oscar | Production HTML (65K token budget, streaming) |
 | `published_at` | Dashboard | Set when status → published |
 | `snapshot_version` | syncMichael | |
 
@@ -716,6 +716,8 @@ Server-side view computing position changes from `ranking_snapshots`.
 | `pipeline-controls` | `ai_visibility_analysis` | `/ai-visibility-analysis` | `{domain, email, audit_id, keywords?, competitor_domains?}` | Full analysis result JSON |
 | `pipeline-controls` | `rerun_pipeline` | `/trigger-pipeline` | `{domain, email}` | `{ok}` |
 | `pipeline-controls` | `resume_pipeline` | `/trigger-pipeline` | `{domain, email, annotations?, audit_id}` | `{success, start_from:'1b'}` |
+| `pipeline-controls` | `generate_brief` | `/generate-brief` | `{domain, email}` | `{status:'brief_generation_started'}` |
+| `pipeline-controls` | `generate_content` | `/generate-content` | `{domain, email}` | `{status:'content_generation_started'}` |
 | `cluster-action` | `activate` | `/activate-cluster` | `{audit_id, canonical_key, target_publish_date?, notes?}` | cluster status |
 | `cluster-action` | `deactivate` | `/deactivate-cluster` | `{audit_id, canonical_key}` | cluster status |
 | `share-audit` | `status/create/revoke/verify` | (Supabase-only) | varies | varies |

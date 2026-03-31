@@ -747,7 +747,9 @@ Oscar (generate-content.ts) — polls oscar_requests
 - `content/{date}/{slug}/page.html` — production-ready semantic HTML
 - `content/_debug/{slug}-oscar-raw.html` — raw Claude output (debug)
 
-**Supabase writes:** `execution_pages` UPDATE (content_html, status → 'review')
+**Supabase writes:** `execution_pages` UPDATE (content_html, status → 'in_progress'). Dashboard maps `in_progress` → "Draft Ready".
+
+**Token budget:** Uses `PHASE_MAX_TOKENS.content` = 65536 tokens. Must be called with `callClaudeAsync(prompt, { model: 'sonnet', phase: 'content' })` — passing `'sonnet'` as a string only sets the model and falls through to default 8192 tokens. Streaming is automatically enabled for requests >16K tokens (Anthropic API requirement for long-running operations).
 
 **HTML extraction:** `extractHtmlContent()` strips Claude preamble/postamble — looks for first `<!--` through last `-->`, falls back to code fence stripping.
 
@@ -1119,10 +1121,10 @@ The pipeline server runs on Railway's managed infrastructure. Supabase Edge Func
 | 6.5 | Validator | **haiku** | `callClaude()` | Coverage validation JSON |
 | QA | QA Agent | **haiku** | `callClaude()` | Phase evaluation against rubrics |
 | — | Pam | **sonnet** | `callClaude()` | Content brief (metadata + schema + outline) |
-| — | Oscar | **sonnet** | `callClaude()` | Production HTML from brief |
+| — | Oscar | **sonnet** | `callClaude()` | Production HTML from brief (65K tokens, streaming) |
 | — | Cluster Strategy | **opus** | `callClaude()` | Strategic cluster analysis (on-demand, per-cluster) |
 
-**SDK migration:** All phases use `@anthropic-ai/sdk` via `scripts/anthropic-client.ts`. Per-phase `max_tokens` configured in `PHASE_MAX_TOKENS` (e.g., sonnet phases: 16384, haiku phases: 4096). No more Claude CLI binary, env var stripping, or `stripClaudePreamble()`.
+**SDK migration:** All phases use `@anthropic-ai/sdk` via `scripts/anthropic-client.ts`. Per-phase `max_tokens` configured in `PHASE_MAX_TOKENS` (e.g., sonnet phases: 16384, haiku phases: 4096, content: 65536). Requests with `max_tokens > 16384` automatically use streaming (`client.messages.stream().finalMessage()`). No more Claude CLI binary, env var stripping, or `stripClaudePreamble()`.
 
 ## Supabase Tables
 
