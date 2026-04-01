@@ -4,6 +4,18 @@ Non-obvious choices that would look wrong without context. Check here before "fi
 
 ---
 
+**2026-04-01: Review gate resumes from Phase 2, not 1b**
+
+`pipeline-controls` edge function (`resume_pipeline` action) passes `start_from: '2'` — not `'1b'`. The original `'1b'` caused an infinite loop: Phase 1b re-ran, hit the review gate again, exited, repeat. Phase 1b (Strategy Brief) is already complete when the user approves the review, so resume must skip it.
+
+---
+
+**2026-04-01: railpack.json adds curl + jq to Railway container**
+
+Railpack's default Node.js image doesn't include `curl` or `jq`. `foundational_scout.sh` (Phase 3 DataForSEO API calls) requires both. `railpack.json` with `deploy.aptPackages: ["curl", "jq"]` restores them. The previous Dockerfile had `apt-get install curl jq` — this was lost when Docker was removed (2026-03-31).
+
+---
+
 **2026-03-31: Streaming for high-token API requests (>16K max_tokens)**
 
 Anthropic API requires streaming for operations that may exceed 10 minutes. `callClaude()` in `anthropic-client.ts` automatically uses `client.messages.stream().finalMessage()` when `max_tokens > 16384`. Returns the same `Message` shape — transparent to all callers. Threshold set at 16K because only `content` (65536) and potentially future phases exceed it. Without this, Oscar requests fail with "Streaming is required for operations that may take longer than 10 minutes."
@@ -24,7 +36,7 @@ Anthropic API requires streaming for operations that may exceed 10 minutes. `cal
 
 **2026-03-31: Docker removed — Railway Railpack**
 
-`Dockerfile.railway` and `railway.toml` deleted. Railway uses Railpack (their default builder) which auto-detects Node.js from `package.json`. No shell scripts depend on Docker-specific tools (curl/jq removed). Eliminates EACCES permission issues with volume mounts and the node user UID mismatch.
+`Dockerfile.railway` and `railway.toml` deleted. Railway uses Railpack (their default builder) which auto-detects Node.js from `package.json`. `railpack.json` specifies `deploy.aptPackages: ["curl", "jq"]` because `foundational_scout.sh` (Phase 3 DataForSEO calls) requires both. Eliminates EACCES permission issues with volume mounts and the node user UID mismatch.
 
 ---
 

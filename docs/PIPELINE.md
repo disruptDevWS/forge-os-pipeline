@@ -95,7 +95,7 @@ Phase 1b (Strategy Brief)
       │
       ▼ (review gate: if audits.review_gate_enabled=true AND mode=full,
          pipeline pauses with status='awaiting_review'. Resume via
-         pipeline-controls edge function → start_from='1b')
+         pipeline-controls edge function → start_from='2')
       │
       ▼
 Phase 2 (KeywordResearch)
@@ -365,7 +365,7 @@ Client Brief (auto after Phase 6d, non-fatal)
 
 **Supabase writes:** `agent_runs` (agent_name='strategy_brief')
 
-**Review Gate (opt-in):** If `audits.review_gate_enabled = true` and mode is `full`, the pipeline pauses after Phase 1b with `audits.status = 'awaiting_review'`. The user can review `strategy_brief.md`, add annotations (appended to `client_context.out_of_scope`), then resume via the `pipeline-controls` edge function (`action: 'resume_pipeline'`). Resume triggers with `start_from: '1b'` (Phase 2 onward). The review gate is opt-in and defaults to false — most audits run unattended.
+**Review Gate (opt-in):** If `audits.review_gate_enabled = true` and mode is `full`, the pipeline pauses after Phase 1b with `audits.status = 'awaiting_review'`. The user can review `strategy_brief.md`, add annotations (appended to `client_context.out_of_scope`), then resume via the `pipeline-controls` edge function (`action: 'resume_pipeline'`). Resume triggers with `start_from: '2'` (Phase 2 onward, skipping already-completed Phase 1b). The review gate is opt-in and defaults to false — most audits run unattended.
 
 ---
 
