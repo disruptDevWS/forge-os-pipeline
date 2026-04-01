@@ -4409,7 +4409,8 @@ async function runScout(sb: SupabaseClient, domain: string, prospectConfigPath: 
   if (!config.name || !config.domain) {
     throw new Error(`Prospect config missing required fields: name=${!!config.name}, domain=${!!config.domain}`);
   }
-  if (!config.target_geos?.length) {
+  const isNational = config.geo_type === 'national';
+  if (!isNational && !config.target_geos?.length) {
     throw new Error(`Prospect config target_geos is empty or missing (got: ${JSON.stringify(rawConfig.target_geos)})`);
   }
   if (!config.topic_patterns?.length) {
@@ -4544,8 +4545,13 @@ async function runScout(sb: SupabaseClient, domain: string, prospectConfigPath: 
     console.log('  Low rankings + no topics yet — building synthetic keyword candidates');
     const candidates: string[] = [];
     for (const pattern of config.topic_patterns) {
-      for (const geo of allGeos) {
-        candidates.push(`${pattern} ${geo}`.toLowerCase());
+      if (allGeos.length > 0) {
+        for (const geo of allGeos) {
+          candidates.push(`${pattern} ${geo}`.toLowerCase());
+        }
+      } else {
+        // National mode: use topic patterns without geo qualifiers
+        candidates.push(pattern.toLowerCase());
       }
     }
     const volumeResults = await bulkKeywordVolume(env, candidates.slice(0, 200), scoutLocationCodes);
