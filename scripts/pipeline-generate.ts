@@ -4643,15 +4643,20 @@ Group related keywords into single topics. YOUR ENTIRE RESPONSE IS RAW JSON — 
   const candidates: string[] = [];
   for (const topic of canonicalTopics) {
     const topicPhrase = topic.label.toLowerCase();
-    for (const geo of config.target_geos) {
-      if (geo.metros.length > 0) {
-        for (const metro of geo.metros) {
-          candidates.push(`${topicPhrase} ${metro}`.toLowerCase());
-          candidates.push(`${topicPhrase} ${metro} ${geo.state}`.toLowerCase());
+    if (config.target_geos.length > 0) {
+      for (const geo of config.target_geos) {
+        if (geo.metros.length > 0) {
+          for (const metro of geo.metros) {
+            candidates.push(`${topicPhrase} ${metro}`.toLowerCase());
+            candidates.push(`${topicPhrase} ${metro} ${geo.state}`.toLowerCase());
+          }
+        } else if (geo.state) {
+          candidates.push(`${topicPhrase} ${geo.state}`.toLowerCase());
         }
-      } else if (geo.state) {
-        candidates.push(`${topicPhrase} ${geo.state}`.toLowerCase());
       }
+    } else {
+      // National mode: use topic phrases without geo qualifiers
+      candidates.push(topicPhrase);
     }
   }
 
