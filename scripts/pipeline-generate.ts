@@ -36,6 +36,7 @@ import {
   fetchAllLlmMentions,
   type LlmMentionsResult,
 } from './dataforseo-llm-mentions.js';
+import { isCommitted } from './rerun-utils.js';
 
 // ============================================================
 // .env loader (same pattern as sync-to-dashboard)
@@ -1916,7 +1917,129 @@ ${parts.join('\n\n')}`;
     }
   }
 
-  console.log(`  Context loaded: ${clusters.length} clusters, research=${!!researchSummary}, keywords=${!!keywordSection}, gap=${!!gapSection}, crawl=${!!crawlSection}, platform=${!!platformSection}`);
+  // --- Re-run detection + committed architecture + performance data ---
+  let rerunBlock = '';
+  const { data: priorMichaelRuns } = await sb
+    .from('agent_runs')
+    .select('id, run_date')
+    .eq('audit_id', auditId)
+    .eq('agent_name', 'michael')
+    .eq('status', 'completed')
+    .order('run_date', { ascending: false })
+    .limit(1);
+  const isRerun = (priorMichaelRuns ?? []).length > 0;
+
+  if (isRerun) {
+    // Fetch existing execution pages for committed architecture table
+    const { data: existingExecPages } = await (sb as any)
+      .from('execution_pages')
+      .select('url_slug, silo, priority, status, source, published_at, page_brief, canonical_key')
+      .eq('audit_id', auditId);
+    const committedPages = (existingExecPages ?? []).filter((p: any) => isCommitted(p));
+
+    if (committedPages.length > 0) {
+      const committedTable = committedPages.map((p: any) => {
+        const brief = p.page_brief ?? {};
+        return `${p.url_slug} | ${p.silo ?? ''} | ${brief.role ?? ''} | ${brief.primary_keyword ?? ''} | ${p.status} | ${p.source ?? 'michael'} | ${p.published_at ? 'Yes' : 'No'}`;
+      }).join('\n');
+
+      rerunBlock += `\n## COMMITTED ARCHITECTURE (${committedPages.length} pages — DO NOT REMOVE)
+URL Slug | Silo | Role | Primary Keyword | Status | Source | Published
+${committedTable}
+
+CONSTRAINT: Every page listed above must appear in your silo tables.\n`;
+    }
+
+    // GSC performance data for committed pages
+    const committedSlugs = committedPages.map((p: any) => p.url_slug);
+    if (committedSlugs.length > 0) {
+      // Query GSC page snapshots for committed pages (prepend / to match gsc_page_snapshots.page_url)
+      const gscUrls = committedSlugs.map((s: string) => `/${s}`);
+      const { data: gscData } = await (sb as any)
+        .from('gsc_page_snapshots')
+        .select('page_url, clicks, impressions, avg_position, avg_ctr, snapshot_date')
+        .eq('audit_id', auditId)
+        .in('page_url', gscUrls)
+        .order('snapshot_date', { ascending: false });
+
+      if (gscData && gscData.length > 0) {
+        // Deduplicate: keep latest snapshot per page_url
+        const latestByUrl = new Map<string, any>();
+        for (const row of gscData) {
+          if (!latestByUrl.has(row.page_url)) latestByUrl.set(row.page_url, row);
+        }
+        const gscTable = Array.from(latestByUrl.values())
+          .map((r: any) => `${r.page_url} | ${r.clicks ?? 0} | ${r.impressions ?? 0} | ${r.avg_position?.toFixed(1) ?? '-'} | ${((r.avg_ctr ?? 0) * 100).toFixed(1)}%`)
+          .join('\n');
+        rerunBlock += `\n## GSC Performance (committed pages)
+Page URL | Clicks | Impressions | Avg Position | CTR
+${gscTable}\n`;
+      }
+
+      // Query GA4 page snapshots for committed pages
+      const { data: ga4Data } = await (sb as any)
+        .from('ga4_page_snapshots')
+        .select('page_url, sessions, engaged_sessions, engagement_rate, avg_session_duration, conversions, snapshot_date')
+        .eq('audit_id', auditId)
+        .in('page_url', gscUrls)
+        .order('snapshot_date', { ascending: false });
+
+      if (ga4Data && ga4Data.length > 0) {
+        const latestGa4ByUrl = new Map<string, any>();
+        for (const row of ga4Data) {
+          if (!latestGa4ByUrl.has(row.page_url)) latestGa4ByUrl.set(row.page_url, row);
+        }
+        const ga4Table = Array.from(latestGa4ByUrl.values())
+          .map((r: any) => `${r.page_url} | ${r.sessions ?? 0} | ${r.engaged_sessions ?? 0} | ${((r.engagement_rate ?? 0) * 100).toFixed(1)}% | ${r.avg_session_duration?.toFixed(0) ?? '-'}s | ${r.conversions ?? 0}`)
+          .join('\n');
+        rerunBlock += `\n## GA4 Behavioral Data (committed pages)
+Page URL | Sessions | Engaged Sessions | Engagement Rate | Avg Duration | Conversions
+${ga4Table}\n`;
+      }
+    }
+
+    // Unmatched GSC pages (organic pages outside architecture)
+    const { data: allGscPages } = await (sb as any)
+      .from('gsc_page_snapshots')
+      .select('page_url, clicks, impressions, avg_position')
+      .eq('audit_id', auditId)
+      .gt('clicks', 0)
+      .order('clicks', { ascending: false })
+      .limit(50);
+
+    if (allGscPages && allGscPages.length > 0) {
+      const allExecSlugs = new Set((existingExecPages ?? []).map((p: any) => String(p.url_slug).replace(/^\/+/, '').toLowerCase()));
+      const unmatchedPages = allGscPages.filter((g: any) => {
+        const slug = String(g.page_url).replace(/^\/+/, '').toLowerCase();
+        return !allExecSlugs.has(slug);
+      }).slice(0, 20);
+
+      if (unmatchedPages.length > 0) {
+        const unmatchedTable = unmatchedPages
+          .map((r: any) => `${r.page_url} | ${r.clicks ?? 0} | ${r.impressions ?? 0} | ${r.avg_position?.toFixed(1) ?? '-'}`)
+          .join('\n');
+        rerunBlock += `\n## Organic Pages Outside Architecture (top ${unmatchedPages.length} by clicks)
+Page URL | Clicks | Impressions | Avg Position
+${unmatchedTable}
+
+These pages receive organic traffic but are not in the current architecture. Evaluate for inclusion.\n`;
+      }
+    }
+
+    // Re-run mode instructions
+    rerunBlock += `\n## RE-RUN MODE ACTIVE
+1. ALL committed pages MUST appear in your silo tables
+2. You MAY reassign committed pages to different silos
+3. Use PERFORMANCE DATA to identify working vs underperforming pages
+4. Pages outside architecture with significant traffic: evaluate for inclusion
+5. In Executive Summary: add "Changes from Prior Architecture" paragraph
+6. The Content Gap Intelligence below was generated without knowledge of committed pages.
+   Check COMMITTED ARCHITECTURE before adding gap-addressing pages — a committed page may already cover it.\n`;
+
+    console.log(`  Re-run mode: ${committedPages.length} committed pages, isRerun=true`);
+  }
+
+  console.log(`  Context loaded: ${clusters.length} clusters, research=${!!researchSummary}, keywords=${!!keywordSection}, gap=${!!gapSection}, crawl=${!!crawlSection}, platform=${!!platformSection}${isRerun ? ', rerun=true' : ''}`);
 
   // --- Build comprehensive prompt ---
   const prompt = `You are Michael, The Architect — an information architecture and semantic content strategist.
@@ -1936,7 +2059,7 @@ ${crawlSection ? `${crawlSection}\n` : ''}
 ${semanticSection ? `${semanticSection}\n` : ''}
 ${gapSection ? `## Content Gap Intelligence\nThe following analysis was produced by the Gap agent. Your architecture MUST address every identified gap.\n\n${gapSection}\n` : ''}
 ${platformSection ? `## Platform Constraints (from Dwight's Technical Audit)\nThe following platform/CMS observations were identified by the technical auditor. Your architecture MUST account for these constraints.\n\n${platformSection}\n` : ''}
-${michaelStrategyBlock ? `${michaelStrategyBlock}\n\n` : ''}${michaelClientContextBlock ? `${michaelClientContextBlock}\n` : ''}${mode === 'sales' ? `## SALES MODE OVERRIDE
+${michaelStrategyBlock ? `${michaelStrategyBlock}\n\n` : ''}${michaelClientContextBlock ? `${michaelClientContextBlock}\n` : ''}${rerunBlock ? `${rerunBlock}\n` : ''}${mode === 'sales' ? `## SALES MODE OVERRIDE
 This is a condensed sales prospect report. Follow these overrides:
 - Executive Summary: 3-5 paragraphs strategic pitch focused on revenue opportunity
 - Max 3 silos with 3-5 pages each
@@ -1975,7 +2098,16 @@ You MUST produce output in this EXACT format. The parser depends on these headin
 ## Internal Linking Strategy
 [Minimum requirements: (1) identify the pillar-to-cluster linking pattern for each silo, (2) identify any cross-silo links that reinforce topical authority without creating cannibalization, (3) note any pages that currently have no internal links pointing to them (orphan risk). Be specific — name the pages and the recommended anchor text patterns.]
 \`\`\`
+${isRerun ? `
+### Then (only if RE-RUN MODE ACTIVE):
 
+## Deprecation Candidates
+Output a JSON array (fenced in a json code block) of pages from the COMMITTED ARCHITECTURE that are no longer architecturally justified:
+[
+  {"url_slug": "old-service-page", "reason": "Service discontinued", "action": "redirect to /services"}
+]
+If no pages should be deprecated, output an empty array: []
+` : ''}
 ## Buyer Journey Coverage Requirement (applies to ALL silos)
 
 For each silo, after the page table, include a coverage assessment block:

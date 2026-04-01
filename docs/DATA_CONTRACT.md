@@ -512,10 +512,10 @@ Written by syncMichael (Phase 6b) and Cluster Strategy (on-demand), updated by P
 | `url_slug` | syncMichael / Cluster Strategy | |
 | `silo` | syncMichael / Cluster Strategy | |
 | `priority` | syncMichael / Cluster Strategy | 1=create, 2=optimize, 3=differentiate, 4=maintain |
-| `source` | syncMichael / Cluster Strategy | `michael` (default) or `cluster_strategy` |
+| `source` | syncMichael / Cluster Strategy / Dashboard | `michael` (syncMichael), `cluster_strategy` (activation), `manual` (dashboard useAddRecommendedPages) |
 | `buyer_stage` | Cluster Strategy | `awareness`, `consideration`, `decision`, `retention` — null for architecture pages |
 | `strategy_rationale` | Cluster Strategy | Why this page was recommended — null for architecture pages |
-| `status` | Pipeline + Dashboard | `not_started` → `brief_ready` → `in_progress` → `review` → `published`. Oscar writes `in_progress` (dashboard shows "Draft Ready"). `review` = manual user action ("In Review"). |
+| `status` | Pipeline + Dashboard | `not_started` → `brief_ready` → `in_progress` → `review` → `published`. Also `deprecated` (set by syncMichael on strategic re-run for stale uncommitted pages or by Michael's deprecation recommendations). Oscar writes `in_progress` (dashboard shows "Draft Ready"). `review` = manual user action ("In Review"). |
 | `page_brief` | syncMichael | JSONB |
 | `canonical_key` | syncMichael | Join to `audit_clusters` |
 | `cluster_active` | Pipeline (rebuild) | Boolean, gates content production |

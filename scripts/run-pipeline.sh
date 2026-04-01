@@ -351,14 +351,14 @@ fi
 if should_run_phase 6b; then
 echo ""
 echo "--- Phase 6b: Sync Michael → Supabase ---"
-npx tsx scripts/sync-to-dashboard.ts --domain "$DOMAIN" --user-email "$EMAIL" --agents michael
+npx tsx scripts/sync-to-dashboard.ts --domain "$DOMAIN" --user-email "$EMAIL" --agents michael${START_FROM:+ --start-from "$START_FROM"}
 else echo "  [SKIP] Phase 6b: Sync Michael"; fi
 
 # ─── Phase 6c: Sync Dwight → Supabase ─────────────────────────
 if should_run_phase 6c; then
 echo ""
 echo "--- Phase 6c: Sync Dwight → Supabase ---"
-npx tsx scripts/sync-to-dashboard.ts --domain "$DOMAIN" --user-email "$EMAIL" --agents dwight
+npx tsx scripts/sync-to-dashboard.ts --domain "$DOMAIN" --user-email "$EMAIL" --agents dwight${START_FROM:+ --start-from "$START_FROM"}
 else echo "  [SKIP] Phase 6c: Sync Dwight"; fi
 
 # ─── Phase 6d: Local Presence Diagnostic (GBP + Citations) ────

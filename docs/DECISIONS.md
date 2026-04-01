@@ -4,6 +4,23 @@ Non-obvious choices that would look wrong without context. Check here before "fi
 
 ---
 
+**2026-04-01: Re-run stability — committed page protection and scenario detection**
+
+When a pipeline re-runs for an existing audit, three scenarios are detected via `agent_runs`:
+- **first_run**: No prior completed run → standard INSERT/upsert behavior
+- **strategic_rerun**: Prior completed run + generation phase re-ran → committed pages preserved, stale uncommitted pages deprecated
+- **failure_resume**: Prior completed run + `startFrom` is past the generation phase → full replace (re-syncing same artifacts)
+
+"Committed" is defined in `scripts/rerun-utils.ts`: `status !== 'not_started' || source === 'cluster_strategy' || source === 'manual' || published_at != null`. This predicate lives in one shared file because it will evolve (e.g., deprecation TTL).
+
+syncDwight preserves user-modified fix statuses from prior `audit_snapshots` during re-runs. Priority chain: fresh parse (flagged) → prior snapshot restore → Phase 1a verification (authoritative).
+
+syncMichael conditional upsert: committed pages get metadata-only updates (page_brief, silo, priority), stale uncommitted pages get `status: 'deprecated'`. Michael's prompt in re-run mode receives committed architecture table + GSC/GA4 performance data + deprecation candidates output section.
+
+`source` column values: `michael` (syncMichael), `cluster_strategy` (activation), `manual` (dashboard useAddRecommendedPages).
+
+---
+
 **2026-04-01: Review gate resumes from Phase 2, not 1b**
 
 `pipeline-controls` edge function (`resume_pipeline` action) passes `start_from: '2'` — not `'1b'`. The original `'1b'` caused an infinite loop: Phase 1b re-ran, hit the review gate again, exited, repeat. Phase 1b (Strategy Brief) is already complete when the user approves the review, so resume must skip it.

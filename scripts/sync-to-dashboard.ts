@@ -16,6 +16,7 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { parse as csvParse } from 'csv-parse/sync';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { isCommitted, phaseIndex, type RerunScenario } from './rerun-utils.js';
 
 // ============================================================
 // CLI argument parsing
@@ -28,6 +29,7 @@ interface CliArgs {
   rebuildClusters: boolean;
   agents: string[]; // empty = all available
   date?: string; // YYYY-MM-DD override, else latest
+  startFrom?: string; // --start-from phase (for re-run detection)
 }
 
 function parseArgs(): CliArgs {
@@ -47,7 +49,7 @@ function parseArgs(): CliArgs {
   }
 
   if (!flags.domain || !flags['user-email']) {
-    console.error('Usage: npx tsx scripts/sync-to-dashboard.ts --domain <domain> --user-email <email> [--skip-keywords] [--rebuild-clusters] [--agents jim,dwight,michael,pam] [--date YYYY-MM-DD]');
+    console.error('Usage: npx tsx scripts/sync-to-dashboard.ts --domain <domain> --user-email <email> [--skip-keywords] [--rebuild-clusters] [--agents jim,dwight,michael,pam] [--date YYYY-MM-DD] [--start-from <phase>]');
     process.exit(1);
   }
 
@@ -58,6 +60,7 @@ function parseArgs(): CliArgs {
     rebuildClusters: flags['rebuild-clusters'] === 'true',
     agents: flags.agents ? flags.agents.split(',').map((a) => a.trim()) : [],
     date: flags.date,
+    startFrom: flags['start-from'] || undefined,
   };
 }
 
@@ -1750,6 +1753,57 @@ async function syncDwight(
     console.log(`  [dwight] No AUDIT_REPORT.md found in any auditor directory — site-level findings will be empty`);
   }
 
+  // Restore user-modified fix statuses from prior snapshot (re-run awareness)
+  // Priority chain: fresh parse (flagged) → prior snapshot restore → Phase 1a verification (authoritative)
+  if (parsedReport && parsedReport.prioritizedFixes.length > 0) {
+    const { data: priorSnapshot } = await sb
+      .from('audit_snapshots')
+      .select('prioritized_fixes')
+      .eq('audit_id', auditId)
+      .eq('agent_name', 'dwight')
+      .order('snapshot_version', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (priorSnapshot && Array.isArray((priorSnapshot as any).prioritized_fixes)) {
+      const priorFixes = (priorSnapshot as any).prioritized_fixes as Array<{
+        issue?: string;
+        status?: string;
+        verified_at?: string;
+        verification_source?: string;
+        verification_note?: string;
+      }>;
+
+      // Build map of user/verification-modified statuses (anything other than 'flagged')
+      const priorStatusByIssue = new Map<string, typeof priorFixes[number]>();
+      for (const pf of priorFixes) {
+        if (pf.issue && pf.status && pf.status !== 'flagged') {
+          priorStatusByIssue.set(pf.issue.toLowerCase().trim(), pf);
+        }
+      }
+
+      if (priorStatusByIssue.size > 0) {
+        let restored = 0;
+        for (const fix of parsedReport.prioritizedFixes) {
+          // Only restore if current status is 'flagged' (default from fresh parse)
+          if (fix.status !== 'flagged') continue;
+          const key = (fix.issue ?? '').toLowerCase().trim();
+          const prior = priorStatusByIssue.get(key);
+          if (prior) {
+            fix.status = prior.status as typeof fix.status;
+            if (prior.verified_at) fix.verified_at = prior.verified_at;
+            if (prior.verification_source) fix.verification_source = prior.verification_source;
+            if (prior.verification_note) fix.verification_note = prior.verification_note;
+            restored++;
+          }
+        }
+        if (restored > 0) {
+          console.log(`  [dwight] Restored ${restored} user-modified fix statuses from prior snapshot`);
+        }
+      }
+    }
+  }
+
   // Merge verification results if Phase 1a ran
   if (parsedReport && parsedReport.prioritizedFixes.length > 0) {
     const verificationPath = path.join(dir, 'verification_results.json');
@@ -1809,6 +1863,45 @@ async function syncDwight(
   await updateStalenessTimestamp(sb, auditId, 'dwight');
 
   return agentRunId;
+}
+
+// ============================================================
+// Re-run detection — uses agent_runs to determine first_run / strategic_rerun / failure_resume
+// ============================================================
+
+async function detectRerunScenario(
+  sb: SupabaseClient,
+  auditId: string,
+  agentName: string,
+  generationPhase: string,
+  startFrom?: string
+): Promise<{ scenario: RerunScenario; priorRunId: string | null }> {
+  const { data: priorRuns } = await sb
+    .from('agent_runs')
+    .select('id, run_date')
+    .eq('audit_id', auditId)
+    .eq('agent_name', agentName)
+    .eq('status', 'completed')
+    .order('run_date', { ascending: false })
+    .limit(1);
+
+  if (!priorRuns || priorRuns.length === 0) {
+    return { scenario: 'first_run', priorRunId: null };
+  }
+
+  const priorRunId = priorRuns[0].id;
+
+  // If startFrom is set and is AFTER this agent's generation phase,
+  // the agent didn't re-generate — this is a failure_resume (re-syncing same artifacts)
+  if (startFrom) {
+    const genIdx = phaseIndex(generationPhase);
+    const startIdx = phaseIndex(startFrom);
+    if (genIdx >= 0 && startIdx >= 0 && startIdx > genIdx) {
+      return { scenario: 'failure_resume', priorRunId };
+    }
+  }
+
+  return { scenario: 'strategic_rerun', priorRunId };
 }
 
 // ============================================================
@@ -1933,7 +2026,8 @@ async function syncMichael(
   sb: SupabaseClient,
   auditId: string,
   domain: string,
-  date: string | undefined
+  date: string | undefined,
+  startFrom?: string
 ) {
   const dir = agentDir(domain, 'architecture', date);
   if (!dir) {
@@ -1949,7 +2043,7 @@ async function syncMichael(
   const { pages, markdown, summary } = parseArchitectureBlueprint(blueprintFile);
   console.log(`  [michael] Extracted ${pages.length} architecture pages from tables`);
 
-  // Clear prior data
+  // Clear prior reference data (read-only, always replace)
   await sb.from('agent_architecture_pages').delete().eq('audit_id', auditId);
   await sb.from('agent_architecture_blueprint').delete().eq('audit_id', auditId);
 
@@ -1966,7 +2060,11 @@ async function syncMichael(
 
   const agentRunId = run?.id ?? null;
 
-  // Insert pages
+  // Re-run detection (Michael generates at Phase 6)
+  const { scenario } = await detectRerunScenario(sb, auditId, 'michael', '6', startFrom);
+  console.log(`  [michael] Re-run scenario: ${scenario}`);
+
+  // Insert architecture pages (reference data, always replaced)
   if (pages.length > 0) {
     const pageRecords = pages.map((p) => ({
       audit_id: auditId,
@@ -1996,7 +2094,7 @@ async function syncMichael(
   if (bpErr) throw new Error(`blueprint insert failed: ${bpErr.message}`);
   console.log(`  [michael] Inserted blueprint (${Math.round(markdown.length / 1024)}KB)`);
 
-  // Seed execution_pages with page_brief from architecture pages
+  // --- Seed execution_pages (re-run-aware) ---
   if (pages.length > 0) {
     const execRecords = pages.map((p) => ({
       audit_id: auditId,
@@ -2004,6 +2102,7 @@ async function syncMichael(
       silo: p.silo_name || null,
       priority: p.action_required === 'create' ? 1 : p.action_required === 'optimize' ? 2 : p.action_required === 'differentiate' ? 3 : 4,
       status: 'not_started',
+      source: 'michael',
       page_brief: {
         silo_name: p.silo_name,
         role: p.role,
@@ -2015,30 +2114,123 @@ async function syncMichael(
       snapshot_version: snapshotVersion,
     }));
 
-    // Upsert: if page exists, update page_brief but preserve status and Pam fields
-    for (const rec of execRecords) {
-      // Match existing record by slug (handle legacy leading-slash variants)
-      const slug = rec.url_slug.replace(/^\/+/, '');
-      const { data: existing } = await sb
+    if (scenario === 'strategic_rerun') {
+      // Load all existing execution_pages for this audit
+      const { data: existingPages } = await sb
         .from('execution_pages')
-        .select('id')
-        .eq('audit_id', auditId)
-        .or(`url_slug.eq.${slug},url_slug.eq./${slug}`)
-        .maybeSingle();
+        .select('id, url_slug, status, source, published_at')
+        .eq('audit_id', auditId);
 
-      if (existing) {
-        await sb.from('execution_pages').update({
-          url_slug: slug, // normalize
-          page_brief: rec.page_brief,
-          silo: rec.silo,
-          priority: rec.priority,
-          snapshot_version: rec.snapshot_version,
-        }).eq('id', (existing as any).id);
-      } else {
-        await sb.from('execution_pages').insert({ ...rec, url_slug: slug });
+      const existingBySlug = new Map<string, { id: string; url_slug: string; status: string; source: string | null; published_at: string | null }>();
+      for (const ep of (existingPages ?? []) as any[]) {
+        const normalizedSlug = String(ep.url_slug).replace(/^\/+/, '').toLowerCase();
+        existingBySlug.set(normalizedSlug, ep);
       }
+
+      // Track which existing slugs are still in the new output
+      const newSlugs = new Set<string>();
+      let preserved = 0;
+      let updated = 0;
+      let inserted = 0;
+
+      for (const rec of execRecords) {
+        const slug = rec.url_slug.replace(/^\/+/, '');
+        const key = slug.toLowerCase();
+        newSlugs.add(key);
+        const existing = existingBySlug.get(key);
+
+        if (existing && isCommitted(existing)) {
+          // Committed: update metadata only, do NOT touch status/source/Pam/Oscar fields
+          await (sb as any).from('execution_pages').update({
+            url_slug: slug,
+            page_brief: rec.page_brief,
+            silo: rec.silo,
+            priority: rec.priority,
+            snapshot_version: rec.snapshot_version,
+          }).eq('id', existing.id);
+          preserved++;
+        } else if (existing) {
+          // Not committed: full upsert with source
+          await (sb as any).from('execution_pages').update({
+            url_slug: slug,
+            page_brief: rec.page_brief,
+            silo: rec.silo,
+            priority: rec.priority,
+            status: 'not_started',
+            source: 'michael',
+            snapshot_version: rec.snapshot_version,
+          }).eq('id', existing.id);
+          updated++;
+        } else {
+          // New page
+          await (sb as any).from('execution_pages').insert({ ...rec, url_slug: slug });
+          inserted++;
+        }
+      }
+
+      // Handle stale pages (in DB but not in new output)
+      let deprecated = 0;
+      let stalePreserved = 0;
+      for (const [key, ep] of existingBySlug) {
+        if (newSlugs.has(key)) continue;
+        if (isCommitted(ep)) {
+          stalePreserved++;
+        } else {
+          await (sb as any).from('execution_pages').update({ status: 'deprecated' }).eq('id', ep.id);
+          deprecated++;
+        }
+      }
+
+      // Parse deprecation candidates from blueprint (Michael's ## Deprecation Candidates section)
+      const deprecationMatch = markdown.match(/## Deprecation Candidates[\s\S]*?```json\s*([\s\S]*?)```/i);
+      if (deprecationMatch) {
+        try {
+          const candidates = JSON.parse(deprecationMatch[1].trim()) as Array<{ url_slug: string; reason: string }>;
+          let deprecatedByMichael = 0;
+          for (const c of candidates) {
+            const cSlug = c.url_slug.replace(/^\/+/, '').toLowerCase();
+            const ep = existingBySlug.get(cSlug);
+            if (ep && isCommitted(ep) && ep.status !== 'published') {
+              // Michael explicitly recommends deprecation — only apply to non-published committed pages
+              await (sb as any).from('execution_pages').update({ status: 'deprecated' }).eq('id', ep.id);
+              deprecatedByMichael++;
+              console.log(`  [michael] Deprecated by recommendation: ${c.url_slug} (${c.reason})`);
+            }
+          }
+          if (deprecatedByMichael > 0) {
+            console.log(`  [michael] Deprecated ${deprecatedByMichael} page(s) by Michael recommendation`);
+          }
+        } catch {
+          console.log(`  [michael] Warning: could not parse Deprecation Candidates JSON`);
+        }
+      }
+
+      console.log(`  [michael] Strategic re-run: ${preserved} preserved, ${updated} updated, ${inserted} new, ${deprecated} deprecated (stale), ${stalePreserved} stale-but-committed`);
+    } else {
+      // first_run or failure_resume: standard upsert with source
+      for (const rec of execRecords) {
+        const slug = rec.url_slug.replace(/^\/+/, '');
+        const { data: existing } = await sb
+          .from('execution_pages')
+          .select('id')
+          .eq('audit_id', auditId)
+          .or(`url_slug.eq.${slug},url_slug.eq./${slug}`)
+          .maybeSingle();
+
+        if (existing) {
+          await sb.from('execution_pages').update({
+            url_slug: slug,
+            page_brief: rec.page_brief,
+            silo: rec.silo,
+            priority: rec.priority,
+            snapshot_version: rec.snapshot_version,
+          }).eq('id', (existing as any).id);
+        } else {
+          await sb.from('execution_pages').insert({ ...rec, url_slug: slug });
+        }
+      }
+      console.log(`  [michael] Seeded ${execRecords.length} execution page briefs (${scenario})`);
     }
-    console.log(`  [michael] Seeded ${execRecords.length} execution page briefs`);
 
     // Backfill canonical_key on execution_pages from primary_keyword → audit_keywords
     const pkToCanonical = new Map<string, string>();
@@ -2425,7 +2617,7 @@ async function main() {
           runId = await syncDwight(sb, audit!.id, args.domain, args.date);
           break;
         case 'michael':
-          runId = await syncMichael(sb, audit!.id, args.domain, args.date);
+          runId = await syncMichael(sb, audit!.id, args.domain, args.date, args.startFrom);
           break;
         case 'pam':
           runId = await syncPam(sb, audit!.id, args.domain, args.date);

@@ -611,13 +611,21 @@ Cross-checks Gap's identified gaps against Michael's blueprint to verify coverag
 
 **Function:** `syncMichael()` | Parses `architecture_blueprint.md` silo tables
 
+**Re-run awareness:** Detects scenario via `detectRerunScenario()` using `agent_runs`. Accepts `--start-from` from shell orchestrator.
+
+| Scenario | Behavior |
+|----------|----------|
+| `first_run` | Standard INSERT/upsert, writes `source: 'michael'` |
+| `strategic_rerun` | Committed pages get metadata-only update (page_brief, silo, priority). Stale uncommitted pages set to `deprecated`. Parses `## Deprecation Candidates` JSON from blueprint for explicit deprecation. |
+| `failure_resume` | Full replace (re-syncing same artifacts, no protection needed) |
+
 **Supabase writes:**
 
 | Table | Purpose |
 |-------|---------|
-| `agent_architecture_pages` | Parsed page records (slug, silo, role, keyword, volume, action) |
-| `agent_architecture_blueprint` | Full markdown + executive summary |
-| `execution_pages` | UPSERT — seeds Content Factory with page briefs (priority: 1=create, 2=optimize) |
+| `agent_architecture_pages` | Parsed page records (slug, silo, role, keyword, volume, action) — always DELETE+INSERT |
+| `agent_architecture_blueprint` | Full markdown + executive summary — always DELETE+INSERT |
+| `execution_pages` | Conditional UPSERT — committed pages preserved on strategic re-run. Writes `source: 'michael'` on INSERT. |
 | `audit_keywords` | UPDATE cluster field from silo assignments |
 
 ---
