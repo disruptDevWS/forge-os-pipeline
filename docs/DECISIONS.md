@@ -4,6 +4,12 @@ Non-obvious choices that would look wrong without context. Check here before "fi
 
 ---
 
+**2026-04-01: agent_runs has no token columns — do not insert input_tokens/output_tokens**
+
+`generate-cluster-strategy.ts` was inserting `input_tokens: 0, output_tokens: 0` into `agent_runs`, but that table has no such columns. The Supabase client silently failed with a schema cache error. This caused the `agent_runs` row to never be created for cluster activations. If token tracking is needed later, add columns via migration first.
+
+---
+
 **2026-04-01: Re-run stability — committed page protection and scenario detection**
 
 When a pipeline re-runs for an existing audit, three scenarios are detected via `agent_runs`:
