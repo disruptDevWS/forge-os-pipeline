@@ -6,7 +6,13 @@ Non-obvious choices that would look wrong without context. Check here before "fi
 
 **2026-04-01: Scout allows empty target_geos for national geo mode**
 
-When `geo_type === 'national'`, `target_geos` is legitimately empty — national mode uses no geo qualifiers on keywords and defaults to location code `2840` (US national). The `runScout()` validation now checks `geo_type` before rejecting empty `target_geos`. Synthetic keyword generation also handles this: bare topic patterns (e.g., `"emt course"`) are used instead of `{pattern} {geo}` combinations when `allGeos` is empty.
+When `geo_type === 'national'`, `target_geos` is legitimately empty — national mode uses no geo qualifiers on keywords and defaults to location code `2840` (US national). Three code paths in `runScout()` were updated:
+
+1. **Validation** (line ~4412): checks `geo_type` before rejecting empty `target_geos`
+2. **Synthetic keywords** (Step 2 fallback): bare topic patterns (e.g., `"seo agency"`) instead of `{pattern} {geo}` combinations
+3. **Opportunity map** (Step 3): bare topic phrases (e.g., `"search engine optimization"`) instead of `{topic} {metro/state}` combinations
+
+All three had the same root pattern: iterating `target_geos` or `allGeos` produced zero candidates for national mode. The dashboard's `buildPipelineGeos('national')` correctly returns `[]` — the pipeline just wasn't handling it.
 
 ---
 
