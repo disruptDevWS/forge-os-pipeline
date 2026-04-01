@@ -4,6 +4,12 @@ Non-obvious choices that would look wrong without context. Check here before "fi
 
 ---
 
+**2026-04-01: Scout allows empty target_geos for national geo mode**
+
+When `geo_type === 'national'`, `target_geos` is legitimately empty — national mode uses no geo qualifiers on keywords and defaults to location code `2840` (US national). The `runScout()` validation now checks `geo_type` before rejecting empty `target_geos`. Synthetic keyword generation also handles this: bare topic patterns (e.g., `"emt course"`) are used instead of `{pattern} {geo}` combinations when `allGeos` is empty.
+
+---
+
 **2026-04-01: agent_runs has no token columns — do not insert input_tokens/output_tokens**
 
 `generate-cluster-strategy.ts` was inserting `input_tokens: 0, output_tokens: 0` into `agent_runs`, but that table has no such columns. The Supabase client silently failed with a schema cache error. This caused the `agent_runs` row to never be created for cluster activations. If token tracking is needed later, add columns via migration first.
