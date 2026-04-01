@@ -599,8 +599,6 @@ REMINDER: Your response IS the cluster strategy document — start with "### 0. 
     audit_id: auditId,
     agent_name: 'cluster_strategy',
     status: 'completed',
-    input_tokens: 0,
-    output_tokens: 0,
     metadata: {
       canonical_key: args.canonicalKey,
       keywords: kwList.length,
