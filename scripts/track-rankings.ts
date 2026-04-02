@@ -259,8 +259,8 @@ async function trackRankings(cliArgs: CliArgs) {
 
   if (latestSnapshot && !cliArgs.force) {
     const days = daysSince(latestSnapshot.snapshot_date);
-    if (days < 6) {
-      console.log(`  Skipping — snapshot taken ${days} days ago (< 6 day threshold). Use --force to override.`);
+    if (days < 25) {
+      console.log(`  Skipping — snapshot taken ${days} days ago (< 25 day threshold). Use --force to override.`);
       return;
     }
   }

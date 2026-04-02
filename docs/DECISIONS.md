@@ -4,6 +4,14 @@ Non-obvious choices that would look wrong without context. Check here before "fi
 
 ---
 
+**2026-04-02: Performance tracking is opt-in per audit (performance_tracking_enabled)**
+
+`cron-track-all.ts` runs monthly and calls DataForSEO ranked_keywords (~$0.05/audit). Without a filter, every completed audit incurs cost whether or not anyone cares about ongoing tracking. `performance_tracking_enabled` (boolean, default false) gates cron inclusion — superadmin toggles it on the Audits Dashboard.
+
+The recency threshold in `track-rankings.ts` changed from 6 days (weekly) to 25 days (monthly) to match the cron cadence. The on-demand "Track Rankings" button in Settings always passes `force: true` through the edge function so it bypasses the threshold — an explicit user action should never be silently skipped.
+
+---
+
 **2026-04-01: Scout allows empty target_geos for national geo mode**
 
 When `geo_type === 'national'`, `target_geos` is legitimately empty — national mode uses no geo qualifiers on keywords and defaults to location code `2840` (US national). Three code paths in `runScout()` were updated:

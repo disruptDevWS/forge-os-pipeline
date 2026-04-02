@@ -43,13 +43,14 @@
 | `error_message` | Pipeline | Dashboard | |
 | `client_context` | Dashboard | Pipeline | JSONB: `{core_services, differentiators, service_area, notes}` |
 | `review_gate_enabled` | Dashboard | Pipeline | Boolean, default false |
+| `performance_tracking_enabled` | Dashboard | Pipeline (cron) | Boolean, default false. Opt-in for monthly cron ranking tracking. |
 | `research_snapshot_at` | Pipeline (syncJim) | Dashboard | Staleness timestamp |
 | `audit_snapshot_at` | Pipeline (syncDwight) | Dashboard | Staleness timestamp |
 | `strategy_snapshot_at` | Pipeline (syncMichael) | Dashboard | Staleness timestamp |
 | `created_at`, `completed_at` | Auto / Pipeline | Dashboard | |
 
 **Pipeline writes**: `status`, `error_message`, `service_key` (auto-detect), `*_snapshot_at` timestamps
-**Dashboard writes**: All creation fields, `client_context`, `review_gate_enabled`, `status` (draft→running)
+**Dashboard writes**: All creation fields, `client_context`, `review_gate_enabled`, `performance_tracking_enabled`, `status` (draft→running)
 **Dashboard reads**: Full row + relations (`audit_rollups`, `audit_assumptions`, `audit_clusters`, `audit_keywords`)
 
 ---
@@ -297,7 +298,7 @@ Written by syncJim (first sync only, if near_miss > 0).
 
 ### `ranking_snapshots`
 
-Written by `track-rankings.ts` (weekly cron or on-demand).
+Written by `track-rankings.ts` (monthly cron or on-demand).
 
 | Column | Notes |
 |--------|-------|
@@ -709,7 +710,7 @@ Server-side view computing position changes from `ranking_snapshots`.
 | `scout-config` | `generate_share_token` | (Supabase-only) | `{prospect_id}` | `{token, share_url, domain, name}` |
 | `scout-config` | `get_share_report` | (Supabase-only, **no auth**) | `{token}` | `{prospect, markdown, scope, narrative}` |
 | `pipeline-controls` | `recanonicalize` | `/recanonicalize` | `{domain, email}` | `{ok}` |
-| `pipeline-controls` | `track_rankings` | `/track-rankings` | `{domain, email}` | `{ok}` |
+| `pipeline-controls` | `track_rankings` | `/track-rankings` | `{domain, email, force: true}` | `{ok}` |
 | `pipeline-controls` | `track_gsc` | `/track-gsc` | `{domain, email}` | `{ok}` |
 | `pipeline-controls` | `track_llm_mentions` | `/track-llm-mentions` | `{domain, email}` | `{ok}` |
 | `pipeline-controls` | `lookup_keywords` | `/lookup-keywords` | `{keywords[], location_codes?, audit_id?}` | `{results[], total, found, estimated_cost}` |

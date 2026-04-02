@@ -5,10 +5,11 @@
  *
  * Usage:
  *   npx tsx scripts/cron-track-all.ts
- *   npx tsx scripts/cron-track-all.ts --force    # bypass 6-day recency check
+ *   npx tsx scripts/cron-track-all.ts --force    # bypass 25-day recency check
  *
- * Scheduling: Run weekly via Railway cron or external scheduler.
- * The 6-day recency check in track-rankings.ts prevents double-runs.
+ * Scheduling: Run monthly via Railway cron or external scheduler.
+ * Only processes audits with performance_tracking_enabled = true.
+ * The 25-day recency check in track-rankings.ts prevents double-runs.
  */
 
 import { createClient } from '@supabase/supabase-js';
@@ -91,11 +92,12 @@ async function main() {
 
   const sb = createClient(supabaseUrl, supabaseKey);
 
-  // Query all completed audits with their owner's email
-  const { data: audits, error } = await sb
+  // Query completed audits with performance tracking enabled
+  const { data: audits, error } = await (sb as any)
     .from('audits')
     .select('id, domain, user_id, status')
-    .eq('status', 'completed');
+    .eq('status', 'completed')
+    .eq('performance_tracking_enabled', true);
 
   if (error) throw new Error(`Failed to query audits: ${error.message}`);
   if (!audits || audits.length === 0) {
