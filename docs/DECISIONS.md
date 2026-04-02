@@ -4,6 +4,24 @@ Non-obvious choices that would look wrong without context. Check here before "fi
 
 ---
 
+**2026-04-02: Em dash style constraint in all client-facing LLM prompts**
+
+Excessive em dash usage is a common tell for AI-generated content — prospects may perceive it negatively. All four client-facing prose prompts (scout report, prospect narrative, prospect brief, client brief) now include a STYLE RULES block: "Avoid em dashes. One per section maximum. Use periods, commas, or restructure sentences instead." This is intentional and should not be removed. Internal/technical prompts (Dwight, Jim, Michael, QA) do not have this constraint since their output is not client-facing.
+
+---
+
+**2026-04-02: Scout share report uses imported icon, not public/brand/ path**
+
+The Scout share page (`ScoutShareReport.tsx`) imports `forge-growth-icon.png` from `src/assets/` (Vite import, always bundled) instead of referencing `/brand/...` from `public/`. The `public/brand/` PNGs are now also committed to git (for other pages that use them), but the share page uses the import path because it's guaranteed to work regardless of static asset serving.
+
+---
+
+**2026-04-02: Client brief download uses /artifact endpoint, not a new endpoint**
+
+The pipeline server's `/artifact` endpoint already serves any file from `audits/{domain}/` by path. Rather than adding a dedicated `/read-client-brief` endpoint, the `read_client_brief` edge function action calls `/artifact` with `file: 'reports/client_brief.html'`. This reuses existing infrastructure and works for any future report file without new server endpoints.
+
+---
+
 **2026-04-02: Performance tracking is opt-in per audit (performance_tracking_enabled)**
 
 `cron-track-all.ts` runs monthly and calls DataForSEO ranked_keywords (~$0.05/audit). Without a filter, every completed audit incurs cost whether or not anyone cares about ongoing tracking. `performance_tracking_enabled` (boolean, default false) gates cron inclusion — superadmin toggles it on the Audits Dashboard.

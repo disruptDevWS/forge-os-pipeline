@@ -717,6 +717,10 @@ Server-side view computing position changes from `ranking_snapshots`.
 | `pipeline-controls` | `ai_visibility_analysis` | `/ai-visibility-analysis` | `{domain, email, audit_id, keywords?, competitor_domains?}` | Full analysis result JSON |
 | `pipeline-controls` | `rerun_pipeline` | `/trigger-pipeline` | `{domain, email}` | `{ok}` |
 | `pipeline-controls` | `resume_pipeline` | `/trigger-pipeline` | `{domain, email, annotations?, audit_id}` | `{success, start_from:'1b'}` |
+| `pipeline-controls` | `read_strategy_brief` | `/strategy-brief` | `{domain}` | `{content, date}` or 404 |
+| `pipeline-controls` | `generate_prospect_brief` | `/generate-prospect-brief` | `{domain}` | `{ok}` |
+| `pipeline-controls` | `generate_client_brief` | `/generate-client-brief` | `{domain, email}` | `{ok}` |
+| `pipeline-controls` | `read_client_brief` | `/artifact` | `{domain, file:'reports/client_brief.html'}` | `{content}` or 404 |
 | `pipeline-controls` | `generate_brief` | `/generate-brief` | `{domain, email}` | `{status:'brief_generation_started'}` |
 | `pipeline-controls` | `generate_content` | `/generate-content` | `{domain, email}` | `{status:'content_generation_started'}` |
 | `cluster-action` | `activate` | `/activate-cluster` | `{audit_id, canonical_key, target_publish_date?, notes?}` | cluster status |
