@@ -4887,6 +4887,11 @@ ${gapTable || '| (no gap data) | | | | | |'}
 {scope_json}
 \`\`\`
 
+STYLE RULES:
+- Avoid em dashes (—). Use periods, commas, or restructure sentences instead. One em dash per section maximum.
+- Write short, direct sentences. Vary sentence length naturally.
+- No filler phrases like "it's worth noting" or "the reality is."
+
 REMINDER: Your response IS the report — start with "# Scout Report". No preamble, no narration.`;
 
   const reportContent = await callClaude(reportPrompt, { model: 'sonnet', phase: 'scout_report' });
@@ -4979,6 +4984,11 @@ ${scoutReport}
 
 ## What a Full Analysis Would Reveal
 [2-3 short paragraphs positioning the full audit as the logical next step. Mention what a deeper analysis covers (technical health, competitor landscape, content architecture) without overselling. End with a forward-looking statement about their growth opportunity.]
+
+STYLE RULES:
+- Avoid em dashes (—). Use periods, commas, or restructure sentences instead. One em dash per section maximum.
+- Write short, direct sentences. Vary sentence length naturally.
+- No filler phrases like "it's worth noting" or "the reality is."
 
 REMINDER: Your response IS the narrative — start with "# Where ${businessName} Stands Online". No preamble, no narration. Write for a business owner, not an SEO professional.`;
 }

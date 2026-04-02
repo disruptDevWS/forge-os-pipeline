@@ -181,6 +181,11 @@ ${narrative ? `## Existing Narrative (for tone reference)\n${narrative.slice(0, 
 ---NEXT_STEPS---
 [2-3 paragraphs. What a full audit would reveal. What actions would follow. End with a forward-looking statement about their growth opportunity. Be specific but not overselling.]
 
+STYLE RULES:
+- Avoid em dashes (—). Use periods, commas, or restructure sentences instead. One em dash per section maximum.
+- Write short, direct sentences. Vary sentence length naturally.
+- No filler phrases like "it's worth noting" or "the reality is."
+
 REMINDER: Output the three sections with the exact markers. No other text.`;
 
   const output = await callClaude(prompt, { model: 'sonnet', phase: 'prospect_brief' });

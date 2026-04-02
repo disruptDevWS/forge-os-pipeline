@@ -328,6 +328,11 @@ ${gbp ? `- GBP: ${gbp.listing_found ? 'Found' : 'NOT FOUND'}, ${gbp.is_claimed ?
 ---NEXT_STEPS---
 [2-3 paragraphs. Concrete next steps in priority order. What to fix first (technical), what to build (content), what to optimize (local). End with a compelling forward-looking statement about their growth trajectory.]
 
+STYLE RULES:
+- Avoid em dashes (—). Use periods, commas, or restructure sentences instead. One em dash per section maximum.
+- Write short, direct sentences. Vary sentence length naturally.
+- No filler phrases like "it's worth noting" or "the reality is."
+
 REMINDER: Output the six sections with the exact markers. No other text.`;
 
   const output = await callClaude(prompt, { model: 'sonnet', phase: 'client_brief' });
