@@ -78,6 +78,7 @@ async function main() {
   const updateFields: Record<string, any> = { agent_pipeline_status: status };
   if (status === 'complete') {
     updateFields.status = 'completed';
+    updateFields.completed_at = new Date().toISOString();
   } else if (status === 'failed') {
     updateFields.status = 'failed';
   } else if (status === 'awaiting_review') {
