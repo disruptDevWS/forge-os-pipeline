@@ -2,7 +2,7 @@
 
 > **Purpose**: Authoritative map of every Supabase table, who writes it (pipeline), who reads it (dashboard), and which columns matter. Use this before adding columns, changing sync logic, or building new UI components.
 >
-> **Last updated**: 2026-03-30
+> **Last updated**: 2026-04-03
 
 ---
 
@@ -629,7 +629,7 @@ Written by Phase 6d (LocalPresence). One row per directory.
 | `share_token_created_at` | Edge fn | Dashboard | |
 | `brand_favicon_url` | Pipeline (Scout) | Edge fn (get_share_report) | Google favicon URL |
 | `scout_markdown` | Pipeline (Scout) | Edge fn (get_share_report) | Full scout report markdown |
-| `scout_scope_json` | Pipeline (Scout) | Edge fn (get_share_report) | scope.json JSONB |
+| `scout_scope_json` | Pipeline (Scout) | Edge fn (get_share_report) | scope.json JSONB. Additive fields: `gap_summary.top_opportunities[].cpc_inferred` (boolean), `max_topic_cpc` (Record<string, number>) |
 | `prospect_narrative` | Pipeline (Scout) | Edge fn (get_share_report) | Plain-language outreach doc |
 
 **Dashboard reads**: `useProspects()`, `useProspect()`, `useProspectStatus()` (2s poll while running)
@@ -750,7 +750,7 @@ These files live on the pipeline server disk and are NOT in Supabase. They feed 
 
 | Path | Phase | Contents |
 |------|-------|----------|
-| `audits/{domain}/scout/{date}/scope.json` | Scout | Topics, locales, services, gap_summary |
+| `audits/{domain}/scout/{date}/scope.json` | Scout | Topics, locales, services, gap_summary (with cpc_inferred on opportunities), max_topic_cpc |
 | `audits/{domain}/scout/{date}/prospect-narrative.md` | Scout | Plain-language outreach document |
 | `audits/{domain}/auditor/{date}/AUDIT_REPORT.md` | Dwight | Full technical audit |
 | `audits/{domain}/auditor/{date}/internal_all.csv` | Dwight | Crawl data (all internal URLs) |

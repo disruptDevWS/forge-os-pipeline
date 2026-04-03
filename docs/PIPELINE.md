@@ -200,10 +200,12 @@ Client Brief (auto after Phase 6d, non-fatal)
 
 **Steps:**
 1. **Topic extraction** — Haiku extracts 5–15 canonical topics from ranked keywords + topic patterns. No crawl — Dwight handles comprehensive crawling in Phase 1 if the prospect converts.
-2. **Current rankings** — DataForSEO `ranked_keywords/live` for the domain. Falls back to `buildSyntheticRankedKeywords()` if <50 results. For multi-state prospects, ranked keyword volumes are geo-qualified via per-state `search_volume/live` calls (volumes summed across target states).
-3. **Opportunity map** — DataForSEO bulk volume for `topic × geo` candidates. Uses geo-qualified location codes when target_geos contains state data.
-4. **Gap matrix** — Cross-references rankings vs opportunity: defending (1–10), weak (11–30), gap (not ranking).
-5. **Report + scope.json** — Sonnet generates scout report (7 sections); scope.json is Jim-compatible seed data.
+2. **Current rankings** — DataForSEO `ranked_keywords/live` for the domain. Falls back to `buildSyntheticRankedKeywords()` if <50 results. For multi-state prospects, ranked keyword volumes are geo-qualified via per-state `search_volume/live` calls (volumes summed across target states). Low-presence domains (<50 rankings) get expanded synthetic candidates with intent modifiers (`best`, `cost`, `services`, `near me`) and raised cap (500 vs 200).
+3. **Opportunity map** — DataForSEO bulk volume for `topic × geo` candidates. Uses geo-qualified location codes when target_geos contains state data. Low-presence domains get expanded cross-product with intent modifiers and `topic_patterns × metros` injection.
+4. **Deduplication** — Near-variant keywords collapsed via `buildCanonicalKey()` (suffix-only state stripping, alphabetical sort). Applied to ranked keywords and opportunity map before gap matrix assembly.
+5. **Gap matrix** — Cross-references rankings vs opportunity: defending (1–10), weak (11–30), gap (not ranking). CPC backfill: $0 CPC entries filled from same-topic max, marked `cpc_inferred: true`. Inferred values shown with tilde prefix (`~$X`) in report tables.
+6. **Report + scope.json** — Sonnet generates scout report (7 sections); scope.json is Jim-compatible seed data with `cpc_inferred` on opportunities and `max_topic_cpc` at root.
+7. **Prospect narrative** — Sonnet generates 3-section outreach document. Prompt includes `topicMaxCpc` revenue context, CPC revenue translation instruction, and competitive framing instruction.
 
 **External APIs:**
 

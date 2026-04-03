@@ -4,6 +4,36 @@ Non-obvious choices that would look wrong without context. Check here before "fi
 
 ---
 
+**2026-04-03: Scout keyword deduplication uses suffix-only state stripping**
+
+`buildCanonicalKey()` normalizes keywords for near-duplicate detection by lowercasing, then stripping ONLY the last token if it matches a US state name, then sorting remaining tokens alphabetically. This means "water heater repair boise idaho" → strip "idaho" → sort → key, but "idaho falls water heater repair" → "repair" is last → no stripping → "idaho" preserved as part of the city name. The suffix-only approach is intentional to avoid mangling compound city names (Idaho Falls, New York, etc.). Do not change this to strip state names from any position.
+
+---
+
+**2026-04-03: Scout CPC backfill marks inferred values, never overwrites measured data**
+
+When a keyword has $0 CPC but other keywords in the same topic have measured CPC, we backfill from the topic's max CPC and set `cpc_inferred: true`. This is strictly additive — measured CPC values are never touched. The gap table shows inferred values with a tilde prefix (`~$20.68`), and the report prompt includes an explicit instruction not to misrepresent inferred values as measured. `scope.json` carries `cpc_inferred` on individual opportunities and `max_topic_cpc` at root. Jim Phase 3 ignores unknown keys, so this is not a breaking change.
+
+---
+
+**2026-04-03: Scout candidate expansion only activates for low-presence domains**
+
+Intent modifier variants (`best {service} {city}`, `{service} cost {city}`, `{service} services {city}`, `{service} near me`) and the raised keyword cap (200→500) are gated behind `rankedKeywords.length < 50`. High-presence domains that already have 50+ ranked keywords never enter this path — their existing ranking data is rich enough. The `SCOUT_SESSION_BUDGET` ($2.00) check still enforces the cost ceiling for all domains regardless.
+
+---
+
+**2026-04-03: Scout share report removes all technical sections for prospect audience**
+
+The share page (`ScoutShareReport.tsx`) no longer includes the collapsible Technical Details section (which rendered the full scout_markdown with Opportunity Map, Gap Matrix, Canonical Topic Set, etc.). These are replaced by a "Revenue You're Missing" section with a lead card and simple gaps table using business-language headers ("Search Term", "Monthly Searches", "Ad Cost/Click"). The full scout_markdown remains accessible on the dashboard at `/scout/:id`. The share page is for service business owners, not SEO professionals.
+
+---
+
+**2026-04-03: NarrativeSection share variant leads with problem, not wins**
+
+The `NarrativeSection` component accepts a `variant` prop (`'share'` | `'dashboard'`). In share variant, "Where Demand Is Escaping You" renders before "Where You're Winning" — problem first creates urgency, then acknowledging wins builds trust. Accent colors follow heading meaning (green=winning, orange=escaping) regardless of position. Reorder only activates if both expected headings are found (defensive guard against unexpected narrative formats).
+
+---
+
 **2026-04-02: Em dash style constraint in all client-facing LLM prompts**
 
 Excessive em dash usage is a common tell for AI-generated content — prospects may perceive it negatively. All four client-facing prose prompts (scout report, prospect narrative, prospect brief, client brief) now include a STYLE RULES block: "Avoid em dashes. One per section maximum. Use periods, commas, or restructure sentences instead." This is intentional and should not be removed. Internal/technical prompts (Dwight, Jim, Michael, QA) do not have this constraint since their output is not client-facing.
