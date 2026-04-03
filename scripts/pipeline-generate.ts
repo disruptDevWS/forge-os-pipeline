@@ -820,6 +820,58 @@ function buildSyntheticRankedKeywords(volumeResults: BulkVolumeResult[]): any {
 }
 
 // ============================================================
+// ── Near-duplicate keyword deduplication ──
+
+/** Normalize a keyword into a canonical key for dedup. Suffix-only state stripping. */
+function buildCanonicalKey(kw: string, stateNames: Set<string>): string {
+  const tokens = kw.toLowerCase().trim().split(/\s+/);
+  // Strip ONLY the last token if it exactly matches a state name
+  if (tokens.length > 1 && stateNames.has(tokens[tokens.length - 1])) {
+    tokens.pop();
+  }
+  return tokens.sort().join(' ');
+}
+
+/** Deduplicate ranked keywords: best position wins, tie-break by highest volume. */
+function deduplicateKeywords<T extends { keyword: string; position: number; volume: number }>(
+  keywords: T[],
+  stateNames: string[],
+): T[] {
+  const stateSet = new Set(stateNames.map((s) => s.toLowerCase()));
+  const map = new Map<string, T>();
+  for (const kw of keywords) {
+    const key = buildCanonicalKey(kw.keyword, stateSet);
+    const existing = map.get(key);
+    if (!existing) {
+      map.set(key, kw);
+    } else if (
+      kw.position < existing.position ||
+      (kw.position === existing.position && kw.volume > existing.volume)
+    ) {
+      map.set(key, kw);
+    }
+  }
+  return [...map.values()];
+}
+
+/** Deduplicate bulk volume results: highest volume wins. */
+function deduplicateVolumeResults(
+  results: BulkVolumeResult[],
+  stateNames: string[],
+): BulkVolumeResult[] {
+  const stateSet = new Set(stateNames.map((s) => s.toLowerCase()));
+  const map = new Map<string, BulkVolumeResult>();
+  for (const r of results) {
+    const key = buildCanonicalKey(r.keyword, stateSet);
+    const existing = map.get(key);
+    if (!existing || r.volume > existing.volume) {
+      map.set(key, r);
+    }
+  }
+  return [...map.values()];
+}
+
+// ============================================================
 // ── Site Inventory builder (shared by Jim + KeywordResearch) ──
 
 function buildSiteInventory(domain: string): string {
@@ -4548,14 +4600,26 @@ async function runScout(sb: SupabaseClient, domain: string, prospectConfigPath: 
       if (allGeos.length > 0) {
         for (const geo of allGeos) {
           candidates.push(`${pattern} ${geo}`.toLowerCase());
+          // Intent modifier variants for low-presence domains
+          candidates.push(`best ${pattern} ${geo}`.toLowerCase());
+          candidates.push(`${pattern} cost ${geo}`.toLowerCase());
+          candidates.push(`${pattern} services ${geo}`.toLowerCase());
         }
+        // Geo-independent variants
+        candidates.push(`${pattern} near me`.toLowerCase());
+        candidates.push(`best ${pattern}`.toLowerCase());
       } else {
         // National mode: use topic patterns without geo qualifiers
         candidates.push(pattern.toLowerCase());
+        candidates.push(`best ${pattern}`.toLowerCase());
+        candidates.push(`${pattern} cost`.toLowerCase());
+        candidates.push(`${pattern} services`.toLowerCase());
+        candidates.push(`${pattern} near me`.toLowerCase());
       }
     }
-    const volumeResults = await bulkKeywordVolume(env, candidates.slice(0, 200), scoutLocationCodes);
-    const syntheticCost = 0.075 * Math.ceil(Math.min(candidates.length, 200) / 1000) * scoutLocationCodes.length;
+    // Raised cap to 500 for low-presence domains (budget still enforced by SCOUT_SESSION_BUDGET)
+    const volumeResults = await bulkKeywordVolume(env, candidates.slice(0, 500), scoutLocationCodes);
+    const syntheticCost = 0.075 * Math.ceil(Math.min(candidates.length, 500) / 1000) * scoutLocationCodes.length;
     sessionCost += syntheticCost;
     logDataForSeoCost('search_volume/live (synthetic)', syntheticCost);
 
@@ -4577,6 +4641,14 @@ async function runScout(sb: SupabaseClient, domain: string, prospectConfigPath: 
       }
       console.log(`  Added ${volumeResults.length} synthetic keywords (rank=100)`);
     }
+  }
+
+  // Deduplicate near-variant ranked keywords (e.g., "plumber boise" vs "plumber boise idaho")
+  const stateNames = config.target_geos.map((g) => g.state).filter(Boolean);
+  const preDedup = rankedKeywords.length;
+  rankedKeywords = deduplicateKeywords(rankedKeywords, stateNames);
+  if (rankedKeywords.length < preDedup) {
+    console.log(`  Deduped ranked keywords: ${preDedup} → ${rankedKeywords.length} (removed ${preDedup - rankedKeywords.length} near-duplicates)`);
   }
 
   // Filter ranked keywords by topic patterns (stem match)
@@ -4641,6 +4713,7 @@ Group related keywords into single topics. YOUR ENTIRE RESPONSE IS RAW JSON — 
   let opportunityMap: BulkVolumeResult[] = [];
 
   const candidates: string[] = [];
+  const isLowPresence = rankedKeywords.length < 50;
   for (const topic of canonicalTopics) {
     const topicPhrase = topic.label.toLowerCase();
     if (config.target_geos.length > 0) {
@@ -4649,6 +4722,11 @@ Group related keywords into single topics. YOUR ENTIRE RESPONSE IS RAW JSON — 
           for (const metro of geo.metros) {
             candidates.push(`${topicPhrase} ${metro}`.toLowerCase());
             candidates.push(`${topicPhrase} ${metro} ${geo.state}`.toLowerCase());
+            if (isLowPresence) {
+              candidates.push(`best ${topicPhrase} ${metro}`.toLowerCase());
+              candidates.push(`${topicPhrase} cost ${metro}`.toLowerCase());
+              candidates.push(`${topicPhrase} services ${metro}`.toLowerCase());
+            }
           }
         } else if (geo.state) {
           candidates.push(`${topicPhrase} ${geo.state}`.toLowerCase());
@@ -4657,6 +4735,23 @@ Group related keywords into single topics. YOUR ENTIRE RESPONSE IS RAW JSON — 
     } else {
       // National mode: use topic phrases without geo qualifiers
       candidates.push(topicPhrase);
+      if (isLowPresence) {
+        candidates.push(`best ${topicPhrase}`.toLowerCase());
+        candidates.push(`${topicPhrase} cost`.toLowerCase());
+        candidates.push(`${topicPhrase} services`.toLowerCase());
+      }
+    }
+  }
+  // For low-presence: also inject topic_patterns × metros directly
+  if (isLowPresence) {
+    for (const pattern of config.topic_patterns) {
+      for (const geo of config.target_geos) {
+        if (geo.metros.length > 0) {
+          for (const metro of geo.metros) {
+            candidates.push(`${pattern} ${metro}`.toLowerCase());
+          }
+        }
+      }
     }
   }
 
@@ -4672,6 +4767,13 @@ Group related keywords into single topics. YOUR ENTIRE RESPONSE IS RAW JSON — 
     sessionCost += volCost;
     logDataForSeoCost('search_volume/live (opportunity)', volCost);
     console.log(`  ${opportunityMap.length} keywords with volume > 0`);
+
+    // Deduplicate near-variant opportunity keywords
+    const preOppDedup = opportunityMap.length;
+    opportunityMap = deduplicateVolumeResults(opportunityMap, stateNames);
+    if (opportunityMap.length < preOppDedup) {
+      console.log(`  Deduped opportunity map: ${preOppDedup} → ${opportunityMap.length} (removed ${preOppDedup - opportunityMap.length} near-duplicates)`);
+    }
   }
 
   // ── Step 4: Gap matrix assembly ──
@@ -4684,6 +4786,7 @@ Group related keywords into single topics. YOUR ENTIRE RESPONSE IS RAW JSON — 
     position: number | null;
     volume: number;
     cpc: number;
+    cpc_inferred?: boolean;
   }
 
   const gapMatrix: GapEntry[] = [];
@@ -4751,6 +4854,29 @@ Group related keywords into single topics. YOUR ENTIRE RESPONSE IS RAW JSON — 
     return b.volume - a.volume;
   });
 
+  // CPC backfill: for $0 CPC entries, use max CPC from same topic
+  const topicMaxCpc = new Map<string, number>();
+  for (const g of gapMatrix) {
+    if (g.cpc > 0) {
+      const existing = topicMaxCpc.get(g.topic) ?? 0;
+      if (g.cpc > existing) topicMaxCpc.set(g.topic, g.cpc);
+    }
+  }
+  let cpcBackfilled = 0;
+  for (const g of gapMatrix) {
+    if (g.cpc === 0) {
+      const fallback = topicMaxCpc.get(g.topic);
+      if (fallback && fallback > 0) {
+        g.cpc = fallback;
+        g.cpc_inferred = true;
+        cpcBackfilled++;
+      }
+    }
+  }
+  if (cpcBackfilled > 0) {
+    console.log(`  CPC backfill: ${cpcBackfilled} entries filled from topic peers`);
+  }
+
   const defending = gapMatrix.filter((g) => g.status === 'defending').length;
   const weak = gapMatrix.filter((g) => g.status === 'weak').length;
   const gaps = gapMatrix.filter((g) => g.status === 'gap').length;
@@ -4776,7 +4902,10 @@ Group related keywords into single topics. YOUR ENTIRE RESPONSE IS RAW JSON — 
 
   const gapTable = gapMatrix
     .slice(0, 100)
-    .map((g) => `| ${g.keyword} | ${g.topic} | ${g.status} | ${g.position ?? 'N/R'} | ${g.volume} | $${g.cpc.toFixed(2)} |`)
+    .map((g) => {
+      const cpcStr = g.cpc_inferred ? `~$${g.cpc.toFixed(2)}` : `$${g.cpc.toFixed(2)}`;
+      return `| ${g.keyword} | ${g.topic} | ${g.status} | ${g.position ?? 'N/R'} | ${g.volume} | ${cpcStr} |`;
+    })
     .join('\n');
 
   // Build scope.json (Jim-compatible seed matrix)
@@ -4798,8 +4927,9 @@ Group related keywords into single topics. YOUR ENTIRE RESPONSE IS RAW JSON — 
         .filter((g) => g.status === 'gap')
         .sort((a, b) => b.volume - a.volume)
         .slice(0, 20)
-        .map((g) => ({ keyword: g.keyword, topic: g.topic, volume: g.volume, cpc: g.cpc })),
+        .map((g) => ({ keyword: g.keyword, topic: g.topic, volume: g.volume, cpc: g.cpc, ...(g.cpc_inferred ? { cpc_inferred: true } : {}) })),
     },
+    max_topic_cpc: Object.fromEntries(topicMaxCpc),
     total_opportunity_volume: opportunityMap.reduce((sum, o) => sum + o.volume, 0),
     generated_at: new Date().toISOString(),
   };
@@ -4842,6 +4972,8 @@ ${opportunityTable || '| (no opportunities found) | | | |'}
 | Keyword | Topic | Status | Position | Volume | CPC |
 |---------|-------|--------|----------|--------|-----|
 ${gapTable || '| (no gap data) | | | | | |'}
+
+Note: CPC values prefixed with ~ are estimated from topic peers, not measured directly. Treat them as approximate indicators of topic value, not precise per-keyword figures.
 
 ### Gap Summary
 - Defending (pos 1–10): ${defending}
@@ -4906,7 +5038,7 @@ REMINDER: Your response IS the report — start with "# Scout Report". No preamb
   // Generate prospect narrative (non-fatal)
   let narrativeContent: string | null = null;
   try {
-    narrativeContent = await generateProspectNarrative(domain, reportContent, scopeData, scoutDir);
+    narrativeContent = await generateProspectNarrative(domain, reportContent, scopeData, scoutDir, Object.fromEntries(topicMaxCpc));
   } catch (err: any) {
     console.warn(`  [WARN] Prospect narrative generation failed: ${err.message}`);
   }
@@ -4938,7 +5070,7 @@ REMINDER: Your response IS the report — start with "# Scout Report". No preamb
 // Prospect Narrative — Plain-language outreach document
 // ============================================================
 
-function buildProspectNarrativePrompt(scoutReport: string, scopeJson: Record<string, any>): string {
+function buildProspectNarrativePrompt(scoutReport: string, scopeJson: Record<string, any>, topicMaxCpc?: Record<string, number>): string {
   const businessName = scopeJson.business_type || scopeJson.domain || 'the business';
   const topGap = scopeJson.gap_summary?.top_opportunities?.[0];
   const totalOpportunityVolume = scopeJson.total_opportunity_volume ?? 0;
@@ -4950,6 +5082,17 @@ function buildProspectNarrativePrompt(scoutReport: string, scopeJson: Record<str
   let gapHighlight = '';
   if (topGap) {
     gapHighlight = `Top gap keyword: "${topGap.keyword}" (${topGap.volume} monthly searches, $${topGap.cpc?.toFixed(2) ?? '0.00'} CPC)`;
+  }
+
+  // Revenue context from topic CPC data
+  let revenueContext = '';
+  if (topicMaxCpc && Object.keys(topicMaxCpc).length > 0) {
+    const entries = Object.entries(topicMaxCpc)
+      .sort(([, a], [, b]) => b - a)
+      .slice(0, 5)
+      .map(([topic, cpc]) => `- ${topic}: $${cpc.toFixed(2)}/click`)
+      .join('\n');
+    revenueContext = `\n## Revenue Context (advertiser cost per click by topic)\n${entries}\nThese represent what advertisers pay to reach someone searching for these topics. Use the highest-value one to illustrate the revenue opportunity.\n`;
   }
 
   return `You are a digital marketing consultant writing a brief, compelling outreach document for a business owner who is NOT technical. This is NOT an SEO report — it's a conversation starter.
@@ -4968,7 +5111,7 @@ YOUR ENTIRE RESPONSE IS THE NARRATIVE. Output ONLY the markdown content — star
 - Not ranking at all: ${gaps}
 - Total untapped search volume: ${totalOpportunityVolume.toLocaleString()} monthly searches
 ${gapHighlight ? `- ${gapHighlight}` : ''}
-
+${revenueContext}
 ## Full Scout Report (for reference — do NOT reproduce this)
 ${scoutReport}
 
@@ -4980,10 +5123,14 @@ ${scoutReport}
 [2-3 short paragraphs highlighting what they're doing well. Reference specific keywords they rank for on page 1. Be genuine — don't patronize. Use plain language a business owner would understand. If they have few wins, acknowledge what they have and frame it positively.]
 
 ## Where Demand Is Escaping You
-[2-3 short paragraphs about search demand they're missing. Translate keyword gaps into business language — "people searching for X in Y aren't finding you." Quantify with monthly search numbers. Don't use SEO jargon like "SERP" or "canonical" — say "search results" and "topics." Make it concrete: name specific services and cities.]
+[2-3 short paragraphs about search demand they're missing. Translate keyword gaps into business language — "people searching for X in Y aren't finding you." Quantify with monthly search numbers. Don't use SEO jargon like "SERP" or "canonical" — say "search results" and "topics." Make it concrete: name specific services and cities.
+
+Include at least one CPC revenue translation. Example framing: "Advertisers pay $X per click to appear for '{keyword}.' That's how much it's worth to reach someone ready to hire. {volume} people search for it every month, and right now none of them find you."
+
+When the prospect has zero presence for a topic in a city, say it directly: "When someone in {city} searches for {service}, your competitors appear. You don't."]
 
 ## What a Full Analysis Would Reveal
-[2-3 short paragraphs positioning the full audit as the logical next step. Mention what a deeper analysis covers (technical health, competitor landscape, content architecture) without overselling. End with a forward-looking statement about their growth opportunity.]
+[ONE paragraph, max 3 sentences. Name 2-3 things the full audit covers (technical issues slowing the site, competitor strategy, revenue-per-keyword modeling). End with one forward-looking sentence. Do NOT list more than 3 items.]
 
 STYLE RULES:
 - Avoid em dashes (—). Use periods, commas, or restructure sentences instead. One em dash per section maximum.
@@ -4998,10 +5145,11 @@ async function generateProspectNarrative(
   scoutReport: string,
   scopeJson: Record<string, any>,
   outputDir: string,
+  topicMaxCpc?: Record<string, number>,
 ): Promise<string> {
   console.log('\n--- Prospect Narrative ---');
 
-  const prompt = buildProspectNarrativePrompt(scoutReport, scopeJson);
+  const prompt = buildProspectNarrativePrompt(scoutReport, scopeJson, topicMaxCpc);
   const narrative = await callClaude(prompt, { model: 'sonnet', phase: 'prospect_narrative' });
 
   const outputPath = path.join(outputDir, 'prospect-narrative.md');
