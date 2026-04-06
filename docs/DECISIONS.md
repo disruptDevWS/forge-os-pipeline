@@ -618,3 +618,21 @@ DataForSEO returns national US search volume (`location_code: 2840`) for all key
 **2026-03-23: Dwight crawl — JS rendering disabled by default**
 
 DataForSEO OnPage crawl default changed from `enable_javascript: true` to `false`. An SEO audit should crawl what search engines and LLMs actually see — the raw HTML response. If a site relies on client-side JS to render content, that's a technical SEO problem Dwight should flag (thin pages, low text-to-code ratio, missing content in raw HTML), not mask by rendering JS first. Crawling without JS is faster, cheaper, and more representative of indexability. The `enableJsRendering` option still exists for callers that explicitly want rendered-DOM analysis, but no current pipeline phase uses it.
+
+---
+
+**2026-04-06: Scout revenue estimates — replace CPC with rough monthly revenue framing**
+
+CPC (advertiser cost-per-click) answered "what would I pay Google?" — a business owner's question is "what is this traffic worth to me?" Replaced CPC framing with `volume × CTR × CR × ACV` revenue estimate using vertical-specific assumptions.
+
+- `SCOUT_REVENUE_ESTIMATES`: 14-vertical lookup table with `acv_low`, `acv_high`, `cr`, and `label` (e.g., plumbing: $400-3000 ACV, 2% CR, "service job")
+- `detectScoutVertical()`: same seed-matching as `detectServiceKey` tier 1 (≥2 hits in `SERVICE_KEYWORD_SEEDS`), no Haiku fallback — if no match, CPC-derived fallback handles it
+- CPC-derived fallback: `medianCpc × 200` as ACV proxy, 2% CR, "customer" label
+- `PAGE1_CTR = 0.08` (position 4-5 avg from CTR curve model)
+- `scope.json` gains `revenue_assumptions` object and `rough_revenue_monthly` on each `top_opportunities[]` entry — additive, Jim ignores unknown keys
+- Share report lead card shows `~$X,XXX/mo potential revenue` with assumptions footer; backward compat falls back to CPC display for old data
+- `medical_training` added to `SERVICE_KEYWORD_SEEDS` (additive; full pipeline's `ensureAssumptions()` falls back to `other` benchmark)
+
+**2026-04-06: Scout prospect queuing requires topic_patterns**
+
+`runScout()` validation gate (line ~4511) rejects `topic_patterns: []`. When programmatically creating prospects, `topic_patterns` must contain service keywords (e.g., `["locksmith", "lock", "key", "rekey", "lockout"]`). The dashboard's NewProspectPage collects these from the user; batch/CLI creation must provide them explicitly. This is intentional — Scout cannot generate a meaningful keyword matrix without knowing what the business does.
