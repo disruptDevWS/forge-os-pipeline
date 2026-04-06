@@ -1489,7 +1489,172 @@ const server = http.createServer((req, res) => {
   }
 });
 
+// ─── Graceful Shutdown ─────────────────────────────────────────
+let reconcileInterval: ReturnType<typeof setInterval> | null = null;
+let isShuttingDown = false;
+
+function handleShutdown(signal: string): void {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+  console.log(`[shutdown] Received ${signal} — draining connections`);
+  if (inFlight.size > 0) {
+    console.log(`[shutdown] In-flight jobs: ${[...inFlight].join(', ')}`);
+  }
+  if (reconcileInterval) {
+    clearInterval(reconcileInterval);
+    reconcileInterval = null;
+  }
+  server.close(() => {
+    console.log(`[shutdown] Server closed — exiting`);
+    process.exit(0);
+  });
+  // Safety timeout: force exit after 30s if connections don't drain
+  const safetyTimer = setTimeout(() => {
+    console.log(`[shutdown] Safety timeout — forcing exit`);
+    process.exit(0);
+  }, 30_000);
+  safetyTimer.unref();
+}
+
+// ─── Startup Reconciliation ───────────────────────────────────
+async function reconcileOrphanedJobs(): Promise<void> {
+  if (isShuttingDown) return;
+  const sb = getSb();
+  if (!sb) return;
+  console.log(`[reconcile] Checking for orphaned jobs...`);
+  let fixed = 0;
+
+  // 1. Audits stuck in 'running'
+  try {
+    const { data: stuckAudits } = await (sb as any)
+      .from('audits')
+      .select('id, domain, status')
+      .eq('status', 'running');
+    if (stuckAudits && stuckAudits.length > 0) {
+      for (const audit of stuckAudits) {
+        if (inFlight.has(audit.domain)) {
+          console.log(`[reconcile] Skipping audit ${audit.domain} — currently in-flight`);
+          continue;
+        }
+        const { error } = await (sb as any)
+          .from('audits')
+          .update({
+            status: 'failed',
+            error_message: `Pipeline interrupted (server restart at ${serverStartedAt})`,
+          })
+          .eq('id', audit.id);
+        if (!error) {
+          console.log(`[reconcile] Reset orphaned audit: ${audit.domain} (${audit.id})`);
+          fixed++;
+        } else {
+          console.error(`[reconcile] Failed to reset audit ${audit.id}:`, error.message);
+        }
+      }
+    }
+  } catch (err: any) {
+    console.error(`[reconcile] Error checking audits:`, err.message);
+  }
+
+  // 2. Prospects stuck in 'running'
+  try {
+    const { data: stuckProspects } = await (sb as any)
+      .from('prospects')
+      .select('id, domain, status')
+      .eq('status', 'running');
+    if (stuckProspects && stuckProspects.length > 0) {
+      for (const prospect of stuckProspects) {
+        if (inFlight.has(prospect.domain)) {
+          console.log(`[reconcile] Skipping prospect ${prospect.domain} — currently in-flight`);
+          continue;
+        }
+        const { error } = await (sb as any)
+          .from('prospects')
+          .update({ status: 'failed' })
+          .eq('id', prospect.id);
+        if (!error) {
+          console.log(`[reconcile] Reset orphaned prospect: ${prospect.domain} (${prospect.id})`);
+          fixed++;
+        } else {
+          console.error(`[reconcile] Failed to reset prospect ${prospect.id}:`, error.message);
+        }
+      }
+    }
+  } catch (err: any) {
+    console.error(`[reconcile] Error checking prospects:`, err.message);
+  }
+
+  // 3. Pam requests stuck in 'processing' for >10 minutes
+  try {
+    const tenMinAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    const { data: stuckPam } = await (sb as any)
+      .from('pam_requests')
+      .select('id, domain, page_url, status, requested_at')
+      .eq('status', 'processing')
+      .lt('requested_at', tenMinAgo);
+    if (stuckPam && stuckPam.length > 0) {
+      for (const req of stuckPam) {
+        const { error } = await (sb as any)
+          .from('pam_requests')
+          .update({
+            status: 'failed',
+            error_message: `Brief generation interrupted (server restart at ${serverStartedAt})`,
+          })
+          .eq('id', req.id);
+        if (!error) {
+          console.log(`[reconcile] Reset orphaned pam_request: ${req.domain} ${req.page_url} (${req.id})`);
+          fixed++;
+        } else {
+          console.error(`[reconcile] Failed to reset pam_request ${req.id}:`, error.message);
+        }
+      }
+    }
+  } catch (err: any) {
+    console.error(`[reconcile] Error checking pam_requests:`, err.message);
+  }
+
+  // 4. Oscar requests stuck in 'processing' for >10 minutes
+  try {
+    const tenMinAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    const { data: stuckOscar } = await (sb as any)
+      .from('oscar_requests')
+      .select('id, domain, page_url, status, requested_at')
+      .eq('status', 'processing')
+      .lt('requested_at', tenMinAgo);
+    if (stuckOscar && stuckOscar.length > 0) {
+      for (const req of stuckOscar) {
+        const { error } = await (sb as any)
+          .from('oscar_requests')
+          .update({
+            status: 'failed',
+            error_message: `Content generation interrupted (server restart at ${serverStartedAt})`,
+          })
+          .eq('id', req.id);
+        if (!error) {
+          console.log(`[reconcile] Reset orphaned oscar_request: ${req.domain} ${req.page_url} (${req.id})`);
+          fixed++;
+        } else {
+          console.error(`[reconcile] Failed to reset oscar_request ${req.id}:`, error.message);
+        }
+      }
+    }
+  } catch (err: any) {
+    console.error(`[reconcile] Error checking oscar_requests:`, err.message);
+  }
+
+  console.log(`[reconcile] Done — ${fixed} orphaned job(s) reset`);
+}
+
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Pipeline server listening on port ${PORT}`);
   console.log(`Health: http://0.0.0.0:${PORT}/health`);
+
+  // First reconciliation 60s after startup (ensures old instance is dead),
+  // then every 5 minutes
+  setTimeout(() => {
+    reconcileOrphanedJobs();
+    reconcileInterval = setInterval(reconcileOrphanedJobs, 5 * 60 * 1000);
+  }, 60_000);
 });
+
+process.on('SIGTERM', () => handleShutdown('SIGTERM'));
+process.on('SIGINT', () => handleShutdown('SIGINT'));

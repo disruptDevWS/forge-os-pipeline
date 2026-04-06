@@ -798,3 +798,22 @@ Known cases where pipeline writes and dashboard reads use different column names
 | `useOscarRequests` | `oscar_requests` | 3s | While `status = 'pending'/'processing'` |
 | `useClusterStrategyPoll` | `cluster_strategy` | 5s | For 90s while generating |
 | `useCompetitorDominance` | `audit_topic_dominance` | 3s | For 90s while empty |
+
+---
+
+## Startup Reconciliation
+
+The pipeline server runs `reconcileOrphanedJobs()` on startup (60s delay, then every 5 minutes) to reset records left in transient states by interrupted processes (e.g., Railway deploys killing containers).
+
+| Table | Condition | Reset to | Guard |
+|-------|-----------|----------|-------|
+| `audits` | `status = 'running'` | `status = 'failed'`, `error_message` set | Skip if `inFlight.has(domain)` |
+| `prospects` | `status = 'running'` | `status = 'failed'` | Skip if `inFlight.has(domain)` |
+| `pam_requests` | `status = 'processing'` AND `requested_at < now() - 10min` | `status = 'failed'`, `error_message` set | Time threshold only |
+| `oscar_requests` | `status = 'processing'` AND `requested_at < now() - 10min` | `status = 'failed'`, `error_message` set | Time threshold only |
+
+**Not reconciled**: `execution_pages` — Oscar writes status + content as a single update after generation completes. If killed mid-generation, execution_pages stays at its prior status. The orphaned record is `oscar_requests`.
+
+**SIGTERM handling**: Server registers handlers for SIGTERM/SIGINT. On signal: stops accepting connections, clears reconciliation interval, exits with code 0 (or force-exits after 30s safety timeout). Does NOT attempt to signal or wait for detached child processes — Railway SIGKILLs the container after the drain period.
+
+**Shell trap**: `run-pipeline.sh` traps TERM/INT to call `update_status failed` before exiting, so pipelines that receive the signal during the drain window mark themselves as failed in Supabase.

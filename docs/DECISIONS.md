@@ -4,6 +4,16 @@ Non-obvious choices that would look wrong without context. Check here before "fi
 
 ---
 
+**2026-04-06: Startup reconciliation resets orphaned jobs, not shutdown-time cleanup**
+
+When Railway sends SIGTERM, the server drains connections and exits cleanly (code 0). But detached child processes (pipeline runs, Pam, Oscar) get SIGKILLed when the container tears down, leaving Supabase records stuck in `running`/`processing`. Cleanup happens on the NEXT startup, not during shutdown, because: (1) Railway SIGKILLs the container 30s after SIGTERM — not enough time to wait for long-running pipelines, (2) the new instance is the one that needs consistent state, (3) no race condition between old and new instances.
+
+The 60-second delay before first reconciliation ensures the old instance has fully exited (Railway's drain period). The `inFlight` check prevents resetting jobs that the current instance legitimately started. The 10-minute threshold for `pam_requests`/`oscar_requests` avoids racing with brief/content generation started on the current instance (no generation takes 10 minutes).
+
+Reconciliation does NOT touch `execution_pages` because Oscar only writes `status = 'in_progress'` + `content_html` as a single atomic update AFTER HTML generation completes. If Oscar gets killed during the Claude call, `execution_pages` stays at its previous status (`not_started`/`brief_ready`). The orphaned record is always `oscar_requests`, not `execution_pages`. Same for Pam.
+
+---
+
 **2026-04-03: Scout keyword deduplication uses suffix-only state stripping**
 
 `buildCanonicalKey()` normalizes keywords for near-duplicate detection by lowercasing, then stripping ONLY the last token if it matches a US state name, then sorting remaining tokens alphabetically. This means "water heater repair boise idaho" → strip "idaho" → sort → key, but "idaho falls water heater repair" → "repair" is last → no stripping → "idaho" preserved as part of the city name. The suffix-only approach is intentional to avoid mangling compound city names (Idaho Falls, New York, etc.). Do not change this to strip state names from any position.

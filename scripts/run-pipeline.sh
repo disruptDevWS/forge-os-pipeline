@@ -159,6 +159,8 @@ update_status() {
 
 # Trap errors to mark pipeline as failed
 trap 'update_status failed' ERR
+# Trap SIGTERM/SIGINT (Railway deploy drain) to mark failed before exit
+trap 'echo "[Pipeline] Received signal — marking failed"; update_status failed; exit 1' TERM INT
 
 update_status audit
 
