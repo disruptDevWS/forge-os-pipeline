@@ -489,7 +489,32 @@ const SERVICE_KEYWORD_SEEDS: Record<string, string[]> = {
     'commercial cleaning', 'office cleaning', 'move out cleaning', 'carpet cleaning',
     'window cleaning', 'janitorial service', 'post construction cleaning',
   ],
+  medical_training: [
+    'emt course', 'emt training', 'emt certification', 'paramedic course', 'paramedic training',
+    'cna training', 'cna certification', 'medical assistant training', 'phlebotomy training',
+    'medical coding course', 'nursing assistant course', 'first responder training',
+  ],
 };
+
+// ── Scout revenue estimate constants ──
+const SCOUT_REVENUE_ESTIMATES: Record<string, { acv_low: number; acv_high: number; cr: number; label: string }> = {
+  hvac:               { acv_low: 800,   acv_high: 5000,  cr: 0.02,  label: 'service job' },
+  plumbing:           { acv_low: 400,   acv_high: 3000,  cr: 0.02,  label: 'service job' },
+  electrical:         { acv_low: 500,   acv_high: 3000,  cr: 0.02,  label: 'service job' },
+  roofing:            { acv_low: 5000,  acv_high: 15000, cr: 0.015, label: 'project' },
+  remodeling:         { acv_low: 8000,  acv_high: 30000, cr: 0.01,  label: 'project' },
+  restoration:        { acv_low: 2000,  acv_high: 8000,  cr: 0.02,  label: 'restoration job' },
+  garage_doors:       { acv_low: 300,   acv_high: 2000,  cr: 0.025, label: 'service call' },
+  landscaping:        { acv_low: 500,   acv_high: 5000,  cr: 0.02,  label: 'project' },
+  pest_control:       { acv_low: 200,   acv_high: 800,   cr: 0.03,  label: 'treatment' },
+  fencing:            { acv_low: 2000,  acv_high: 8000,  cr: 0.02,  label: 'installation' },
+  tree_service:       { acv_low: 500,   acv_high: 3000,  cr: 0.02,  label: 'service job' },
+  general_contractor: { acv_low: 10000, acv_high: 50000, cr: 0.01,  label: 'project' },
+  cleaning:           { acv_low: 150,   acv_high: 500,   cr: 0.03,  label: 'booking' },
+  medical_training:   { acv_low: 1200,  acv_high: 2000,  cr: 0.015, label: 'enrollment' },
+};
+const PAGE1_CTR = 0.08;
+const CPC_ACV_MULTIPLIER = 200;
 
 // Minimum ranked keywords before auto-supplementing with seed candidates.
 // Below this threshold, DataForSEO returned too few organic results for a useful analysis.
@@ -553,6 +578,24 @@ Respond with the key only (e.g., "plumbing"). No explanation.`;
     if (SERVICE_KEYWORD_SEEDS[key]) return key;
   } catch (err: any) {
     console.log(`  Warning: detectServiceKey Haiku call failed: ${err.message}`);
+  }
+  return null;
+}
+
+/**
+ * Detect vertical from ranked keywords for Scout revenue estimates.
+ * Uses the same seed-matching logic as detectServiceKey tier 1 (≥2 hits).
+ */
+function detectScoutVertical(keywords: string[]): string | null {
+  const blob = keywords.join(' ').toLowerCase();
+  const scores: [string, number][] = [];
+  for (const [key, seeds] of Object.entries(SERVICE_KEYWORD_SEEDS)) {
+    const hits = seeds.filter((s) => blob.includes(s.toLowerCase())).length;
+    scores.push([key, hits]);
+  }
+  scores.sort((a, b) => b[1] - a[1]);
+  if (scores[0][1] >= 2) {
+    return scores[0][0];
   }
   return null;
 }
@@ -4877,6 +4920,41 @@ Group related keywords into single topics. YOUR ENTIRE RESPONSE IS RAW JSON — 
     console.log(`  CPC backfill: ${cpcBackfilled} entries filled from topic peers`);
   }
 
+  // ── Revenue estimates ──
+  const detectedVertical = detectScoutVertical(rankedKeywords.map((k) => k.keyword));
+  const verticalEst = detectedVertical ? SCOUT_REVENUE_ESTIMATES[detectedVertical] : null;
+
+  let acvMid: number;
+  let crUsed: number;
+  let valueLabel: string;
+  let revenueMethod: 'vertical_benchmark' | 'cpc_derived';
+
+  if (verticalEst) {
+    acvMid = (verticalEst.acv_low + verticalEst.acv_high) / 2;
+    crUsed = verticalEst.cr;
+    valueLabel = verticalEst.label;
+    revenueMethod = 'vertical_benchmark';
+  } else {
+    // CPC-derived fallback: median CPC × multiplier
+    const allCpcs = gapMatrix.map((g) => g.cpc).filter((c) => c > 0).sort((a, b) => a - b);
+    const medianCpc = allCpcs.length > 0 ? allCpcs[Math.floor(allCpcs.length / 2)] : 5;
+    acvMid = medianCpc * CPC_ACV_MULTIPLIER;
+    crUsed = 0.02;
+    valueLabel = 'customer';
+    revenueMethod = 'cpc_derived';
+  }
+
+  const revenueAssumptions = {
+    method: revenueMethod,
+    vertical: detectedVertical,
+    acv_used: acvMid,
+    cr_used: crUsed,
+    ctr_used: PAGE1_CTR,
+    value_label: valueLabel,
+    disclaimer: 'Rough estimate based on industry averages. Stated assumptions below.',
+  };
+  console.log(`  Revenue estimates: ${detectedVertical ?? 'cpc_derived'} vertical, ACV=$${acvMid}, CR=${crUsed}`);
+
   const defending = gapMatrix.filter((g) => g.status === 'defending').length;
   const weak = gapMatrix.filter((g) => g.status === 'weak').length;
   const gaps = gapMatrix.filter((g) => g.status === 'gap').length;
@@ -4927,8 +5005,13 @@ Group related keywords into single topics. YOUR ENTIRE RESPONSE IS RAW JSON — 
         .filter((g) => g.status === 'gap')
         .sort((a, b) => b.volume - a.volume)
         .slice(0, 20)
-        .map((g) => ({ keyword: g.keyword, topic: g.topic, volume: g.volume, cpc: g.cpc, ...(g.cpc_inferred ? { cpc_inferred: true } : {}) })),
+        .map((g) => ({
+          keyword: g.keyword, topic: g.topic, volume: g.volume, cpc: g.cpc,
+          ...(g.cpc_inferred ? { cpc_inferred: true } : {}),
+          rough_revenue_monthly: Math.round(g.volume * PAGE1_CTR * crUsed * acvMid),
+        })),
     },
+    revenue_assumptions: revenueAssumptions,
     max_topic_cpc: Object.fromEntries(topicMaxCpc),
     total_opportunity_volume: opportunityMap.reduce((sum, o) => sum + o.volume, 0),
     generated_at: new Date().toISOString(),
@@ -5081,12 +5164,26 @@ function buildProspectNarrativePrompt(scoutReport: string, scopeJson: Record<str
 
   let gapHighlight = '';
   if (topGap) {
-    gapHighlight = `Top gap keyword: "${topGap.keyword}" (${topGap.volume} monthly searches, $${topGap.cpc?.toFixed(2) ?? '0.00'} CPC)`;
+    const revStr = topGap.rough_revenue_monthly ? `, ~$${topGap.rough_revenue_monthly.toLocaleString()}/mo potential` : '';
+    gapHighlight = `Top gap keyword: "${topGap.keyword}" (${topGap.volume} monthly searches${revStr})`;
   }
 
-  // Revenue context from topic CPC data
+  // Revenue context from estimates (or CPC fallback for old data)
+  const revAssumptions = scopeJson.revenue_assumptions;
   let revenueContext = '';
-  if (topicMaxCpc && Object.keys(topicMaxCpc).length > 0) {
+  if (revAssumptions) {
+    const topByRevenue = (scopeJson.gap_summary?.top_opportunities ?? [])
+      .filter((o: any) => o.rough_revenue_monthly > 0)
+      .sort((a: any, b: any) => b.rough_revenue_monthly - a.rough_revenue_monthly)
+      .slice(0, 5);
+    if (topByRevenue.length > 0) {
+      const rows = topByRevenue
+        .map((o: any) => `- "${o.keyword}": ${o.volume.toLocaleString()} searches/mo → ~$${o.rough_revenue_monthly.toLocaleString()}/mo`)
+        .join('\n');
+      revenueContext = `\n## Revenue Estimates (top opportunities by potential monthly revenue)\n${rows}\nAssumptions: ${(revAssumptions.cr_used * 100).toFixed(1)}% conversion rate, $${revAssumptions.acv_used.toLocaleString()} average ${revAssumptions.value_label} value, at page-1 visibility.\n`;
+    }
+  } else if (topicMaxCpc && Object.keys(topicMaxCpc).length > 0) {
+    // Fallback for old scope.json without revenue_assumptions
     const entries = Object.entries(topicMaxCpc)
       .sort(([, a], [, b]) => b - a)
       .slice(0, 5)
@@ -5125,7 +5222,11 @@ ${scoutReport}
 ## Where Demand Is Escaping You
 [2-3 short paragraphs about search demand they're missing. Translate keyword gaps into business language — "people searching for X in Y aren't finding you." Quantify with monthly search numbers. Don't use SEO jargon like "SERP" or "canonical" — say "search results" and "topics." Make it concrete: name specific services and cities.
 
-Include at least one CPC revenue translation. Example framing: "Advertisers pay $X per click to appear for '{keyword}.' That's how much it's worth to reach someone ready to hire. {volume} people search for it every month, and right now none of them find you."
+Use the revenue estimates provided. Frame like this: '"{keyword}" gets {volume} searches every month. At a conservative ${(revAssumptions ? (revAssumptions.cr_used * 100).toFixed(0) : '2')}% conversion rate and $${revAssumptions ? revAssumptions.acv_used.toLocaleString() : 'X'} average ${revAssumptions?.value_label ?? 'customer'} value, page-1 visibility on this term alone represents roughly $X,XXX/month in potential revenue. You're currently not on page 1.'
+
+State the assumption once in plain language, then let the numbers stand. Don't repeat the caveat per keyword.
+
+If no revenue estimates are available, fall back to search volume framing: "{volume} people search for this every month, and right now none of them find you."
 
 When the prospect has zero presence for a topic in a city, say it directly: "When someone in {city} searches for {service}, your competitors appear. You don't."]
 
