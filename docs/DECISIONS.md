@@ -4,6 +4,26 @@ Non-obvious choices that would look wrong without context. Check here before "fi
 
 ---
 
+**2026-04-07: Franchise/network domains are a prospector-level filter, not a Scout fix**
+
+Scout narratives are written for single-location independent operators. When a brand appears across multiple geo-modified domains (e.g., `speedy-locksmith-boise.com`, `speedy-locksmith-phoenix.com`), the data isn't wrong but the framing is — a franchise owner doesn't need "you're invisible in Boise" messaging. Sending a single-location narrative to a network operator undermines credibility.
+
+This is NOT a Scout-level fix. Scout processes one domain at a time and has no visibility into sibling domains. The correct screening point is SERP Prospector, which sees all domains from a SERP pull and can detect when a brand name appears across multiple geo-modified domains (strong franchise/licensed network signal). Until automated detection is built, the manual rule is: before sending any Scout report, verify the domain is an independent single-location operator. Franchise or network = skip.
+
+---
+
+**2026-04-07: "Near me" keywords filtered from Scout — GBP-driven, not on-page SEO**
+
+"Near me" queries (e.g., "locksmith near me") are resolved by Google using user location + GBP signals, not on-page content. DataForSEO position data for these terms is noise — position 100 (synthetic) is meaningless, and real rankings are GBP-driven. Filtering happens in two places: (1) removed from synthetic candidate generation (saves DataForSEO budget), (2) stripped from ranked keywords after dedup, before topic filtering (catches "near me" from DataForSEO ranked results). `near_me_filtered` count added to scope.json for transparency. Phase 2 (full pipeline) is NOT changed — Phase 3c already flags with `is_near_me: true`.
+
+---
+
+**2026-04-07: Scout topic matching uses word-level roots, not full-phrase substring**
+
+Topic stems like "locksmith services" required the ENTIRE phrase to appear in a keyword for it to match. "locksmith boise" failed because it contains "locksmith" but not "locksmith services". Word-level matching strips generic suffixes (services, repair, installation, replacement, etc.) to extract root words, normalizes plurals by dropping trailing 's', and scores keywords by root-word overlap. Best score wins; ties broken by specificity (more root words = more specific topic). This fixed ~55% of keywords falling to "Other" in locksmith verticals.
+
+---
+
 **2026-04-06: Startup reconciliation resets orphaned jobs, not shutdown-time cleanup**
 
 When Railway sends SIGTERM, the server drains connections and exits cleanly (code 0). But detached child processes (pipeline runs, Pam, Oscar) get SIGKILLed when the container tears down, leaving Supabase records stuck in `running`/`processing`. Cleanup happens on the NEXT startup, not during shutdown, because: (1) Railway SIGKILLs the container 30s after SIGTERM — not enough time to wait for long-running pipelines, (2) the new instance is the one that needs consistent state, (3) no race condition between old and new instances.
