@@ -4649,7 +4649,6 @@ async function runScout(sb: SupabaseClient, domain: string, prospectConfigPath: 
           candidates.push(`${pattern} services ${geo}`.toLowerCase());
         }
         // Geo-independent variants
-        candidates.push(`${pattern} near me`.toLowerCase());
         candidates.push(`best ${pattern}`.toLowerCase());
       } else {
         // National mode: use topic patterns without geo qualifiers
@@ -4657,7 +4656,6 @@ async function runScout(sb: SupabaseClient, domain: string, prospectConfigPath: 
         candidates.push(`best ${pattern}`.toLowerCase());
         candidates.push(`${pattern} cost`.toLowerCase());
         candidates.push(`${pattern} services`.toLowerCase());
-        candidates.push(`${pattern} near me`.toLowerCase());
       }
     }
     // Raised cap to 500 for low-presence domains (budget still enforced by SCOUT_SESSION_BUDGET)
@@ -4692,6 +4690,14 @@ async function runScout(sb: SupabaseClient, domain: string, prospectConfigPath: 
   rankedKeywords = deduplicateKeywords(rankedKeywords, stateNames);
   if (rankedKeywords.length < preDedup) {
     console.log(`  Deduped ranked keywords: ${preDedup} → ${rankedKeywords.length} (removed ${preDedup - rankedKeywords.length} near-duplicates)`);
+  }
+
+  // Filter out "near me" keywords (GBP-driven, not on-page SEO — position data is noise)
+  const preNearMe = rankedKeywords.length;
+  rankedKeywords = rankedKeywords.filter((kw) => !kw.keyword.toLowerCase().includes(' near me'));
+  const nearMeFiltered = preNearMe - rankedKeywords.length;
+  if (nearMeFiltered > 0) {
+    console.log(`  Filtered ${nearMeFiltered} "near me" keywords (GBP-driven, not on-page SEO)`);
   }
 
   // Filter ranked keywords by topic patterns (stem match)
@@ -5032,6 +5038,7 @@ Group related keywords into single topics. YOUR ENTIRE RESPONSE IS RAW JSON — 
     revenue_assumptions: revenueAssumptions,
     max_topic_cpc: Object.fromEntries(topicMaxCpc),
     total_opportunity_volume: opportunityMap.reduce((sum, o) => sum + o.volume, 0),
+    near_me_filtered: nearMeFiltered,
     generated_at: new Date().toISOString(),
   };
 
