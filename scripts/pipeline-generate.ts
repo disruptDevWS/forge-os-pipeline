@@ -4920,6 +4920,21 @@ Group related keywords into single topics. YOUR ENTIRE RESPONSE IS RAW JSON — 
     console.log(`  CPC backfill: ${cpcBackfilled} entries filled from topic peers`);
   }
 
+  // ── Per-topic service coverage ──
+  const coverageByTopic = new Map<string, { defending: number; weak: number; gaps: number; total_gap_volume: number }>();
+  for (const g of gapMatrix) {
+    if (g.topic === 'Other') continue;
+    let entry = coverageByTopic.get(g.topic);
+    if (!entry) {
+      entry = { defending: 0, weak: 0, gaps: 0, total_gap_volume: 0 };
+      coverageByTopic.set(g.topic, entry);
+    }
+    if (g.status === 'defending') entry.defending++;
+    else if (g.status === 'weak') entry.weak++;
+    else if (g.status === 'gap') { entry.gaps++; entry.total_gap_volume += g.volume; }
+  }
+  const serviceCoverage = Object.fromEntries(coverageByTopic);
+
   // ── Revenue estimates ──
   const detectedVertical = detectScoutVertical(rankedKeywords.map((k) => k.keyword));
   const verticalEst = detectedVertical ? SCOUT_REVENUE_ESTIMATES[detectedVertical] : null;
@@ -4957,8 +4972,9 @@ Group related keywords into single topics. YOUR ENTIRE RESPONSE IS RAW JSON — 
 
   const defending = gapMatrix.filter((g) => g.status === 'defending').length;
   const weak = gapMatrix.filter((g) => g.status === 'weak').length;
-  const gaps = gapMatrix.filter((g) => g.status === 'gap').length;
-  console.log(`  Gap matrix: ${gapMatrix.length} entries (${defending} defending, ${weak} weak, ${gaps} gaps)`);
+  const otherGapCount = gapMatrix.filter((g) => g.status === 'gap' && g.topic === 'Other').length;
+  const gaps = gapMatrix.filter((g) => g.status === 'gap').length - otherGapCount;
+  console.log(`  Gap matrix: ${gapMatrix.length} entries (${defending} defending, ${weak} weak, ${gaps} gaps, ${otherGapCount} other-gaps excluded)`);
 
   // ── Step 5: Markdown output + scope.json ──
   console.log('\n--- Step 5: Scout Report + scope.json ---');
@@ -5001,8 +5017,9 @@ Group related keywords into single topics. YOUR ENTIRE RESPONSE IS RAW JSON — 
       defending,
       weak,
       gaps,
+      other_gap_count: otherGapCount,
       top_opportunities: gapMatrix
-        .filter((g) => g.status === 'gap')
+        .filter((g) => g.status === 'gap' && g.topic !== 'Other')
         .sort((a, b) => b.volume - a.volume)
         .slice(0, 20)
         .map((g) => ({
@@ -5011,6 +5028,7 @@ Group related keywords into single topics. YOUR ENTIRE RESPONSE IS RAW JSON — 
           rough_revenue_monthly: Math.round(g.volume * PAGE1_CTR * crUsed * acvMid),
         })),
     },
+    service_coverage: serviceCoverage,
     revenue_assumptions: revenueAssumptions,
     max_topic_cpc: Object.fromEntries(topicMaxCpc),
     total_opportunity_volume: opportunityMap.reduce((sum, o) => sum + o.volume, 0),
@@ -5208,7 +5226,15 @@ YOUR ENTIRE RESPONSE IS THE NARRATIVE. Output ONLY the markdown content — star
 - Not ranking at all: ${gaps}
 - Total untapped search volume: ${totalOpportunityVolume.toLocaleString()} monthly searches
 ${gapHighlight ? `- ${gapHighlight}` : ''}
-${revenueContext}
+${revenueContext}${(() => {
+    const sc = scopeJson.service_coverage;
+    if (!sc || Object.keys(sc).length <= 1) return '';
+    const lines = Object.entries(sc)
+      .map(([topic, data]: [string, any]) =>
+        `- ${topic}: ${data.defending} defending / ${data.weak} weak / ${data.gaps} gaps (${data.total_gap_volume.toLocaleString()} untapped searches)`)
+      .join('\n');
+    return `\n## Service Coverage Breakdown\n${lines}\n`;
+  })()}
 ## Full Scout Report (for reference — do NOT reproduce this)
 ${scoutReport}
 
@@ -5228,7 +5254,9 @@ State the assumption once in plain language, then let the numbers stand. Don't r
 
 If no revenue estimates are available, fall back to search volume framing: "{volume} people search for this every month, and right now none of them find you."
 
-When the prospect has zero presence for a topic in a city, say it directly: "When someone in {city} searches for {service}, your competitors appear. You don't."]
+When the prospect has zero presence for a topic in a city, say it directly: "When someone in {city} searches for {service}, your competitors appear. You don't."
+
+If Service Coverage data is provided and shows gaps across multiple service lines, name the cross-service pattern explicitly and early in this section. Example framing: "You offer X, Y, and Z, but in [city] search results you're invisible for two of those three." This is more compelling than listing individual keyword gaps.]
 
 ## What a Full Analysis Would Reveal
 [ONE paragraph, max 3 sentences. Name 2-3 things the full audit covers (technical issues slowing the site, competitor strategy, revenue-per-keyword modeling). End with one forward-looking sentence. Do NOT list more than 3 items.]
