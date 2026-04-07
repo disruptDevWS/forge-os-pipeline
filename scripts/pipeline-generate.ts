@@ -4700,17 +4700,49 @@ async function runScout(sb: SupabaseClient, domain: string, prospectConfigPath: 
     console.log(`  Filtered ${nearMeFiltered} "near me" keywords (GBP-driven, not on-page SEO)`);
   }
 
-  // Filter ranked keywords by topic patterns (stem match)
-  const topicStems = canonicalTopics.length > 0
-    ? canonicalTopics.map((t) => t.key.replace(/-/g, ' ').toLowerCase())
-    : config.topic_patterns.map((p) => p.toLowerCase());
+  // Word-level topic matching (replaces full-phrase substring matching)
+  // Generic suffixes are stripped so "locksmith services" matches on root "locksmith",
+  // "safe services" matches on "safe", etc. Plurals normalized by dropping trailing 's'.
+  const GENERIC_TOPIC_WORDS = new Set([
+    'services', 'service', 'repair', 'repairs', 'installation', 'replacement',
+    'removal', 'cleaning', 'maintenance', 'solutions', 'management',
+  ]);
+  const normalizeWord = (w: string): string =>
+    w.endsWith('s') && w.length > 3 ? w.slice(0, -1) : w;
 
+  const topicRootWords = (canonicalTopics.length > 0 ? canonicalTopics : config.topic_patterns.map((p) => ({ key: p.toLowerCase().replace(/\s+/g, '-'), label: p }))).map((t) => {
+    const words = t.key.replace(/-/g, ' ').toLowerCase().split(/\s+/);
+    const roots = words.filter((w) => !GENERIC_TOPIC_WORDS.has(w));
+    return { ...t, roots: roots.length > 0 ? roots : words };
+  });
+
+  function matchKeywordToTopic(keyword: string): typeof canonicalTopics[0] | null {
+    const kwWords = keyword.toLowerCase().split(/\s+/).map(normalizeWord);
+    let bestMatch: typeof canonicalTopics[0] | null = null;
+    let bestScore = 0;
+    let bestRootCount = 0;
+    for (const topic of topicRootWords) {
+      const matchCount = topic.roots.filter((root) =>
+        kwWords.some((kw) => normalizeWord(root) === kw)
+      ).length;
+      if (matchCount === 0) continue;
+      const score = matchCount / topic.roots.length;
+      // Best score wins; ties broken by specificity (more roots = more specific)
+      if (score > bestScore || (score === bestScore && topic.roots.length > bestRootCount)) {
+        bestScore = score;
+        bestMatch = topic;
+        bestRootCount = topic.roots.length;
+      }
+    }
+    return bestMatch;
+  }
+
+  // Filter ranked keywords by topic relevance (word-level match)
   const topicRankings: typeof rankedKeywords = [];
   const otherRankings: typeof rankedKeywords = [];
 
   for (const kw of rankedKeywords) {
-    const kwLower = kw.keyword.toLowerCase();
-    if (topicStems.some((stem) => kwLower.includes(stem))) {
+    if (matchKeywordToTopic(kw.keyword)) {
       topicRankings.push(kw);
     } else {
       otherRankings.push(kw);
@@ -4853,9 +4885,7 @@ Group related keywords into single topics. YOUR ENTIRE RESPONSE IS RAW JSON — 
   for (const opp of opportunityMap) {
     const kwLower = opp.keyword.toLowerCase();
     const ranked = rankedLookup.get(kwLower);
-    const topicMatch = canonicalTopics.find((t) =>
-      kwLower.includes(t.key.replace(/-/g, ' ')) || kwLower.includes(t.label.toLowerCase())
-    );
+    const topicMatch = matchKeywordToTopic(kwLower);
 
     let status: GapEntry['status'];
     let position: number | null = null;
@@ -4883,9 +4913,7 @@ Group related keywords into single topics. YOUR ENTIRE RESPONSE IS RAW JSON — 
   for (const kw of topicRankings) {
     const kwLower = kw.keyword.toLowerCase();
     if (!opportunityLookup.has(kwLower)) {
-      const topicMatch = canonicalTopics.find((t) =>
-        kwLower.includes(t.key.replace(/-/g, ' ')) || kwLower.includes(t.label.toLowerCase())
-      );
+      const topicMatch = matchKeywordToTopic(kwLower);
       gapMatrix.push({
         keyword: kw.keyword,
         topic: topicMatch?.label ?? 'Other',
