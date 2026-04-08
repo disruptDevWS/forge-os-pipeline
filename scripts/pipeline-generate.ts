@@ -5010,6 +5010,44 @@ Group related keywords into single topics. YOUR ENTIRE RESPONSE IS RAW JSON — 
   const gaps = gapMatrix.filter((g) => g.status === 'gap').length - otherGapCount;
   console.log(`  Gap matrix: ${gapMatrix.length} entries (${defending} defending, ${weak} weak, ${gaps} gaps, ${otherGapCount} other-gaps excluded)`);
 
+  // Filter non-commercial keywords from top_opportunities
+  // Brand words from prospect name + domain (e.g., "castle", "lock", "key" from "Castle Lock and Key")
+  const INFORMATIONAL_PREFIXES = ['what is', 'what are', 'what does', 'how to', 'how do', 'how does', 'who is', 'where is', 'why do', 'why does'];
+  const FILLER_WORDS = new Set(['and', 'the', 'of', 'in', 'for', 'a', 'an', 'or', 'to', 'is', 'by']);
+  const brandWords = new Set(
+    [...config.name.toLowerCase().split(/\s+/), ...domain.replace(/\.[^.]+$/, '').split(/[-.]/)].filter(
+      (w) => w.length > 2 && !FILLER_WORDS.has(w) && !GENERIC_TOPIC_WORDS.has(w)
+    )
+  );
+  // Remove topic root words from brand set so "locksmith" in "Castle Lock and Key" doesn't over-filter
+  for (const t of topicRootWords) {
+    for (const r of t.roots) brandWords.delete(normalizeWord(r));
+  }
+
+  function isCommercialKeyword(keyword: string): boolean {
+    const kw = keyword.toLowerCase();
+    // Informational intent
+    if (INFORMATIONAL_PREFIXES.some((p) => kw.startsWith(p))) return false;
+    // Brand/navigational: keyword contains 2+ brand words (avoids false positives on single common words)
+    const brandHits = [...brandWords].filter((bw) => kw.includes(bw)).length;
+    if (brandHits >= 2) return false;
+    // Generic "best X" where X doesn't form a recognizable service phrase
+    // "best locksmith" → fine (matches full topic roots). "best key" → filtered (partial root, not a service).
+    const bestMatch = kw.match(/^best\s+(.+)$/);
+    if (bestMatch) {
+      const remainderWords = bestMatch[1].split(/\s+/).filter((w) => !FILLER_WORDS.has(w));
+      if (remainderWords.length <= 1) {
+        // Single word after "best" — only keep if it matches ALL roots of some topic
+        // (i.e., the topic has exactly one root and it matches)
+        const isFullTopic = topicRootWords.some((t) =>
+          t.roots.length === 1 && normalizeWord(t.roots[0]) === normalizeWord(remainderWords[0])
+        );
+        if (!isFullTopic) return false;
+      }
+    }
+    return true;
+  }
+
   // ── Step 5: Markdown output + scope.json ──
   console.log('\n--- Step 5: Scout Report + scope.json ---');
 
@@ -5053,7 +5091,7 @@ Group related keywords into single topics. YOUR ENTIRE RESPONSE IS RAW JSON — 
       gaps,
       other_gap_count: otherGapCount,
       top_opportunities: gapMatrix
-        .filter((g) => g.status === 'gap' && g.topic !== 'Other')
+        .filter((g) => g.status === 'gap' && g.topic !== 'Other' && isCommercialKeyword(g.keyword))
         .sort((a, b) => b.volume - a.volume)
         .slice(0, 20)
         .map((g) => ({
