@@ -5031,19 +5031,18 @@ Group related keywords into single topics. YOUR ENTIRE RESPONSE IS RAW JSON — 
     // Brand/navigational: keyword contains 2+ brand words (avoids false positives on single common words)
     const brandHits = [...brandWords].filter((bw) => kw.includes(bw)).length;
     if (brandHits >= 2) return false;
-    // Generic "best X" where X doesn't form a recognizable service phrase
-    // "best locksmith" → fine (matches full topic roots). "best key" → filtered (partial root, not a service).
+    // "best X" → product comparison unless X contains a service-category phrase.
+    // Service categories = config.topic_patterns (the seed terms that describe what the business does).
+    // "best locksmith" → "locksmith" matches pattern → keep (service comparison).
+    // "best car key" → "car key" matches no pattern → filter (product comparison).
     const bestMatch = kw.match(/^best\s+(.+)$/);
     if (bestMatch) {
-      const remainderWords = bestMatch[1].split(/\s+/).filter((w) => !FILLER_WORDS.has(w));
-      if (remainderWords.length <= 1) {
-        // Single word after "best" — only keep if it matches ALL roots of some topic
-        // (i.e., the topic has exactly one root and it matches)
-        const isFullTopic = topicRootWords.some((t) =>
-          t.roots.length === 1 && normalizeWord(t.roots[0]) === normalizeWord(remainderWords[0])
-        );
-        if (!isFullTopic) return false;
-      }
+      const remainder = bestMatch[1];
+      const isServiceQuery = config.topic_patterns.some((p) => {
+        const pLower = p.toLowerCase();
+        return remainder === pLower || remainder.startsWith(pLower + ' ') || remainder.endsWith(' ' + pLower) || remainder.includes(' ' + pLower + ' ');
+      });
+      if (!isServiceQuery) return false;
     }
     return true;
   }
