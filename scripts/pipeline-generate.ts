@@ -5031,19 +5031,10 @@ Group related keywords into single topics. YOUR ENTIRE RESPONSE IS RAW JSON — 
     // Brand/navigational: keyword contains 2+ brand words (avoids false positives on single common words)
     const brandHits = [...brandWords].filter((bw) => kw.includes(bw)).length;
     if (brandHits >= 2) return false;
-    // "best X" → product comparison unless X contains a service-category phrase.
-    // Service categories = config.topic_patterns (the seed terms that describe what the business does).
-    // "best locksmith" → "locksmith" matches pattern → keep (service comparison).
-    // "best car key" → "car key" matches no pattern → filter (product comparison).
-    const bestMatch = kw.match(/^best\s+(.+)$/);
-    if (bestMatch) {
-      const remainder = bestMatch[1];
-      const isServiceQuery = config.topic_patterns.some((p) => {
-        const pLower = p.toLowerCase();
-        return remainder === pLower || remainder.startsWith(pLower + ' ') || remainder.endsWith(' ' + pLower) || remainder.includes(' ' + pLower + ' ');
-      });
-      if (!isServiceQuery) return false;
-    }
+    // "best X" → comparison/listicle queries. These rank for Yelp, aggregator sites,
+    // and review listicles — not individual service provider sites. Filter all of them.
+    // Covers product intent ("best safe", "best car key") AND service listicles ("best locksmith").
+    if (kw.startsWith('best ')) return false;
     return true;
   }
 
