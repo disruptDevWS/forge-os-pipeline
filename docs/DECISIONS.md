@@ -4,6 +4,40 @@ Non-obvious choices that would look wrong without context. Check here before "fi
 
 ---
 
+**2026-04-09: Intel layer scoped to content effort only — framework deferred**
+
+An "intel layer" proposal was drafted to create a persistent `configs/intel/` directory containing markdown files for Google ranking signal knowledge (derived from the May 2024 API Content Warehouse leak), injected into Phase 1b, Phase 5, Phase 6 (Michael), Pam, Oscar, and Cluster Strategy (Opus) prompts at generation time. Proposed initial files: `scoring-signals.md` (8 modules of named signals) and `content-effort-spec.md` (five effort dimensions for service businesses). Proposed framework: `readIntelFile()` + `extractIntelSections()` utilities, PIPELINE.md contract additions for each affected phase, CHANGELOG discipline, `agent_runs.metadata.intel_files_injected` logging.
+
+**Decision**: implement only the content effort spec, and only in `configs/oscar/seo-playbook.md` as a new section 5 (no code changes, no `configs/intel/` directory, no framework). Park `scoring-signals.md` at `docs/research/google-signals-leak.md` as human consultation material — not injected into any agent prompt. Defer Pam injection, Michael injection, Cluster Strategy injection, Phase 1b/5 injection, and the framework scaffolding entirely.
+
+**Why the framework was deferred (YAGNI)**:
+- Two intel files is not a framework-worthy quantity. The framework cost (PIPELINE.md contract updates across 6 injection points, two utility functions, section extraction heading conventions, metadata logging, CHANGELOG discipline) is justified when 3+ files genuinely need coordinated injection patterns. Right now it's architectural speculation.
+- Single-file disk edits (seo-playbook.md) are already the simplest possible injection pattern. Building a framework on top of that pattern adds complexity without adding capability.
+- Accumulated context drift is a real risk the proposal itself flagged — multiple intel files × multiple agents × version iterations eventually produces contradictory instructions that are hard to trace. The framework makes adding more files cheap, which is precisely when drift accelerates.
+
+**Why Michael injection was deferred specifically**:
+- Prompt compliance just failed on SMA (`c07eb21d`): Michael corrupted 13+ url_slugs with parenthetical annotations, and Pam overrode `entity_map.entity_type` on schema generation. The root cause in both cases was agents ignoring directives already in their prompts. Adding MORE prompt content to Michael before validating the slug-style hardening holds against a real run would create confounding variables — if the next Michael blueprint comes back clean, was it from the slug rules or from the new `siteRadius/siteFocusScore` constraint? Untestable.
+- The proposal's own self-critique flagged that `siteRadius` framing could cause Michael to over-prune the blueprint, interpreting "minimize topical drift" as "only recommend pages semantically identical to core services." That would destroy the informational/comparison/process content that actually drives effort scoring. The constraint needs a coherence-test framing, not a minimization framing — and the timing to design that framing is after SMA re-runs clean, not before.
+
+**Why `scoring-signals.md` was parked, not injected**:
+- The hexdocs leak confirmed schema field existence. It did NOT confirm field weight, live deployment status, or composite signal formulas. The file's prose makes strong claims about implications ("Topic dilution is a measurable penalty," "Variance is penalized independently from average quality") that are plausible interpretations, not verified behavior. When injected into agent prompts, Sonnet treats interpretive prose as operational fact.
+- Human reasoning can hold the "confirmed schema field / uncertain weight" distinction. Agent prompts can't.
+- The right place for speculative reference material is `docs/research/` where a human consults it before making prompt decisions — not `configs/intel/` where an agent reads it at generation time.
+
+**Why content effort earned the single-file implementation**:
+- The five effort dimensions with concrete low/high contrast examples are effective prompt engineering independent of whether "contentEffort" is the specific Google signal being optimized for. Show-don't-tell with before/after beats abstract directives regardless of source motivation.
+- Oscar is downstream of Pam. Injecting the spec into Oscar's seo-playbook (disk read, no code change) is the cheapest test — if it produces better HTML, the effect surfaces without any code risk. If Oscar produces wall-to-wall `[PLACEHOLDER:]` flags because client_profiles lack depth, that's a signal the dimensions need source-hierarchy tuning before wiring into Pam.
+- The spec was revised before insertion to resolve five integration conflicts with the existing playbook: flag taxonomy unified to `[PLACEHOLDER:]` (no new `<!-- REVIEW -->` convention), readability-vs-precision tiebreaker added, em dashes removed from Target examples to respect the existing anti-pattern rule, source-of-truth hierarchy made explicit (Pam brief → client_profiles → industry standards, no fabrication), Dimension 5 (Evidence Anchoring) reframed as baseline rather than per-page-type primary emphasis.
+
+**Observation point**: first Oscar run against the updated playbook. Watch for (a) whether dimensions surface in production HTML or collapse into placeholder flags, (b) whether the readability target vs. technical precision tiebreaker produces scannable output or dense prose walls, (c) whether Pam's existing `effort_risk` flags (if any — Pam doesn't emit these yet) get resolved correctly. If Oscar output improves cleanly, Pam injection becomes the next consideration. If Oscar produces degraded or placeholder-heavy output, the spec needs revision before any further injection.
+
+**What is NOT in this decision**:
+- No commitment to building the framework later. If a future intel file is proposed, it will be evaluated on its own merits with the same YAGNI filter.
+- No commitment to Pam injection. That is a separate decision contingent on observed Oscar output quality.
+- No claim that Google's `contentEffort` signal weight is known. The operational spec is useful regardless.
+
+---
+
 **2026-04-09: Pam must treat `entity_map.entity_type` as an override, not a suggestion**
 
 `generate-brief.ts` contained two competing directives in the schema generation prompt: (a) "the schema JSON-LD you produce must use the entity type and key attributes defined in the entity_map" and (b) "use the most specific Schema.org @type available — for vocational training programs, prefer EducationalOccupationalProgram over Service; for content pages about a program, prefer Course over Article." No explicit precedence between the two. When Pam had to pick, the general specificity rule won because it matched keyword patterns in the page context.
