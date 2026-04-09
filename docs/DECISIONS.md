@@ -4,6 +4,62 @@ Non-obvious choices that would look wrong without context. Check here before "fi
 
 ---
 
+**2026-04-09: Pam must treat `entity_map.entity_type` as an override, not a suggestion**
+
+`generate-brief.ts` contained two competing directives in the schema generation prompt: (a) "the schema JSON-LD you produce must use the entity type and key attributes defined in the entity_map" and (b) "use the most specific Schema.org @type available — for vocational training programs, prefer EducationalOccupationalProgram over Service; for content pages about a program, prefer Course over Article." No explicit precedence between the two. When Pam had to pick, the general specificity rule won because it matched keyword patterns in the page context.
+
+Observed on SMA (audit `c07eb21d`, page `/online-emt-course/cost`): Cluster Strategy's entity_map specified `Course` with `hasCourseInstance` for state variants. Pam emitted `"@type":"EducationalOccupationalProgram"` on the `#course` node instead. Both types are valid schema.org entities, but the entity_map contract is the whole point of generating an expensive Opus strategy per cluster — if Pam can override it on a per-page basis, the cluster's entity graph becomes incoherent across pages.
+
+**Fix scope (Issue 3 of 3 integrity fixes queued for 2026-04-09)**:
+1. Prompt fix in `generate-brief.ts`: move the entity_map directive above the specificity rule. Make it hard-binding: "WHEN `entity_map.entity_type` IS PRESENT, use it verbatim for the primary entity @type. Do not substitute a more specific type." Rewrite the specificity rule to apply ONLY as fallback when entity_map is absent (legacy audits, ad-hoc pages without cluster activation).
+2. Post-generation assertion: if entity_map was provided to the prompt, walk the parsed schema `@graph` and collect all `@type` values. If the expected type is not among them, log a drift record to `agent_runs` with `agent_name='pam-schema-drift'`, `status='completed'`, and `metadata` containing `url_slug`, `canonical_key`, `expected_type`, `actual_types`, and `pam_request_id`. `pam_requests` has no `metadata` column so `agent_runs` is the only table — the dashboard Clusters/Settings page can query `agent_runs` for distinct agent_names to surface "schema drift detected" as an actionable signal. Drift is non-fatal: the brief still ships, the drift is logged for visibility.
+3. Oscar untouched — Oscar reads the schema Pam already wrote. The decision point is Pam.
+
+Existing pages with drifted schema are SEO quality debt, not a broken surface. Regeneration is per-page via the dashboard "Regenerate" button.
+
+---
+
+**2026-04-09: Michael's blueprint parser is prompt-hardened first, validator-hardened second**
+
+`parseArchitectureBlueprint()` (in `sync-to-dashboard.ts`) extracts rows from markdown tables under `### Silo N:` headings, reading `url_slug` from a slug/url/path column by index. When Sonnet writes slugs with CTAs, comparisons, or annotation notes inline (e.g., `aemt-course-online (enrollment CTA), upcoming-advanced-emt-classes` or literal em-dash placeholders), the parser has no validation and stores the entire cell as a slug. These corrupted rows propagate through `syncMichael()` into `execution_pages`, producing pages that can never be fetched at those URLs.
+
+Observed on SMA (audit `c07eb21d`): 13+ `execution_pages` with `source='michael'` and slugs like `online-emt-course (national), all geo cluster pages, emt-online-vs-in-person`, `—` (bare em dash), and `aemt-course-online (what is AEMT, scope of practice), aemt-vs-emt`. All 13 are Michael-sourced — cluster_strategy-sourced pages (state pages + cost page) are clean.
+
+The fix is phased, not layered-simultaneous: **prompt first, then parser validation, then QA gate**. A parser validator that silently drops rows is still wrong if the prompt keeps producing dirty output — "silently dropped" is not better than "corrupted." The prompt has to be fixed first so the parser validator becomes a backstop, not a filter.
+
+**Fix scope (Issue 2 of 3, phased)**:
+
+*Phase A (deploy first):* Prompt hardening in `runMichael()` (`scripts/pipeline-generate.ts`). Add a STYLE RULES block: "URL slug column must contain ONE slug per row, no parentheticals, no commas, no em dashes, no notes. Use the 'Action Required' column for enrollment CTAs, annotations, comparisons, and cross-references." Add a rejection example showing the observed corruption pattern.
+
+*Phase B (after A stabilizes):* Parser validation in `parseArchitectureBlueprint()`. After `cleanSlug` normalization, validate against `^[a-z0-9\-\/]+$`. If slug contains comma, paren, em dash, or em-dash placeholder: log warning, skip row, increment `parseWarnings` counter. On completion, if `parseWarnings > 0`, write to `agent_runs.metadata.parse_warnings` so dashboard can surface it.
+
+*Phase C (with B):* Pre-flight slug validity check before `runQA()`. Count tables and count rows with invalid slugs. If >10% corruption, ENHANCE the output via the existing QA retry infrastructure instead of accepting. Michael already has this retry path — adding a deterministic check is ~10 lines and prevents the problem from ever reaching sync.
+
+SMA's existing `agent_architecture_pages` corruption is handled by one-shot cleanup or Phase 6 re-run, not an emergency.
+
+---
+
+**2026-04-09: `cluster_strategy` orphaning by canonicalization is deprecation, not remap**
+
+Cluster Strategy (Opus, ~$0.15–0.50/cluster) is generated on-demand by `/activate-cluster` and stores `canonical_key` as a foreign key to `audit_clusters`. Phase 3c (Canonicalize) runs during full pipeline re-runs and renames canonical keys based on updated semantic clustering. When this happens, `rebuildClustersAndRollups()` logs orphaned activations to `agent_runs.metadata` but leaves `cluster_strategy` rows with a `canonical_key` that no longer exists in `audit_clusters`.
+
+Observed on SMA (audit `c07eb21d`): cluster_strategy for `online_emt_course` generated 2026-04-01 with `canonical_topic = "Online EMT Course"`. Apr 2 re-canonicalization renamed the cluster to `emt_basic_course` with `canonical_topic = "EMT Basic Course"`. Execution_pages were rewired to the new key during rebuild, but cluster_strategy kept the old key and the old topic label. Dashboard queries joining `audit_clusters` to `cluster_strategy` by canonical_key miss the strategy entirely.
+
+**Why remap-by-topic-match does NOT work**: the initial fix plan was to build an old→new canonical_key map by comparing `canonical_topic` strings before DELETE. Verification against SMA's actual rows shows `canonical_topic` drifts along with `canonical_key` — Sonnet's canonicalization rephrases the human-readable label, not just the slug. "Online EMT Course" → "EMT Basic Course" is not a string-matchable rename. Any exact-match remap logic would fail on exactly the cases it's meant to fix.
+
+Remap-by-keyword-overlap (compute Jaccard similarity on the keyword set in each cluster) would work in theory but introduces a non-deterministic linkage that can produce wrong matches silently. The cost of a wrong remap (Opus strategy attached to the wrong cluster) is worse than the cost of orphaning (Opus strategy inaccessible but preserved).
+
+**Fix scope (Issue 1 of 3)**: Mark orphaned `cluster_strategy` rows as deprecated rather than attempting remap.
+
+1. Migration: add `status text default 'active'` and `deprecated_at timestamptz` to `cluster_strategy`. Verify via `information_schema.columns` before writing the migration.
+2. `rebuildClustersAndRollups()`: after the DELETE/INSERT cycle and cluster_records build, compute `lostKeys = activeClusterKeys \ new canonical_keys`. For each lost key, UPDATE `cluster_strategy` SET `status = 'deprecated'`, `deprecated_at = now()` where `audit_id = ? AND canonical_key IN lostKeys`. Does NOT delete the strategy document — preservation is deliberate for audit trail and future manual remap decisions.
+3. Dashboard (follow-up PR): Cluster Focus page queries `cluster_strategy` by canonical_key AND `status = 'active'` only. Deprecated strategies can be exposed under a separate "Archived Strategies" panel for review.
+4. Settings page re-canonicalization flow gets a pre-run warning: "This will rebuild clusters from the latest keyword snapshot. If canonical keys change, existing cluster strategies may be deprecated. Continue?"
+
+The latent variant of the URL-slug problem (new cluster_strategy runs on the renamed cluster recommend a new URL structure, orphaning existing execution_pages from the old URL tree) is addressed by the deprecation flow: dashboard users see the deprecated strategy and can choose whether to regenerate or leave the existing URL structure intact. The existing SMA schema @id URLs are internally consistent (they derive from `url_slug`, not from `canonical_key`) so the stored HTML remains correct.
+
+---
+
 **2026-04-09: Scout filters non-commercial keywords from top_opportunities**
 
 `isCommercialKeyword()` strips three categories from `top_opportunities` (and the share-report gap table) before they reach the prospect:
