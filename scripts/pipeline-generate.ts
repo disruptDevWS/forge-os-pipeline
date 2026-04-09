@@ -37,6 +37,7 @@ import {
   type LlmMentionsResult,
 } from './dataforseo-llm-mentions.js';
 import { isCommitted } from './rerun-utils.js';
+import { parseBlueprintMarkdown } from './sync-to-dashboard.js';
 
 // ============================================================
 // .env loader (same pattern as sync-to-dashboard)
@@ -2224,7 +2225,30 @@ Rules for coverage assessment:
 - Do not add pages for gap stages without keyword volume evidence; note the gap but mark as "low priority" if no volume data supports it
 
 ## Rules
-1. URL slugs: lowercase, hyphenated, no leading slash (e.g. "plumber-boise" not "/plumber-boise")
+1. URL slugs: lowercase, hyphenated, no leading slash (e.g. "plumber-boise" not "/plumber-boise").
+
+   URL SLUG STYLE RULES (strict — sync-michael parses this column by character and rejects anything that does not match):
+   - EXACTLY ONE slug per row. Never comma-separated lists, never "X, Y, Z", never "X and Y".
+   - Allowed characters: lowercase letters, digits, hyphens, and forward slashes (for nested paths like "online-emt-course/arizona"). Nothing else.
+   - FORBIDDEN in the url_slug column: parentheticals "(...)", commas ",", em dashes "—", en dashes "–", ampersands "&", slashes other than path separators, descriptive notes, CTAs, cross-references, annotations, or placeholder text like "—" used as a stand-in for "not applicable".
+   - Enrollment CTAs, scope notes, comparison angles, cross-page references, and any other annotation MUST go in the "Action Required" column, never in the slug.
+   - If a row has no valid slug, OMIT the row entirely. Do not emit "—" or "(none)" as a slug placeholder.
+
+   REJECTED EXAMPLES (do not produce these — they corrupt the parser):
+   | URL Slug | Status |
+   |----------|--------|
+   | aemt-course-online (enrollment CTA), upcoming-advanced-emt-classes | WRONG — two slugs plus a parenthetical in one cell |
+   | online-emt-course/cost, payment-plan-options, each geo cluster page with enrollment CTA | WRONG — comma list plus prose |
+   | aemt-course-online (what is AEMT, scope of practice), aemt-vs-emt | WRONG — parenthetical plus comma list |
+   | — | WRONG — em dash is not a slug |
+
+   CORRECT equivalents:
+   | URL Slug | Action Required |
+   |----------|-----------------|
+   | aemt-course-online | create; add enrollment CTA block |
+   | online-emt-course/cost | create; cross-link to /payment-plan-options/ and each state page |
+   | aemt-vs-emt | create; cover scope-of-practice comparison |
+
 2. Status: "new" for pages to create, "exists" for pages already on the site (match against existing URLs / crawl data)
 3. Each silo: 1 pillar + 2-8 cluster or support pages. Role column vocabulary is locked to exactly these values:
      - "pillar" — the primary page for a silo; targets the highest-volume head term for that service category
@@ -2265,18 +2289,61 @@ REMINDER: Your response IS the blueprint content — start with "## Executive Su
   let result = await callClaude(prompt, { model: 'sonnet', phase: 'michael' });
   console.log(`  Blueprint: ${result.length} chars`);
 
-  // Structural validation — blueprint must have Executive Summary + at least one Silo table
-  const hasExecSummary = /##\s*Executive Summary/i.test(result);
-  const hasSiloTable = /###\s*Silo\s+\d+/i.test(result);
-  if (!hasExecSummary || !hasSiloTable) {
-    console.log(`  WARNING: Blueprint incomplete (Executive Summary: ${hasExecSummary}, Silo tables: ${hasSiloTable}) — retrying...`);
+  // Pre-flight validation: structural shape + slug corruption ratio.
+  // See DECISIONS.md 2026-04-09: "Michael's blueprint parser is prompt-hardened
+  // first, validator-hardened second". Retry once if either check fails so the
+  // downstream sync doesn't silently drop rows with prose in the url_slug cell.
+  const SLUG_CORRUPTION_RETRY_THRESHOLD = 0.1;
+  const checkBlueprint = (markdown: string) => {
+    const hasExecSummary = /##\s*Executive Summary/i.test(markdown);
+    const hasSiloTable = /###\s*Silo\s+\d+/i.test(markdown);
+    let corruptionRatio = 0;
+    let rejectedSlugCount = 0;
+    let validSlugCount = 0;
+    try {
+      const parsed = parseBlueprintMarkdown(markdown);
+      rejectedSlugCount = parsed.rejectedSlugCount;
+      validSlugCount = parsed.validSlugCount;
+      const total = rejectedSlugCount + validSlugCount;
+      corruptionRatio = total === 0 ? 0 : rejectedSlugCount / total;
+    } catch (err: any) {
+      console.warn(`  Blueprint pre-flight parse threw: ${err?.message ?? err}`);
+    }
+    return { hasExecSummary, hasSiloTable, corruptionRatio, rejectedSlugCount, validSlugCount };
+  };
+
+  let check = checkBlueprint(result);
+  const structuralFail = !check.hasExecSummary || !check.hasSiloTable;
+  const slugFail = check.corruptionRatio > SLUG_CORRUPTION_RETRY_THRESHOLD;
+  if (structuralFail || slugFail) {
+    if (structuralFail) {
+      console.log(`  WARNING: Blueprint incomplete (Executive Summary: ${check.hasExecSummary}, Silo tables: ${check.hasSiloTable}) — retrying...`);
+    }
+    if (slugFail) {
+      console.log(
+        `  WARNING: Blueprint has ${(check.corruptionRatio * 100).toFixed(1)}% invalid url_slug rows ` +
+          `(${check.rejectedSlugCount} rejected / ${check.validSlugCount} valid) — retrying...`,
+      );
+    }
     result = await callClaude(prompt, { model: 'sonnet', phase: 'michael' });
     console.log(`  Retry blueprint: ${result.length} chars`);
-    const retryHasExec = /##\s*Executive Summary/i.test(result);
-    const retryHasSilo = /###\s*Silo\s+\d+/i.test(result);
-    if (!retryHasExec || !retryHasSilo) {
-      console.error(`  ERROR: Blueprint still incomplete after retry (Executive Summary: ${retryHasExec}, Silo tables: ${retryHasSilo})`);
+    check = checkBlueprint(result);
+    if (!check.hasExecSummary || !check.hasSiloTable) {
+      console.error(
+        `  ERROR: Blueprint still incomplete after retry (Executive Summary: ${check.hasExecSummary}, Silo tables: ${check.hasSiloTable})`,
+      );
     }
+    if (check.corruptionRatio > SLUG_CORRUPTION_RETRY_THRESHOLD) {
+      console.error(
+        `  ERROR: Blueprint still has ${(check.corruptionRatio * 100).toFixed(1)}% invalid url_slug rows after retry ` +
+          `(${check.rejectedSlugCount} rejected / ${check.validSlugCount} valid) — syncMichael will drop these rows`,
+      );
+    }
+  } else if (check.rejectedSlugCount > 0) {
+    console.log(
+      `  Blueprint pre-flight: ${check.rejectedSlugCount} slug row(s) rejected ` +
+        `(${(check.corruptionRatio * 100).toFixed(1)}% — below ${SLUG_CORRUPTION_RETRY_THRESHOLD * 100}% retry threshold)`,
+    );
   }
 
   // Write to disk
