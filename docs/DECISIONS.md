@@ -4,6 +4,17 @@ Non-obvious choices that would look wrong without context. Check here before "fi
 
 ---
 
+**2026-04-09: Scout filters non-commercial keywords from top_opportunities**
+
+`isCommercialKeyword()` strips three categories from `top_opportunities` (and the share-report gap table) before they reach the prospect:
+1. **Informational prefixes** — "what is/are/does", "how to/do/does", "who is", "where is", "why do/does". These are FAQ queries, not buyer intent.
+2. **Brand/navigational** — keywords containing 2+ tokens from the prospect's company name or domain stem (filler words like "the/of/in" excluded; topic root words excluded so a brand named "Castle Lock" doesn't kill "lock change boise").
+3. **"Best X" queries** — ALL of them. Initially we tried to keep "best X" when X matched a service category, but real-world data showed too much noise: "best car key" is shopping for a key fob on Amazon, "best safe" isn't a locksmith service at all. Listicle/comparison intent doesn't convert for local service businesses, full stop.
+
+Filter applies in `runScout()` only, not `generateKeywordCandidates()` (Phase 2). Scout sees the prospect with no client context, so these queries pollute the gap story; Phase 2 has full context to use them properly.
+
+---
+
 **2026-04-07: Franchise/network domains are a prospector-level filter, not a Scout fix**
 
 Scout narratives are written for single-location independent operators. When a brand appears across multiple geo-modified domains (e.g., `speedy-locksmith-boise.com`, `speedy-locksmith-phoenix.com`), the data isn't wrong but the framing is — a franchise owner doesn't need "you're invisible in Boise" messaging. Sending a single-location narrative to a network operator undermines credibility.
