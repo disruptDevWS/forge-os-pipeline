@@ -877,6 +877,50 @@ export async function rebuildClustersAndRollups(sb: SupabaseClient, auditId: str
     }
   }
 
+  // Deprecate orphaned cluster_strategy rows (see DECISIONS.md 2026-04-09:
+  // "cluster_strategy orphaning by canonicalization is deprecation, not remap").
+  //
+  // Any cluster_strategy row for this audit whose canonical_key is no longer
+  // present in the rebuilt audit_clusters set is marked deprecated. The strategy
+  // document itself is preserved — deprecation is a soft flag, not a delete.
+  // Handles strategies for both currently-active and previously-deactivated
+  // clusters (queries cluster_strategy directly, not activeClusterKeys).
+  {
+    const { data: strategyRows } = await (sb as any)
+      .from('cluster_strategy')
+      .select('canonical_key')
+      .eq('audit_id', auditId)
+      .eq('status', 'active');
+    const existingStrategyKeys = ((strategyRows ?? []) as Array<{ canonical_key: string }>)
+      .map((r) => r.canonical_key)
+      .filter(Boolean);
+    const newCanonicalKeys = new Set(clusterRecords.map((r) => r.canonical_key));
+    const orphanedStrategyKeys = existingStrategyKeys.filter((k) => !newCanonicalKeys.has(k));
+    if (orphanedStrategyKeys.length > 0) {
+      const { error: depErr } = await (sb as any)
+        .from('cluster_strategy')
+        .update({ status: 'deprecated', deprecated_at: new Date().toISOString() })
+        .eq('audit_id', auditId)
+        .in('canonical_key', orphanedStrategyKeys);
+      if (depErr) {
+        console.warn(`  [${label}] Failed to deprecate orphaned cluster_strategy rows: ${depErr.message}`);
+      } else {
+        console.warn(`  [${label}] Deprecated ${orphanedStrategyKeys.length} orphaned cluster_strategy row(s): ${orphanedStrategyKeys.join(', ')}`);
+        await sb.from('agent_runs').insert({
+          audit_id: auditId,
+          agent_name: label,
+          run_date: new Date().toISOString().slice(0, 10),
+          status: 'completed',
+          metadata: {
+            warning: 'deprecated_cluster_strategies',
+            deprecated_keys: orphanedStrategyKeys,
+            surviving_cluster_keys: Array.from(newCanonicalKeys),
+          },
+        });
+      }
+    }
+  }
+
   // Rollup
   const totalVol = clusterRecords.reduce((s, c) => s + c.total_volume, 0);
   const totalRevLow = clusterRecords.reduce((s, c) => s + c.est_revenue_low, 0);
@@ -1918,8 +1962,46 @@ interface ArchPage {
   action_required: string;
 }
 
-function parseArchitectureBlueprint(filePath: string): { pages: ArchPage[]; markdown: string; summary: string } {
-  const markdown = fs.readFileSync(filePath, 'utf-8');
+export interface BlueprintParseWarning {
+  row_excerpt: string;
+  rejected_slug: string;
+  reason: string;
+}
+
+export interface BlueprintParseResult {
+  pages: ArchPage[];
+  markdown: string;
+  summary: string;
+  parseWarnings: BlueprintParseWarning[];
+  validSlugCount: number;
+  rejectedSlugCount: number;
+}
+
+/**
+ * Rejects slugs that would corrupt execution_pages downstream. Valid slugs are
+ * lowercase alphanumeric, hyphens, and forward slashes (for nested paths like
+ * "online-emt-course/arizona"). Anything else — commas, parentheticals, em
+ * dashes, spaces, prose annotations — is a parser corruption signal.
+ *
+ * See DECISIONS.md 2026-04-09: "Michael's blueprint parser is prompt-hardened
+ * first, validator-hardened second".
+ */
+function validateBlueprintSlug(raw: string): { ok: true; clean: string } | { ok: false; reason: string } {
+  const trimmed = raw.trim();
+  if (!trimmed) return { ok: false, reason: 'empty_slug' };
+  if (trimmed === '—' || trimmed === '–' || trimmed === '-') return { ok: false, reason: 'dash_placeholder' };
+  if (/[,()&]/.test(trimmed)) return { ok: false, reason: 'forbidden_punctuation' };
+  if (/[—–]/.test(trimmed)) return { ok: false, reason: 'em_or_en_dash_in_slug' };
+  if (/\s/.test(trimmed)) return { ok: false, reason: 'whitespace_in_slug' };
+  const lowered = trimmed.toLowerCase();
+  if (!/^[a-z0-9][a-z0-9\-\/]*$/.test(lowered)) return { ok: false, reason: 'non_slug_characters' };
+  return { ok: true, clean: lowered };
+}
+
+export function parseBlueprintMarkdown(markdown: string): BlueprintParseResult {
+  const parseWarnings: BlueprintParseWarning[] = [];
+  let validSlugCount = 0;
+  let rejectedSlugCount = 0;
 
   // Extract executive summary (first section content after the title)
   let summary = '';
@@ -2002,10 +2084,23 @@ function parseArchitectureBlueprint(filePath: string): { pages: ArchPage[]; mark
       const slug = cells[slugIdx] ?? '';
       if (!slug || slug.startsWith('-')) continue;
 
-      const cleanSlug = slug.replace(/^\//, '').replace(/`/g, '');
+      const stripped = slug.replace(/^\//, '').replace(/`/g, '').replace(/[*]/g, '');
+      const validation = validateBlueprintSlug(stripped);
+      if (!validation.ok) {
+        rejectedSlugCount++;
+        parseWarnings.push({
+          row_excerpt: rowLine.slice(0, 200),
+          rejected_slug: stripped.slice(0, 200),
+          reason: validation.reason,
+        });
+        continue;
+      }
+      const cleanSlug = validation.clean;
+
       // Deduplicate: first silo assignment wins
-      if (seenSlugs.has(cleanSlug.toLowerCase())) continue;
-      seenSlugs.add(cleanSlug.toLowerCase());
+      if (seenSlugs.has(cleanSlug)) continue;
+      seenSlugs.add(cleanSlug);
+      validSlugCount++;
 
       pages.push({
         url_slug: cleanSlug,
@@ -2019,7 +2114,12 @@ function parseArchitectureBlueprint(filePath: string): { pages: ArchPage[]; mark
     }
   }
 
-  return { pages, markdown, summary };
+  return { pages, markdown, summary, parseWarnings, validSlugCount, rejectedSlugCount };
+}
+
+function parseArchitectureBlueprint(filePath: string): BlueprintParseResult {
+  const markdown = fs.readFileSync(filePath, 'utf-8');
+  return parseBlueprintMarkdown(markdown);
 }
 
 async function syncMichael(
@@ -2040,8 +2140,14 @@ async function syncMichael(
   }
 
   console.log(`  [michael] Parsing ${blueprintFile}`);
-  const { pages, markdown, summary } = parseArchitectureBlueprint(blueprintFile);
+  const { pages, markdown, summary, parseWarnings, rejectedSlugCount } = parseArchitectureBlueprint(blueprintFile);
   console.log(`  [michael] Extracted ${pages.length} architecture pages from tables`);
+  if (rejectedSlugCount > 0) {
+    console.warn(`  [michael] Rejected ${rejectedSlugCount} row(s) with invalid url_slug values — see agent_runs.metadata.parse_warnings`);
+    for (const w of parseWarnings.slice(0, 5)) {
+      console.warn(`  [michael]   reject: ${w.reason} → ${w.rejected_slug}`);
+    }
+  }
 
   // Clear prior reference data (read-only, always replace)
   await sb.from('agent_architecture_pages').delete().eq('audit_id', auditId);
@@ -2055,7 +2161,12 @@ async function syncMichael(
     run_date: runDate,
     status: 'completed',
     source_path: path.relative(AUDITS_BASE, dir),
-    metadata: { page_count: pages.length, blueprint_size: markdown.length },
+    metadata: {
+      page_count: pages.length,
+      blueprint_size: markdown.length,
+      rejected_slug_count: rejectedSlugCount,
+      parse_warnings: parseWarnings.slice(0, 20),
+    },
   }).select('id').single();
 
   const agentRunId = run?.id ?? null;
