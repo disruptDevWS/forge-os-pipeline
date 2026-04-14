@@ -594,6 +594,21 @@ REMINDER: Your response IS the cluster strategy document — start with "### 0. 
   if (pageErr) console.warn(`  [cluster-strategy] Failed to flag pages: ${pageErr.message}`);
   else console.log(`  [cluster-strategy] Flagged ${pageCount ?? 0} pages as cluster_active`);
 
+  // 12b. Also activate Michael-sourced pages in the same silo that missed the canonical_key
+  // backfill (primary_keyword mismatch leaves canonical_key = null, causing step 12 to miss them).
+  // Set canonical_key here too so deactivation works correctly.
+  const clusterTopic = cluster.canonical_topic ?? cluster.topic;
+  if (clusterTopic) {
+    const { error: siloErr, count: siloCount } = await sb
+      .from('execution_pages')
+      .update({ cluster_active: true, canonical_key: args.canonicalKey })
+      .eq('audit_id', auditId)
+      .eq('silo', clusterTopic)
+      .is('canonical_key', null);
+    if (siloErr) console.warn(`  [cluster-strategy] Silo-match activation failed: ${siloErr.message}`);
+    else if (siloCount) console.log(`  [cluster-strategy] Activated ${siloCount} additional page(s) by silo match (canonical_key was null)`);
+  }
+
   // 13. Log agent_runs
   const { error: runErr } = await sb.from('agent_runs').insert({
     audit_id: auditId,
