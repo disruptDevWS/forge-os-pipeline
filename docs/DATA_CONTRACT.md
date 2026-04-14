@@ -516,7 +516,7 @@ Written by syncMichael (Phase 6b) and Cluster Strategy (on-demand), updated by P
 | `source` | syncMichael / Cluster Strategy / Dashboard | `michael` (syncMichael), `cluster_strategy` (activation), `manual` (dashboard useAddRecommendedPages) |
 | `buyer_stage` | Cluster Strategy | `awareness`, `consideration`, `decision`, `retention` — null for architecture pages |
 | `strategy_rationale` | Cluster Strategy | Why this page was recommended — null for architecture pages |
-| `status` | Pipeline + Dashboard | `not_started` → `brief_ready` → `in_progress` → `review` → `published`. Also `deprecated` (set by syncMichael on strategic re-run for stale uncommitted pages or by Michael's deprecation recommendations). Oscar writes `in_progress` (dashboard shows "Draft Ready"). `review` = manual user action ("In Review"). |
+| `status` | Pipeline + Dashboard | `not_started` → `brief_ready` → `in_progress` → `review` → `published`. Also `deprecated` — set by: (1) syncMichael on strategic re-run for stale uncommitted pages, (2) Michael's deprecation recommendations, (3) dashboard user "Remove from queue" action (`useDeprecateExecutionPage`). Oscar writes `in_progress` (dashboard shows "Draft Ready"). `review` = manual user action ("In Review"). |
 | `page_brief` | syncMichael | JSONB |
 | `canonical_key` | syncMichael | Join to `audit_clusters` |
 | `cluster_active` | Pipeline (rebuild) | Boolean, gates content production |
@@ -527,8 +527,8 @@ Written by syncMichael (Phase 6b) and Cluster Strategy (on-demand), updated by P
 | `published_at` | Dashboard | Set when status → published |
 | `snapshot_version` | syncMichael | |
 
-**Dashboard reads**: `useExecutionPages()` → ContentPage, ImplementationPage, ClustersPage
-**Dashboard writes**: `useUpdateExecutionPageStatus()` (status), `useAddRecommendedPages()` (INSERT)
+**Dashboard reads**: `useExecutionPages()` → ContentPage, ImplementationPage, ClustersPage. Query filters `.neq('status','deprecated')` — deprecated rows are invisible to the dashboard.
+**Dashboard writes**: `useUpdateExecutionPageStatus()` (status), `useAddRecommendedPages()` (INSERT), `useDeprecateExecutionPage()` (sets status=deprecated, soft-delete)
 
 ---
 

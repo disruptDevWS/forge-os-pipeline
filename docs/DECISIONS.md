@@ -4,6 +4,30 @@ Non-obvious choices that would look wrong without context. Check here before "fi
 
 ---
 
+**2026-04-13: Content queue uses soft-delete (status=deprecated), not hard delete**
+
+Removing a page from the Execution content queue sets `status='deprecated'` rather than deleting the row. Consistent with the existing Michael re-run deprecation pattern (Migration 012). Data is preserved for audit trail; the pipeline re-run would restore the page if appropriate. `useExecutionPages()` now filters `.neq('status','deprecated')` so removed pages are invisible in the dashboard but the row persists in the DB. Published pages are excluded from the remove action — you must un-publish before removing. Soft delete chosen over hard delete because: (a) pages may have Pam brief content that is non-trivial to regenerate, (b) reversibility is cheap, (c) the "add page" flow exists for users who want a different slug.
+
+---
+
+**2026-04-13: Cluster activation step 12b — silo-match fallback for Michael pages with null canonical_key**
+
+`generateClusterStrategy()` step 12 activates execution_pages by `canonical_key = args.canonicalKey`. Michael-sourced pages get `canonical_key` via a backfill in `syncMichael()` that matches `primary_keyword` to `audit_keywords.keyword`. When that match fails (keyword phrasing mismatch between blueprint and keyword table), the page retains `canonical_key=null` and is invisible to step 12.
+
+Added step 12b: after the canonical_key update, also update pages WHERE `silo = cluster.canonical_topic AND canonical_key IS NULL`. Sets both `cluster_active=true` and `canonical_key=args.canonicalKey` so deactivation works correctly on subsequent runs. Silo name is the join key because Michael assigns silo from the blueprint's silo header, which matches `audit_clusters.canonical_topic`. This is a safe secondary filter — it only fires on rows the first query already missed, and setting `canonical_key` on those rows is a repair, not an override.
+
+Observed on forgegrowth.ai audit `d1a9b155`: `services/local-seo` (Michael-sourced, `silo='Local SEO'`, `canonical_key=null`) was not activated when the Local SEO cluster (`canonical_key='local_seo'`, `canonical_topic='Local SEO'`) was activated. Step 12b would have caught it. DB patched directly for this instance.
+
+---
+
+**2026-04-13: Anthropic streaming 'terminated' error is retryable**
+
+Oscar's content phase uses `max_tokens=65536`, which triggers streaming via `client.messages.stream(...).finalMessage()`. When the stream connection drops mid-response, the Anthropic SDK throws `Error('terminated')`. `isRetryable()` in `anthropic-client.ts` caught `ECONNRESET`, `fetch failed`, and `ETIMEDOUT` for network-class errors but not `'terminated'`. All 3 retry attempts were bypassed, propagating a hard failure.
+
+`'terminated'` added to the network error check alongside the other stream-drop signatures. The error is transient (network hiccup between Railway and Anthropic), not a structural problem (bad prompt, context overflow, auth failure). Do not confuse with `APIUserAbortError` — that indicates a client-side abort and is not retryable.
+
+---
+
 **2026-04-09: Intel layer scoped to content effort only — framework deferred**
 
 An "intel layer" proposal was drafted to create a persistent `configs/intel/` directory containing markdown files for Google ranking signal knowledge (derived from the May 2024 API Content Warehouse leak), injected into Phase 1b, Phase 5, Phase 6 (Michael), Pam, Oscar, and Cluster Strategy (Opus) prompts at generation time. Proposed initial files: `scoring-signals.md` (8 modules of named signals) and `content-effort-spec.md` (five effort dimensions for service businesses). Proposed framework: `readIntelFile()` + `extractIntelSections()` utilities, PIPELINE.md contract additions for each affected phase, CHANGELOG discipline, `agent_runs.metadata.intel_files_injected` logging.
