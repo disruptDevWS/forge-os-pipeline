@@ -84,7 +84,7 @@ function isRetryable(error: unknown): boolean {
     return error.status === 429 || error.status === 529 || (error.status >= 500 && error.status < 600);
   }
   // Network errors (fetch failures, timeouts)
-  if (error instanceof Error && (error.message.includes('ECONNRESET') || error.message.includes('fetch failed') || error.message.includes('ETIMEDOUT'))) {
+  if (error instanceof Error && (error.message.includes('ECONNRESET') || error.message.includes('fetch failed') || error.message.includes('ETIMEDOUT') || error.message.includes('terminated'))) {
     return true;
   }
   return false;
