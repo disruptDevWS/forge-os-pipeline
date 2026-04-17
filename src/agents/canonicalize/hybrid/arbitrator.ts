@@ -166,8 +166,11 @@ function parseArbitrationResponse(
   return decisions;
 }
 
+const ARBITRATION_BATCH_SIZE = 40;
+
 /**
  * Run Sonnet arbitration on the ambiguous and new-topic cases from Stage 1.
+ * Batches into chunks of ARBITRATION_BATCH_SIZE to stay within token limits.
  */
 export async function arbitrate(
   cases: ArbitrationInput[],
@@ -177,23 +180,50 @@ export async function arbitrate(
 ): Promise<ArbitrationDecision[]> {
   if (cases.length === 0) return [];
 
-  console.log(`  [hybrid/arbitrator] Arbitrating ${cases.length} cases via Sonnet`);
+  console.log(`  [hybrid/arbitrator] Arbitrating ${cases.length} cases via Sonnet (batch size ${ARBITRATION_BATCH_SIZE})`);
 
   const callClaude = await getCallClaude();
-  const prompt = buildArbitrationPrompt(cases, existingTopics, serviceKey, locationCtx);
+  const allDecisions: ArbitrationDecision[] = [];
 
-  let response: string;
-  try {
-    response = await callClaude(prompt, { model: 'sonnet', phase: 'canonicalize-arbitration' });
-  } catch (err: any) {
-    console.error(`  [hybrid/arbitrator] Sonnet call failed: ${err.message}`);
-    throw err;
+  for (let i = 0; i < cases.length; i += ARBITRATION_BATCH_SIZE) {
+    const batch = cases.slice(i, i + ARBITRATION_BATCH_SIZE);
+    const batchNum = Math.floor(i / ARBITRATION_BATCH_SIZE) + 1;
+    const totalBatches = Math.ceil(cases.length / ARBITRATION_BATCH_SIZE);
+
+    if (totalBatches > 1) {
+      console.log(`  [hybrid/arbitrator] Batch ${batchNum}/${totalBatches} (${batch.length} cases)`);
+    }
+
+    const prompt = buildArbitrationPrompt(batch, existingTopics, serviceKey, locationCtx);
+
+    let response: string;
+    try {
+      response = await callClaude(prompt, { model: 'sonnet', phase: 'canonicalize-arbitration' });
+    } catch (err: any) {
+      console.error(`  [hybrid/arbitrator] Sonnet call failed on batch ${batchNum}: ${err.message}`);
+      throw err;
+    }
+
+    const decisions = parseArbitrationResponse(response, batch);
+    allDecisions.push(...decisions);
+
+    // Accumulate new topics created by earlier batches so later batches can reference them
+    for (const d of decisions) {
+      if (d.action === 'create_new' && d.canonicalKey && d.canonicalTopic) {
+        const alreadyExists = existingTopics.some((t) => t.canonicalKey === d.canonicalKey);
+        if (!alreadyExists) {
+          existingTopics.push({
+            canonicalKey: d.canonicalKey,
+            canonicalTopic: d.canonicalTopic,
+            memberContentIds: [],
+          });
+        }
+      }
+    }
   }
 
-  const decisions = parseArbitrationResponse(response, cases);
-  console.log(`  [hybrid/arbitrator] Resolved ${decisions.length}/${cases.length} cases`);
-
-  return decisions;
+  console.log(`  [hybrid/arbitrator] Resolved ${allDecisions.length}/${cases.length} cases`);
+  return allDecisions;
 }
 
 // Export for testing

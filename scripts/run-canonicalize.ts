@@ -132,8 +132,11 @@ async function main() {
     process.exit(1);
   }
 
-  // Set ANTHROPIC_API_KEY for pipeline-generate.ts (callClaude reads this)
+  // Set process.env for modules that read it (callClaude, embeddings service)
   process.env.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || anthropicKey;
+  process.env.SUPABASE_URL = process.env.SUPABASE_URL || supabaseUrl;
+  process.env.SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || supabaseKey;
+  process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || env.OPENAI_API_KEY;
 
   const sb = createClient(supabaseUrl, supabaseKey);
   const { audit } = await resolveAudit(sb, domain, userEmail);
