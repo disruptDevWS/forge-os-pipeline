@@ -13,13 +13,16 @@
     "format:check": "prettier --check \"src/**/*.ts\" \"scripts/**/*.ts\"",
     "test": "vitest run",
     "test:watch": "vitest",
-    "sync": "tsx scripts/sync-to-dashboard.ts"
+    "sync": "tsx scripts/sync-to-dashboard.ts",
+    "verify:embeddings": "tsx scripts/verify-embeddings.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
     "@supabase/supabase-js": "^2.97.0",
     "archiver": "^7.0.1",
-    "csv-parse": "^6.1.0"
+    "csv-parse": "^6.1.0",
+    "openai": "^6.34.0",
+    "pg": "^8.20.0"
   },
   "devDependencies": {
     "@types/archiver": "^7.0.0",
