@@ -2,7 +2,7 @@
 
 > **Purpose**: Authoritative map of every Supabase table, who writes it (pipeline), who reads it (dashboard), and which columns matter. Use this before adding columns, changing sync logic, or building new UI components.
 >
-> **Last updated**: 2026-04-03
+> **Last updated**: 2026-04-17
 
 ---
 
@@ -78,6 +78,15 @@
 | `is_near_me` | Pipeline (Phase 2) | Dashboard | |
 | `intent_type` | Pipeline (Phase 3c) | Dashboard | |
 | `primary_entity_type` | Pipeline (Phase 3c) | Dashboard | `Service`, `Course`, `Product`, `LocalBusiness`, `FAQPage`, `Article` — default `Service` |
+| `classification_method` | Pipeline (Phase 3c hybrid) | — | `vector_auto_assign`, `sonnet_arbitration_assigned`, `sonnet_arbitration_new_topic`, `sonnet_arbitration_merged`, `prior_assignment_locked`. NULL for legacy. |
+| `similarity_score` | Pipeline (Phase 3c hybrid) | — | Cosine similarity to assigned topic centroid. NULL for legacy or lock. |
+| `arbitration_reason` | Pipeline (Phase 3c hybrid) | — | Sonnet's reasoning for arbitrated assignments. NULL for auto-assigned or legacy. |
+| `canonicalize_mode` | Pipeline (Phase 3c) | — | `legacy`, `hybrid`, or `shadow_hybrid` |
+| `shadow_canonical_key` | Pipeline (Phase 3c shadow) | — | Hybrid's clustering in shadow mode. NULL for non-shadow. |
+| `shadow_canonical_topic` | Pipeline (Phase 3c shadow) | — | Hybrid's topic name in shadow mode. NULL for non-shadow. |
+| `shadow_classification_method` | Pipeline (Phase 3c shadow) | — | Hybrid's method in shadow mode. |
+| `shadow_similarity_score` | Pipeline (Phase 3c shadow) | — | Hybrid's similarity in shadow mode. |
+| `shadow_arbitration_reason` | Pipeline (Phase 3c shadow) | — | Hybrid's reasoning in shadow mode. |
 | `source` | Pipeline | Dashboard | `ranked` or `keyword_research` |
 | `current_ctr` | Pipeline | Dashboard | |
 | `current_traffic` | Pipeline | Dashboard | |
@@ -87,7 +96,7 @@
 | `delta_leads_low/high` | Pipeline | Dashboard | |
 | `delta_revenue_low/mid/high` | Pipeline | Dashboard | |
 
-**Pipeline writes**: Phase 2 (source=keyword_research), Phase 3/3b (source=ranked), Phase 3c (canonical_key, canonical_topic, is_brand, intent_type)
+**Pipeline writes**: Phase 2 (source=keyword_research), Phase 3/3b (source=ranked), Phase 3c (canonical_key, canonical_topic, is_brand, intent_type, classification metadata in hybrid/shadow modes)
 **Dashboard reads**: `useAllKeywords()`, `useAssumptionsPreview()`, `useAudit()` relation
 **Dashboard writes**: `useDeleteKeywords()` (DELETE by id)
 

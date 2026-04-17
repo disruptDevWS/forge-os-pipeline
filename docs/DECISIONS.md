@@ -4,6 +4,32 @@ Non-obvious choices that would look wrong without context. Check here before "fi
 
 ---
 
+**2026-04-17: Hybrid canonicalize uses vector-first clustering with Sonnet arbitration only for ambiguous cases**
+
+Phase 2 of the embeddings initiative restructures canonicalization from pure-Sonnet single-shot to a three-stage pipeline: (1) embed keywords via OpenAI text-embedding-3-small, (2) cosine-similarity pre-cluster against existing topic centroids (0.85+ auto-assign, 0.75-0.85 ambiguity band, <0.75 new topic), (3) Sonnet arbitration only for the ambiguity band and new-topic candidates. This reduces Sonnet calls by ~60-80% on re-runs and produces deterministic, reproducible clustering for the auto-assigned majority.
+
+Three modes: `legacy` (unchanged), `hybrid` (vector-first, writes primary columns), `shadow_hybrid` (vector-first, writes shadow_* columns only). Shadow mode preserves legacy output untouched for A/B comparison.
+
+Re-run lock predicate has three AND clauses: (a) prior canonical_key exists, (b) that topic still exists in the current run's topic set, (c) prior classification_method IS NOT NULL (i.e., hybrid-originated). Legacy assignments (classification_method=NULL) are intentionally NOT locked — hybrid's first run after legacy reclassifies everything using vector similarity. This prevents inheriting potentially suboptimal legacy clustering decisions.
+
+Scope is deliberately narrow: hybrid handles ONLY canonical_key/canonical_topic. The is_brand, is_near_me, intent_type, primary_entity_type classifications remain Sonnet-based in the legacy path.
+
+---
+
+**2026-04-17: Shadow columns for hybrid comparison instead of JSONB blob**
+
+Shadow-mode hybrid output goes to dedicated shadow_* columns (shadow_canonical_key, shadow_canonical_topic, shadow_classification_method, shadow_similarity_score, shadow_arbitration_reason) rather than a shadow_data JSONB column. Dedicated columns allow SQL filtering/aggregation in the comparison script without JSON extraction functions, and make the schema self-documenting. These columns are NULL for non-shadow runs. Migration 018.
+
+Initial implementation incorrectly wrote hybrid results to primary columns (canonical_key/canonical_topic) in all modes — this was caught during review and fixed before any shadow run. The correctness property: shadow mode NEVER touches canonical_key, canonical_topic, or cluster columns.
+
+---
+
+**2026-04-17: Arbitrator uses dependency injection (_setCallClaude) instead of direct import**
+
+The hybrid arbitrator module lives in `src/agents/canonicalize/hybrid/arbitrator.ts` but needs `callClaude()` from `scripts/anthropic-client.ts`. Direct import violates TypeScript's rootDir boundary (src/ cannot import from scripts/). Rather than restructuring the project, the arbitrator exposes `_setCallClaude(fn)` which `pipeline-generate.ts` calls before invoking the hybrid path. This keeps the module boundary clean and makes the dependency explicit. The arbitrator throws if called without injection — fail-fast, not silent fallback.
+
+---
+
 **2026-04-13: Content queue uses soft-delete (status=deprecated), not hard delete**
 
 Removing a page from the Execution content queue sets `status='deprecated'` rather than deleting the row. Consistent with the existing Michael re-run deprecation pattern (Migration 012). Data is preserved for audit trail; the pipeline re-run would restore the page if appropriate. `useExecutionPages()` now filters `.neq('status','deprecated')` so removed pages are invisible in the dashboard but the row persists in the DB. Published pages are excluded from the remove action — you must un-publish before removing. Soft delete chosen over hard delete because: (a) pages may have Pam brief content that is non-trivial to regenerate, (b) reversibility is cheap, (c) the "add page" flow exists for users who want a different slug.
