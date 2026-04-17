@@ -41,6 +41,13 @@ export type ContentType =
   | 'cluster_seed'
   | 'client_context';
 
+export interface FindSimilarOptions {
+  threshold?: number;
+  limit?: number;
+  excludeContentId?: string;
+  excludeContentHash?: string;
+}
+
 export interface EmbeddingResult {
   embedding: number[];
   fromCache: boolean;
@@ -251,6 +258,81 @@ export async function embedBatch(
   return results;
 }
 
+// ── getEmbedding() ────────────────────────────────────────────
+
+/**
+ * Retrieve a single stored embedding by content_type + content_id.
+ * Returns null if not found. Never calls OpenAI — read-only accessor.
+ */
+export async function getEmbedding(
+  contentType: ContentType,
+  contentId: string,
+): Promise<number[] | null> {
+  const sb = getSupabaseAdmin();
+
+  const { data } = await sb
+    .from('embeddings')
+    .select('embedding')
+    .eq('content_type', contentType)
+    .eq('content_id', contentId)
+    .eq('model_version', ACTIVE_EMBEDDING_MODEL)
+    .limit(1)
+    .single();
+
+  if (!data?.embedding) return null;
+  return parseVector(data.embedding);
+}
+
+// ── getEmbeddingsBatch() ──────────────────────────────────────
+
+/**
+ * Retrieve multiple stored embeddings in a single query.
+ * Returns array aligned with input order; nulls for misses.
+ * Never calls OpenAI — read-only batch accessor.
+ */
+export async function getEmbeddingsBatch(
+  items: Array<{ contentType: ContentType; contentId: string }>,
+): Promise<Array<number[] | null>> {
+  if (items.length === 0) return [];
+
+  const sb = getSupabaseAdmin();
+
+  // Single query for all content_ids of the same content_type
+  // Group by content_type to minimize queries
+  const byType = new Map<ContentType, Array<{ idx: number; contentId: string }>>();
+  for (let i = 0; i < items.length; i++) {
+    const { contentType, contentId } = items[i];
+    const arr = byType.get(contentType);
+    if (arr) arr.push({ idx: i, contentId });
+    else byType.set(contentType, [{ idx: i, contentId }]);
+  }
+
+  const results: Array<number[] | null> = new Array(items.length).fill(null);
+
+  for (const [ct, entries] of byType) {
+    const ids = entries.map((e) => e.contentId);
+    const { data } = await sb
+      .from('embeddings')
+      .select('content_id, embedding')
+      .eq('content_type', ct)
+      .eq('model_version', ACTIVE_EMBEDDING_MODEL)
+      .in('content_id', ids);
+
+    if (!data) continue;
+
+    const lookup = new Map<string, number[]>();
+    for (const row of data) {
+      lookup.set(row.content_id, parseVector(row.embedding));
+    }
+
+    for (const { idx, contentId } of entries) {
+      results[idx] = lookup.get(contentId) ?? null;
+    }
+  }
+
+  return results;
+}
+
 // ── findSimilar() ─────────────────────────────────────────────
 
 /**
@@ -260,11 +342,7 @@ export async function embedBatch(
 export async function findSimilar(
   embedding: number[],
   contentType: ContentType,
-  options: {
-    threshold?: number;
-    limit?: number;
-    excludeContentId?: string;
-  } = {},
+  options: FindSimilarOptions = {},
 ): Promise<SimilarityMatch[]> {
   const threshold = options.threshold ?? DEFAULT_SIMILARITY_THRESHOLD;
   const limit = options.limit ?? 20;
@@ -277,6 +355,7 @@ export async function findSimilar(
     match_threshold: threshold,
     match_limit: limit,
     exclude_content_id: options.excludeContentId ?? null,
+    exclude_content_hash: options.excludeContentHash ?? null,
   });
 
   if (error) {
@@ -294,7 +373,7 @@ export async function findSimilar(
  * OpenAI text-embedding-3-small returns normalized vectors,
  * so cosine similarity = dot product.
  */
-function cosineSimilarity(a: number[], b: number[]): number {
+export function cosineSimilarity(a: number[], b: number[]): number {
   let dot = 0;
   for (let i = 0; i < a.length; i++) {
     dot += a[i] * b[i];

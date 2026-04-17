@@ -64,11 +64,12 @@ SEED_MATRIX="${3:-}"
 COMPETITOR_URLS="${4:-}"
 DATE=$(date +%Y-%m-%d)
 
-# Parse --mode, --prospect-config, --start-from, and --stop-after flags from any position
+# Parse --mode, --prospect-config, --start-from, --stop-after, and --canonicalize-mode flags from any position
 MODE="full"
 PROSPECT_CONFIG=""
 START_FROM=""
 STOP_AFTER=""
+CANONICALIZE_MODE="legacy"
 NEXT_FLAG=""
 for i in "$@"; do
   if [[ "$i" == "--mode" ]]; then
@@ -87,6 +88,10 @@ for i in "$@"; do
     NEXT_FLAG="stop-after"
     continue
   fi
+  if [[ "$i" == "--canonicalize-mode" ]]; then
+    NEXT_FLAG="canonicalize-mode"
+    continue
+  fi
   if [[ "$NEXT_FLAG" == "mode" ]]; then
     MODE="$i"
     NEXT_FLAG=""
@@ -98,6 +103,9 @@ for i in "$@"; do
     NEXT_FLAG=""
   elif [[ "$NEXT_FLAG" == "stop-after" ]]; then
     STOP_AFTER="$i"
+    NEXT_FLAG=""
+  elif [[ "$NEXT_FLAG" == "canonicalize-mode" ]]; then
+    CANONICALIZE_MODE="$i"
     NEXT_FLAG=""
   fi
 done
@@ -275,8 +283,8 @@ else echo "  [SKIP] Phase 3b: Sync Jim"; fi
 # ─── Phase 3c: Canonicalize Topics ───────────────────────────
 if should_run_phase 3c; then
 echo ""
-echo "--- Phase 3c: Canonicalize Topics (Claude Haiku) ---"
-npx tsx scripts/pipeline-generate.ts canonicalize --domain "$DOMAIN" --user-email "$EMAIL"
+echo "--- Phase 3c: Canonicalize Topics (Claude Sonnet) [canonicalize-mode=$CANONICALIZE_MODE] ---"
+npx tsx scripts/pipeline-generate.ts canonicalize --domain "$DOMAIN" --user-email "$EMAIL" --canonicalize-mode "$CANONICALIZE_MODE"
 else echo "  [SKIP] Phase 3c: Canonicalize"; fi
 
 # ─── Phase 3d: Rebuild Clusters ──────────────────────────────

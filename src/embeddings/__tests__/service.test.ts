@@ -97,8 +97,11 @@ vi.mock('../../supabase.js', () => ({
 import {
   embed,
   embedBatch,
+  getEmbedding,
+  getEmbeddingsBatch,
   findSimilar,
   similarityBatch,
+  cosineSimilarity,
   _resetOpenAI,
 } from '../service.js';
 
@@ -360,5 +363,119 @@ describe('similarityBatch()', () => {
 
     expect(matrix[0][0]).toBeCloseTo(1.0, 5); // identical direction
     expect(matrix[0][1]).toBeCloseTo(0.0, 5); // orthogonal
+  });
+});
+
+describe('getEmbedding()', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSupabaseData = { data: null, error: null };
+  });
+
+  it('returns parsed vector when found', async () => {
+    const vec = unitVector(DIMS, 5);
+    mockSupabaseData = { data: { embedding: vec }, error: null };
+
+    const result = await getEmbedding('keyword', 'kw-1');
+    expect(result).toEqual(vec);
+  });
+
+  it('returns null when not found', async () => {
+    mockSupabaseData = { data: null, error: null };
+
+    const result = await getEmbedding('keyword', 'nonexistent');
+    expect(result).toBeNull();
+  });
+
+  it('parses string-format vectors from pgvector', async () => {
+    const vec = unitVector(DIMS, 3);
+    mockSupabaseData = { data: { embedding: JSON.stringify(vec) }, error: null };
+
+    const result = await getEmbedding('keyword', 'kw-1');
+    expect(result).toEqual(vec);
+  });
+});
+
+describe('getEmbeddingsBatch()', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSupabaseData = { data: [], error: null };
+  });
+
+  it('returns array aligned with input order', async () => {
+    const vec0 = unitVector(DIMS, 0);
+    const vec2 = unitVector(DIMS, 2);
+    mockSupabaseData = {
+      data: [
+        { content_id: 'kw-0', embedding: vec0 },
+        { content_id: 'kw-2', embedding: vec2 },
+      ],
+      error: null,
+    };
+
+    const results = await getEmbeddingsBatch([
+      { contentType: 'keyword', contentId: 'kw-0' },
+      { contentType: 'keyword', contentId: 'kw-1' },  // miss
+      { contentType: 'keyword', contentId: 'kw-2' },
+    ]);
+
+    expect(results).toHaveLength(3);
+    expect(results[0]).toEqual(vec0);
+    expect(results[1]).toBeNull();
+    expect(results[2]).toEqual(vec2);
+  });
+
+  it('returns empty array for empty input', async () => {
+    const results = await getEmbeddingsBatch([]);
+    expect(results).toEqual([]);
+  });
+});
+
+describe('findSimilar() — excludeContentHash', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockRpcData = { data: [], error: null };
+  });
+
+  it('passes excludeContentHash to the RPC', async () => {
+    await findSimilar(unitVector(DIMS, 0), 'keyword', {
+      excludeContentHash: 'abc123',
+    });
+
+    expect(mockRpc).toHaveBeenCalledWith(
+      'find_similar_embeddings',
+      expect.objectContaining({ exclude_content_hash: 'abc123' }),
+    );
+  });
+
+  it('passes null for both exclude params when not provided', async () => {
+    await findSimilar(unitVector(DIMS, 0), 'keyword');
+
+    expect(mockRpc).toHaveBeenCalledWith(
+      'find_similar_embeddings',
+      expect.objectContaining({
+        exclude_content_id: null,
+        exclude_content_hash: null,
+      }),
+    );
+  });
+});
+
+describe('cosineSimilarity()', () => {
+  it('returns 1.0 for identical normalized vectors', () => {
+    const v = unitVector(DIMS, 0);
+    expect(cosineSimilarity(v, v)).toBeCloseTo(1.0, 10);
+  });
+
+  it('returns 0.0 for orthogonal vectors', () => {
+    const a = unitVector(DIMS, 0);
+    const b = unitVector(DIMS, 1);
+    expect(cosineSimilarity(a, b)).toBeCloseTo(0.0, 10);
+  });
+
+  it('returns ~0.707 for 45-degree vectors', () => {
+    const a = unitVector(DIMS, 0);
+    const b = midVector(DIMS, 0, 1);
+    expect(cosineSimilarity(a, b)).toBeCloseTo(Math.SQRT1_2, 5);
   });
 });

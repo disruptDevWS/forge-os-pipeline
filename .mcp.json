@@ -1,3 +1,13 @@
 {
-  "mcpServers": {}
-}
+    "mcpServers": {
+      "playwright": {
+        "command": "npx",
+        "args": ["@playwright/mcp@latest", "--caps",
+        "vision",
+        "--output-dir",
+        "./playwright-audit",
+        "--save-trace"]
+      }
+    }
+  }
+

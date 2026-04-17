@@ -24,6 +24,7 @@ import * as path from 'node:path';
 interface CliArgs {
   domain: string;
   userEmail: string;
+  canonicalizeMode: 'legacy' | 'hybrid' | 'shadow';
 }
 
 function parseArgs(): CliArgs {
@@ -43,13 +44,17 @@ function parseArgs(): CliArgs {
   }
 
   if (!flags.domain || !flags['user-email']) {
-    console.error('Usage: npx tsx scripts/run-canonicalize.ts --domain <domain> --user-email <email>');
+    console.error('Usage: npx tsx scripts/run-canonicalize.ts --domain <domain> --user-email <email> [--canonicalize-mode legacy|hybrid|shadow]');
     process.exit(1);
   }
+
+  const cmRaw = flags['canonicalize-mode'];
+  const canonicalizeMode = (['legacy', 'hybrid', 'shadow'].includes(cmRaw) ? cmRaw : 'legacy') as CliArgs['canonicalizeMode'];
 
   return {
     domain: flags.domain,
     userEmail: flags['user-email'],
+    canonicalizeMode,
   };
 }
 
@@ -110,7 +115,7 @@ async function resolveAudit(sb: SupabaseClient, domain: string, userEmail: strin
 // ============================================================
 
 async function main() {
-  const { domain, userEmail } = parseArgs();
+  const { domain, userEmail, canonicalizeMode } = parseArgs();
   const env = loadEnv();
 
   // Validate env
@@ -134,12 +139,12 @@ async function main() {
   const { audit } = await resolveAudit(sb, domain, userEmail);
   const auditId = audit.id;
 
-  console.log(`Re-canonicalize: ${domain} (audit ${auditId})`);
+  console.log(`Re-canonicalize: ${domain} (audit ${auditId}) [mode=${canonicalizeMode}]`);
 
   // Phase 3c: Canonicalize
   console.log('\n=== Phase 3c: Canonicalize ===');
   const { runCanonicalize } = await import('./pipeline-generate.js');
-  await runCanonicalize(sb, auditId, domain);
+  await runCanonicalize(sb, auditId, domain, canonicalizeMode);
 
   // Phase 3d: Rebuild clusters + rollups (with status preservation)
   console.log('\n=== Phase 3d: Rebuild Clusters ===');

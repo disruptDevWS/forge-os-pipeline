@@ -85,6 +85,7 @@ interface CliArgs {
   prospectConfig?: string;
   phase?: string;
   mode: 'sales' | 'full';
+  canonicalizeMode: 'legacy' | 'hybrid' | 'shadow';
 }
 
 function parseArgs(): CliArgs {
@@ -113,6 +114,8 @@ function parseArgs(): CliArgs {
   }
 
   const mode = (flags.mode === 'sales' ? 'sales' : 'full') as CliArgs['mode'];
+  const cmRaw = flags['canonicalize-mode'];
+  const canonicalizeMode = (['legacy', 'hybrid', 'shadow'].includes(cmRaw) ? cmRaw : 'legacy') as CliArgs['canonicalizeMode'];
 
   return {
     subcommand,
@@ -124,6 +127,7 @@ function parseArgs(): CliArgs {
     prospectConfig: flags['prospect-config'],
     phase: flags.phase,
     mode,
+    canonicalizeMode,
   };
 }
 
@@ -2409,7 +2413,11 @@ async function fetchSerpOrganic(
 // Canonicalize — Claude-based semantic topic grouping
 // ============================================================
 
-export async function runCanonicalize(sb: SupabaseClient, auditId: string, domain: string) {
+export type CanonicalizeMode = 'legacy' | 'hybrid' | 'shadow';
+
+export async function runCanonicalize(sb: SupabaseClient, auditId: string, domain: string, canonicalizeMode: CanonicalizeMode = 'legacy') {
+  console.log(`  [canonicalize] Mode: ${canonicalizeMode}`);
+
   // Fetch audit metadata for context
   const { data: auditRow } = await sb
     .from('audits')
@@ -2651,6 +2659,40 @@ Default to "Service" when the category is ambiguous for a local service business
     }
     console.log(`  [canonicalize] Cleared is_near_miss for ${ids.length} branded/navigational keywords`);
   }
+
+  // ── Mode dispatch: hybrid and shadow modes ──────────────────
+  if (canonicalizeMode === 'hybrid' || canonicalizeMode === 'shadow') {
+    try {
+      // Inject callClaude into the hybrid arbitrator (scripts/ is outside src/ rootDir)
+      const { _setCallClaude } = await import('../src/agents/canonicalize/hybrid/arbitrator.js');
+      _setCallClaude(callClaude);
+
+      const { runHybridCanonicalize } = await import('../src/agents/canonicalize/hybrid/index.js');
+      const hybridResult = await runHybridCanonicalize(sb, auditId, domain, canonicalizeMode);
+      console.log(`  [canonicalize] Hybrid path completed: ${hybridResult.autoAssigned} auto-assigned, ${hybridResult.arbitrated} arbitrated, ${hybridResult.priorLocked} prior-locked`);
+    } catch (err: any) {
+      if (canonicalizeMode === 'shadow') {
+        console.warn(`  [canonicalize] Shadow hybrid path failed (non-fatal): ${err.message}`);
+      } else {
+        throw err; // hybrid mode: let it propagate
+      }
+    }
+  }
+
+  // ── agent_runs audit trail ──────────────────────────────────
+  const runDate = new Date().toISOString().slice(0, 10);
+  await (sb as any).from('agent_runs').insert({
+    audit_id: auditId,
+    agent_name: 'canonicalize',
+    run_date: runDate,
+    status: 'completed',
+    metadata: {
+      mode: canonicalizeMode,
+      keyword_count: keywords.length,
+      topic_count: uniqueKeys.size,
+      updated_count: updated,
+    },
+  });
 }
 
 async function runCompetitors(sb: SupabaseClient, auditId: string, domain: string) {
@@ -5820,7 +5862,7 @@ async function main() {
       await runDwight(args.domain);
       break;
     case 'canonicalize':
-      await runCanonicalize(sb, audit.id, args.domain);
+      await runCanonicalize(sb, audit.id, args.domain, args.canonicalizeMode);
       break;
     case 'validator':
       await runValidator(sb, audit.id, args.domain, args.date);

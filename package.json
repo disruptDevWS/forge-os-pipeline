@@ -14,7 +14,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "sync": "tsx scripts/sync-to-dashboard.ts",
-    "verify:embeddings": "tsx scripts/verify-embeddings.ts"
+    "verify:embeddings": "tsx scripts/verify-embeddings.ts",
+    "verify:canonicalize-hybrid": "tsx scripts/verify-canonicalize-hybrid.ts",
+    "canonicalize:shadow-compare": "tsx scripts/canonicalize-shadow-compare.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
