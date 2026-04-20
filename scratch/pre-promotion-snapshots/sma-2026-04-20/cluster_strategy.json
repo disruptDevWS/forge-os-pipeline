@@ -1,0 +1,344 @@
+[
+  {
+    "id": "b0d1fe7f-7ef2-4e45-9c5e-c6d76bb3a890",
+    "audit_id": "c07eb21d-3120-4242-8754-361a429a6f2c",
+    "canonical_key": "online_emt_course",
+    "canonical_topic": "Online EMT Course",
+    "strategy_markdown": "### 0. Entity Map\n\n```json\n{\n  \"entity\": {\n    \"type\": \"Course\",\n    \"name\": \"Online EMT Course\",\n    \"key_attributes\": [\n      \"provider: Summit Medical Academy (SMA), sister academy to Idaho Medical Academy (IMA)\",\n      \"delivery_mode: Online self-paced didactic with in-person skills testing\",\n      \"credential_issued: EMT-Basic (EMT-B) certification, eligibility for NREMT examination\",\n      \"accrediting_body: American Heart Association (AHA) Aligned Training Site; state EMS office approvals vary by state\",\n      \"duration: Self-paced didactic component; skills testing scheduled at student convenience\",\n      \"prerequisites: Must be 18 years old (varies by state), high school diploma or GED, current CPR/BLS certification\",\n      \"serviceArea: Washington, Oregon, Northern California, Utah, Arizona, Montana, Idaho\",\n      \"payment_options: Payment plans available, scholarship and financial assistance programs\",\n      \"occupationalCategory: Emergency Medical Technician (EMT-Basic)\"\n    ],\n    \"related_entities\": [\n      {\n        \"type\": \"Course\",\n        \"name\": \"Online EMT Course — California\",\n        \"relationship\": \"State-specific variant of the primary Online EMT Course, with California EMSA certification requirements and skills testing locations\",\n        \"warrants_own_page\": true\n      },\n      {\n        \"type\": \"Course\",\n        \"name\": \"Online EMT Course — Utah\",\n        \"relationship\": \"State-specific variant with Utah Bureau of EMS certification pathway and local skills testing\",\n        \"warrants_own_page\": true\n      },\n      {\n        \"type\": \"Course\",\n        \"name\": \"Online EMT Course — Oregon\",\n        \"relationship\": \"State-specific variant with Oregon Health Authority EMS certification pathway\",\n        \"warrants_own_page\": true\n      },\n      {\n        \"type\": \"Course\",\n        \"name\": \"Online EMT Course — Arizona\",\n        \"relationship\": \"State-specific variant with Arizona Department of Health Services Bureau of EMS certification pathway\",\n        \"warrants_own_page\": true\n      },\n      {\n        \"type\": \"Course\",\n        \"name\": \"Online EMT Course — Idaho\",\n        \"relationship\": \"State-specific variant aligned with Idaho Medical Academy (IMA); Idaho EMS Bureau certification pathway\",\n        \"warrants_own_page\": true\n      },\n      {\n        \"type\": \"Course\",\n        \"name\": \"Online EMT Course — Washington\",\n        \"relationship\": \"State-specific variant with Washington State DOH EMS certification pathway\",\n        \"warrants_own_page\": true\n      },\n      {\n        \"type\": \"Course\",\n        \"name\": \"Online EMT Course — Montana\",\n        \"relationship\": \"State-specific variant with Montana DPHHS EMS certification pathway\",\n        \"warrants_own_page\": true\n      },\n      {\n        \"type\": \"EducationalOccupationalCredential\",\n        \"name\": \"NREMT EMT-Basic Certification\",\n        \"relationship\": \"The national credential that graduates of this course become eligible to sit for\",\n        \"warrants_own_page\": false\n      },\n      {\n        \"type\": \"Organization\",\n        \"name\": \"Summit Medical Academy\",\n        \"relationship\": \"Provider/instructor organization for the Online EMT Course\",\n        \"warrants_own_page\": false\n      },\n      {\n        \"type\": \"Offer\",\n        \"name\": \"EMT Course Tuition & Payment Plans\",\n        \"relationship\": \"Pricing, payment plans, and financial assistance options for enrollment in the Online EMT Course\",\n        \"warrants_own_page\": true\n      }\n    ],\n    \"schema_notes\": \"The pillar page should use Course schema (schema.org/Course) with hasCourseInstance pointing to individual CourseInstance nodes for each state variant. Each state landing page should carry its own Course schema with provider (Organization), educationalCredentialAwarded, coursePrerequisites, availableLanguage, and offers (Offer with price, priceCurrency, availability). Include LocationFeatureSpecification or spatial coverage via serviceArea using AdministrativeArea for each state. Add AggregateRating when reviews are collected. The pillar page should also include BreadcrumbList and FAQPage schema for embedded FAQ sections. Each state page should include hasCourseInstance with courseMode set to 'online' and courseWorkload reflecting self-paced hours. Link all state pages back to the pillar via isPartOf.\"\n  }\n}\n```\n\n### 1. Buyer Journey Map\n\n```json\n{\n  \"stages\": [\n    {\n      \"stage\": \"awareness\",\n      \"keywords\": [],\n      \"buyer_questions\": [\n        \"What does an EMT do?\",\n        \"Can I become an EMT with an online course?\",\n        \"Is online EMT training legitimate and accepted?\",\n        \"How long does it take to get EMT certified?\",\n        \"What is the difference between EMT-Basic and AEMT?\"\n      ],\n      \"has_page\": false,\n      \"gap_severity\": \"low\",\n      \"notes\": \"No awareness-stage keywords exist in this cluster specifically, but the market intelligence shows 'what is emt certification' (720/mo, pos 63) and 'should i be an emt' (70/mo, pos 9) as adjacent awareness queries. These are better served by a separate informational cluster. Within this cluster, awareness intent is partially satisfied by the pillar page's introductory content.\"\n    },\n    {\n      \"stage\": \"consideration\",\n      \"keywords\": [\n        \"online emt course\"\n      ],\n      \"buyer_questions\": [\n        \"Which online EMT course is best for my state?\",\n        \"How does self-paced online EMT training work?\",\n        \"Where do I complete skills testing if I take an online course?\",\n        \"Is the online EMT course accredited / will my state accept it?\",\n        \"How much does an online EMT course cost?\",\n        \"Are payment plans or scholarships available?\",\n        \"How long do I have to complete the online portion?\"\n      ],\n      \"has_page\": false,\n      \"gap_severity\": \"high\",\n      \"notes\": \"The 9,900/mo 'online emt course' keyword is the core consideration query — the searcher knows they want online EMT training and is evaluating providers. No page exists. This is the highest-severity gap in the entire cluster.\"\n    },\n    {\n      \"stage\": \"decision\",\n      \"keywords\": [\n        \"online emt course california\",\n        \"online emt course utah\",\n        \"online emt course oregon\",\n        \"online emt course arizona\",\n        \"online emt course idaho\",\n        \"online emt course washington\",\n        \"online emt course montana\"\n      ],\n      \"buyer_questions\": [\n        \"Does SMA's online EMT course work in my state (CA/UT/OR/AZ/ID/WA/MT)?\",\n        \"What are the specific certification requirements in my state?\",\n        \"Where are the in-person skills testing locations near me?\",\n        \"How do I enroll in the online EMT course for my state?\",\n        \"What do former students in my state say about this program?\",\n        \"When is the next available cohort or start date?\"\n      ],\n      \"has_page\": false,\n      \"gap_severity\": \"high\",\n      \"notes\": \"All seven state-specific keywords are decision-stage — the searcher has chosen online EMT training and is narrowing by geography. Zero pages exist for any state. California alone is 320/mo. These are direct enrollment conversion pages.\"\n    },\n    {\n      \"stage\": \"retention\",\n      \"keywords\": [],\n      \"buyer_questions\": [\n        \"How do I prepare for the NREMT exam after finishing the course?\",\n        \"What continuing education do I need to maintain my EMT certification?\",\n        \"Can I upgrade from EMT-B to AEMT through SMA?\"\n      ],\n      \"has_page\": false,\n      \"gap_severity\": \"low\",\n      \"notes\": \"Retention queries (CE, recertification, AEMT upgrade) are out of scope for this cluster but are flagged in market intelligence as a separate content gap. The AEMT and CE clusters should handle these. Within this cluster, a brief 'next steps after certification' section on the pillar page satisfies the minimal retention need.\"\n    }\n  ]\n}\n```\n\n### 2. Page Coverage Analysis\n\n**Current State: Zero pages exist in this cluster.**\n\nThere are no existing pages targeting any keyword in the Online EMT Course cluster. The market intelligence confirms that the highest-volume keyword in this cluster — \"emt course online\" (9,900/mo) — currently ranks at position 74 on the **AEMT course page**, which cannot satisfy entry-level EMT intent. This is a critical intent mismatch: a searcher looking for a basic EMT course lands on an advanced EMT page, creating both a poor user experience and a ranking ceiling.\n\nThe \"online emt course idaho\" keyword ranks at position 51, also on the wrong page. All other cluster keywords have position 0 (not ranked at all).\n\n**Diagnosis:**\n- **No pillar page exists.** The foundational service page for SMA's core product — the Online EMT Course — has never been built. This is the single largest content gap on the site, representing 9,900 monthly searches with $6.09 CPC.\n- **No state landing pages exist.** Seven state-specific decision-stage keywords (combined 480/mo) have no dedicated pages. Each represents a unique certification pathway with state-specific requirements, skills testing locations, and regulatory bodies.\n- **Intent cannibalization is active.** The AEMT page is absorbing EMT-B search signals because no proper EMT page exists to capture them. This is suppressing both the EMT and AEMT clusters.\n- **No internal linking architecture exists** for this cluster because there are no pages to link.\n\n**Conclusion:** This cluster requires full buildout from scratch — one pillar page and seven state-specific supporting pages — before any optimization can occur.\n\n### 3. Recommended New Pages\n\n```json\n{\n  \"pages\": [\n    {\n      \"url_slug\": \"/online-emt-course\",\n      \"primary_keyword\": \"online emt course\",\n      \"volume\": 9900,\n      \"buyer_stage\": \"consideration\",\n      \"content_type\": \"service_page\",\n      \"priority\": 1,\n      \"target_entity\": \"Online EMT Course\",\n      \"schema_type\": \"Course\",\n      \"rationale\": \"This is the pillar page for the entire cluster and the single largest revenue gap on the site. It answers the core consideration-stage question: 'Which online EMT course should I choose and how does it work?' No page currently exists. The 9,900/mo keyword ranks at position 74 on the AEMT page — an intent mismatch that suppresses both clusters. This page must cover: program overview, self-paced format explanation, skills testing model, accreditation/AHA alignment, state coverage map with links to each state page, tuition overview with link to cost page, enrollment CTA. Secondary keywords: 'emt course online' (9,900/mo), 'emt-b online course' (480/mo). Expected to also capture 'emt training online' traffic.\"\n    },\n    {\n      \"url_slug\": \"/online-emt-course/california\",\n      \"primary_keyword\": \"online emt course california\",\n      \"volume\": 320,\n      \"buyer_stage\": \"decision\",\n      \"content_type\": \"location_page\",\n      \"priority\": 1,\n      \"target_entity\": \"Online EMT Course — California\",\n      \"schema_type\": \"Course\",\n      \"rationale\": \"Highest-volume state keyword in the cluster (320/mo). Answers the decision-stage question: 'Does this online EMT course meet California EMSA requirements and where do I complete skills testing in CA?' California has unique certification requirements (CA EMSA approval, county-level protocols) that demand dedicated content. No page exists. The page must cover: CA-specific certification pathway, EMSA alignment, Northern CA skills testing locations, CA prerequisites, state-specific testimonials if available, and enrollment CTA. This is the highest-priority state page because California volume alone exceeds all other states combined.\"\n    },\n    {\n      \"url_slug\": \"/online-emt-course/utah\",\n      \"primary_keyword\": \"online emt course utah\",\n      \"volume\": 50,\n      \"buyer_stage\": \"decision\",\n      \"content_type\": \"location_page\",\n      \"priority\": 2,\n      \"target_entity\": \"Online EMT Course — Utah\",\n      \"schema_type\": \"Course\",\n      \"rationale\": \"Answers: 'Can I take this online EMT course and get certified in Utah?' Utah Bureau of EMS has specific training program approval requirements. No page exists. Must cover: UT certification pathway, skills testing locations in Utah, state prerequisites, enrollment CTA. Volume is modest (50/mo) but the page serves as a geo-trust signal for the entire cluster and supports the pillar page's state coverage claims.\"\n    },\n    {\n      \"url_slug\": \"/online-emt-course/oregon\",\n      \"primary_keyword\": \"online emt course oregon\",\n      \"volume\": 40,\n      \"buyer_stage\": \"decision\",\n      \"content_type\": \"location_page\",\n      \"priority\": 2,\n      \"target_entity\": \"Online EMT Course — Oregon\",\n      \"schema_type\": \"Course\",\n      \"rationale\": \"Answers: 'Is this online EMT course accepted by Oregon Health Authority?' Oregon has its own EMS certification framework that differs from neighboring states. No page exists. Must cover: OR certification pathway, OHA alignment, Portland-area and regional skills testing options, state-specific enrollment CTA.\"\n    },\n    {\n      \"url_slug\": \"/online-emt-course/arizona\",\n      \"primary_keyword\": \"online emt course arizona\",\n      \"volume\": 30,\n      \"buyer_stage\": \"decision\",\n      \"content_type\": \"location_page\",\n      \"priority\": 2,\n      \"target_entity\": \"Online EMT Course — Arizona\",\n      \"schema_type\": \"Course\",\n      \"rationale\": \"Answers: 'Can I get EMT certified in Arizona through an online course?' Arizona BEMS has distinct program approval requirements. No page exists. Must cover: AZ certification pathway, skills testing locations in AZ, AZ-specific prerequisites, enrollment CTA.\"\n    },\n    {\n      \"url_slug\": \"/online-emt-course/idaho\",\n      \"primary_keyword\": \"online emt course idaho\",\n      \"volume\": 20,\n      \"buyer_stage\": \"decision\",\n      \"content_type\": \"location_page\",\n      \"priority\": 1,\n      \"target_entity\": \"Online EMT Course — Idaho\",\n      \"schema_type\": \"Course\",\n      \"rationale\": \"Despite lower search volume (20/mo), this page is Priority 1 because: (a) Idaho is SMA's home market via Idaho Medical Academy, giving maximum topical authority and conversion potential; (b) market intelligence shows 'emt certification idaho' (260/mo, pos 26), 'idaho emt courses' (260/mo, pos 74), and 'idaho emt training' (260/mo, pos 77) are all expansion opportunities that this page can consolidate; (c) the about-us page currently ranks for Idaho EMT terms, causing intent mismatch — this page absorbs that signal. Must cover: Idaho EMS Bureau certification pathway, relationship to IMA, Boise-area skills testing, local employer partnerships, LocalBusiness schema with geo-coordinates.\"\n    },\n    {\n      \"url_slug\": \"/online-emt-course/washington\",\n      \"primary_keyword\": \"online emt course washington\",\n      \"volume\": 10,\n      \"buyer_stage\": \"decision\",\n      \"content_type\": \"location_page\",\n      \"priority\": 2,\n      \"target_entity\": \"Online EMT Course — Washington\",\n      \"schema_type\": \"Course\",\n      \"rationale\": \"Answers: 'Is this online EMT course approved by Washington State DOH?' Washington has specific EMS certification requirements through the Department of Health. No page exists. Low volume (10/mo) but Washington is a core service area and the page anchors geographic authority for the Pacific Northwest cluster positioning.\"\n    },\n    {\n      \"url_slug\": \"/online-emt-course/montana\",\n      \"primary_keyword\": \"online emt course montana\",\n      \"volume\": 10,\n      \"buyer_stage\": \"decision\",\n      \"content_type\": \"location_page\",\n      \"priority\": 2,\n      \"target_entity\": \"Online EMT Course — Montana\",\n      \"schema_type\": \"Course\",\n      \"rationale\": \"Answers: 'Can I complete EMT certification in Montana through an online program?' Montana DPHHS has its own EMS training requirements. No page exists. Volume is low (10/mo) but Montana is an underserved rural market where online training has a strong value proposition — the content angle of 'no need to drive hours to a classroom' is compelling for conversion.\"\n    },\n    {\n      \"url_slug\": \"/online-emt-course/cost\",\n      \"primary_keyword\": \"emt course cost\",\n      \"volume\": 2400,\n      \"buyer_stage\": \"consideration\",\n      \"content_type\": \"guide\",\n      \"priority\": 1,\n      \"target_entity\": \"EMT Course Tuition & Payment Plans\",\n      \"schema_type\": \"Offer\",\n      \"rationale\": \"Answers the critical consideration-stage question: 'How much does an online EMT course cost and can I afford it?' Market intelligence identifies 'emt training cost' (2,400/mo, $4.42 CPC) and 'emt course cost' (2,400/mo, $4.42 CPC) as a combined 4,800/mo opportunity with no current page. This is a decision-gate query — price is the #1 barrier for EMT students. The page must cover: transparent tuition breakdown, comparison to traditional in-person program costs, payment plan details (linking to existing /payment-plan-options/), scholarship and financial assistance programs, ROI framing (EMT salary data vs. course investment). While the keyword is not in this cluster's keyword list, it is the most commercially critical supporting page for the pillar and directly referenced in market intelligence as a priority build.\"\n    }\n  ]\n}\n```\n\n### 4. Format Gaps\n\n```json\n{\n  \"gaps\": [\n    {\n      \"format\": \"faq_schema\",\n      \"priority\": \"high\",\n      \"rationale\": \"The pillar page (/online-emt-course/) must include FAQPage schema targeting high-frequency questions: 'Can you take an EMT course online?', 'How long does an online EMT course take?', 'Is an online EMT course accepted by NREMT?', 'What states accept online EMT training?'. These are PAA (People Also Ask) trigger questions that appear for 'online emt course' SERPs. FAQ schema increases SERP real estate and is the primary structural mechanism for capturing AI Overview citations on definitional queries. Competitors in this space universally deploy FAQ sections; SMA has none.\"\n    },\n    {\n      \"format\": \"state_comparison_table\",\n      \"priority\": \"high\",\n      \"rationale\": \"The pillar page needs a structured HTML table comparing certification requirements across all seven states (CA, UT, OR, AZ, ID, WA, MT) — columns for state, certifying body, minimum age, prerequisites, skills testing availability, and link to state page. This format is a featured snippet magnet for comparative queries like 'emt certification requirements by state' and provides a natural internal linking hub to all state pages. No competitor in the online EMT space currently offers a clean multi-state comparison table, creating a first-mover structural advantage.\"\n    },\n    {\n      \"format\": \"video_walkthrough\",\n      \"priority\": \"medium\",\n      \"rationale\": \"An embedded video walkthrough of the online learning platform (LMS tour, sample lesson, skills testing day experience) addresses the trust gap inherent in online medical training. Video reduces bounce rate on the pillar page, increases time-on-page (a behavioral signal), and can be repurposed for YouTube SEO targeting 'online emt course review' and 'how online emt training works'. Competitors like Unitek EMT and NREMT Prep Academy use video testimonials and platform walkthroughs extensively.\"\n    },\n    {\n      \"format\": \"pricing_calculator_or_comparison\",\n      \"priority\": \"medium\",\n      \"rationale\": \"The cost page (/online-emt-course/cost/) should include a visual cost comparison: SMA online course vs. average community college EMT program vs. private in-person academy. This can be a simple styled table or infographic. Pricing transparency is the #1 conversion driver in education verticals, and a structured comparison positions SMA's value proposition without requiring the user to research alternatives. Competitors bury pricing; SMA can differentiate by leading with it.\"\n    },\n    {\n      \"format\": \"testimonial_cards_with_state_attribution\",\n      \"priority\": \"medium\",\n      \"rationale\": \"Each state landing page should include 2-3 student testimonials attributed to that specific state (e.g., 'Sarah M., Certified EMT, Sacramento, CA'). This serves dual purposes: social proof for decision-stage visitors and geo-relevance signals for search engines. Review/testimonial structured data (Review schema within the Course schema) can also trigger rich results. Currently the site has testimonials only on /about-us/testimonials/ with no state-level distribution.\"\n    },\n    {\n      \"format\": \"step_by_step_enrollment_process\",\n      \"priority\": \"high\",\n      \"rationale\": \"A HowTo schema-marked step-by-step section ('How to Enroll in the Online EMT Course: Step 1 → Step 5') should appear on the pillar page and each state page (customized per state). This addresses the action-gap between consideration and enrollment, provides a featured snippet opportunity for 'how to enroll in online emt course', and reduces cognitive friction. The structural pattern (ordered list with clear actions) is the highest-performing format for conversion on education service pages.\"\n    }\n  ]\n}\n```\n\n### 5. AI & Search Optimization Targets\n\n```json\n{\n  \"ai_targets\": [\n    {\n      \"query\": \"can you take an emt course online\",\n      \"target_type\": \"ai_overview\",\n      \"structural_pattern\": \"direct_answer\",\n      \"applies_to_page\": \"/online-emt-course\",\n      \"condition\": \"This is the gateway qualifying question for the entire cluster. AI Overviews for this query currently pull from generic health education sites with weak authority. The query demands a direct yes/no answer followed by a brief explanation of how the hybrid model works (online didactic + in-person skills). The direct_answer pattern is justified because the intent is binary confirmation with elaboration.\",\n      \"rationale\": \"SMA's pillar page will be the only page on the site architecturally designed to answer this question with first-hand provider authority. Opening the page with a clear 'Yes — here's how it works' paragraph with Course schema gives AI systems a clean extractable answer with entity attribution. The page's multi-state coverage table reinforces breadth-of-service authority that generic competitors lack.\"\n    },\n    {\n      \"query\": \"online emt course\",\n      \"target_type\": \"featured_snippet\",\n      \"structural_pattern\": \"list\",\n      \"applies_to_page\": \"/online-emt-course\",\n      \"condition\": \"The 9,900/mo keyword triggers a featured snippet opportunity because Google currently serves a mix of course listings and directory results — no single authoritative page owns the definition of what an online EMT course includes. An ordered list format ('What's Included in an Online EMT Course: 1. Self-paced didactic modules, 2. Virtual lab simulations, 3. In-person skills testing, 4. NREMT exam preparation, 5. State certification guidance') matches the implicit 'what do I get' intent behind this keyword.\",\n      \"rationale\": \"SMA can own this snippet by being the first provider to structure the answer as a clean numbered list within an H2 section. The list format is optimal because the query has a 'components' sub-intent — the searcher wants to understand what the course contains before evaluating providers. This list also feeds AI Overview extraction for related queries.\"\n    },\n    {\n      \"query\": \"online emt course california\",\n      \"target_type\": \"featured_snippet\",\n      \"structural_pattern\": \"prose_elaboration\",\n      \"applies_to_page\": \"/online-emt-course/california\",\n      \"condition\": \"State-specific EMT course queries trigger local intent enrichment in Google's systems. The current SERP for this query lacks a clear authoritative answer about whether online EMT courses are accepted in California and what the CA EMSA requirements are. A 40-60 word prose paragraph directly below the H1 — structured as 'Summit Medical Academy's Online EMT Course is approved for students seeking California EMT-Basic certification through the CA EMSA. The course includes [X hours] of self-paced online didactic training and in-person skills testing at [location(s)] in Northern California.' — matches the specificity this query demands.\",\n      \"rationale\": \"California is the highest-volume state keyword (320/mo) and the query carries implicit regulatory concern ('will this be accepted in my state?'). SMA's CA-specific page with Course schema including educationalCredentialAwarded and provider details gives AI systems a verifiable, attributable answer that generic course aggregator sites cannot provide.\"\n    },\n    {\n      \"query\": \"how long does an online emt course take\",\n      \"target_type\": \"paa\",\n      \"structural_pattern\": \"direct_answer\",\n      \"applies_to_page\": \"/online-emt-course\",\n      \"condition\": \"This is a high-frequency People Also Ask question that appears in SERPs for 'online emt course' and all state variants. The query demands a specific time range (e.g., '4-12 weeks depending on your pace') rather than a vague answer. The direct_answer pattern is appropriate because the intent is factual with a single data point.\",\n      \"rationale\": \"SMA's self-paced model is a differentiator here — the answer can highlight flexibility ('Complete in as few as 4 weeks or take up to 16 weeks') which simultaneously answers the question and positions the brand. Embedding this in an FAQ section with FAQPage schema on the pillar page gives it the highest probability of PAA capture. No competitor currently owns this PAA box with a provider-attributed answer.\"\n    },\n    {\n      \"query\": \"how much does an online emt course cost\",\n      \"target_type\": \"ai_overview\",\n      \"structural_pattern\": \"table\",\n      \"applies_to_page\": \"/online-emt-course/cost\",\n      \"condition\": \"Cost queries for EMT training are high-CPC ($4.42-$6.09) and AI Overviews increasingly pull pricing data from structured tables. The query intent is comparative — the searcher wants a number and context for whether it's reasonable. A table format (columns: Program Type, Average Cost, Includes) comparing 'SMA Online EMT Course' vs. 'Community College EMT Program' vs. 'Private In-Person Academy' satisfies the comparative sub-intent and provides AI systems with structured data to extract.\",\n      \"rationale\": \"SMA's competitive pricing and payment plan availability make cost transparency a conversion advantage, not a liability. Being the source AI systems cite for EMT course cost data creates persistent brand visibility across all cost-related queries. The table format is specifically chosen because AI Overviews prefer tabular data for comparison queries — prose answers for cost questions are systematically outperformed by structured formats.\"\n    }\n  ]\n}\n```\n\n### 6. Production Sequence\n\n**Phase 1: Foundation (Week 1-2) — Pillar Page**\n\n1. **`/online-emt-course` — Online EMT Course Pillar Page**\n   - This is the non-negotiable first build. Every other page in the cluster depends on it for internal linking context, and it targets the single largest keyword gap on the site (9,900/mo). Build this page with:\n     - Hero section with direct-answer opening paragraph (AI Overview target)\n     - \"What's Included\" ordered list section (featured snippet target)\n     - Multi-state comparison table with links to state pages (build links as coming-soon or anchor to sections until state pages are live)\n     - HowTo enrollment steps with schema\n     - FAQ section with FAQPage schema (minimum 5 questions)\n     - Course schema markup with all key_attributes from Entity Map\n     - Strong CTA to enrollment/application\n   - Upon publication, submit to Google Search Console and request indexing. Set up 301 redirect from any AEMT page sections that reference EMT-B to point contextual internal links to this new page.\n\n**Phase 2: High-Value State Pages (Week 2-3)**\n\n2. **`/online-emt-course/idaho` — Idaho State Page**\n   - Build immediately after the pillar. Idaho is the home market with the strongest existing topical authority via IMA. This page consolidates ranking signals currently fragmented across `/about-us/` and `/aemt-course-online/` for Idaho EMT keywords (260/mo × 3 keyword variants = 780/mo expansion opportunity). Include LocalBusiness schema with geo-coordinates.\n\n3. **`/online-emt-course/california` — California State Page**\n   - Highest-volume state keyword (320/mo). California's regulatory complexity (EMSA, county protocols) demands dedicated content that no pillar page section can adequately cover. Build with CA-specific certification pathway, Northern CA skills testing locations, and CA-specific testimonials.\n\n**Phase 3: Cost Page (Week 3-4)**\n\n4. **`/online-emt-course/cost` — EMT Course Cost & Tuition Guide**\n   - This is the decision-gate page that converts consideration-stage visitors into applicants. It targets 4,800/mo in combined cost-related keywords and bridges to the existing `/payment-plan-options/` page. Build the comparison table for AI Overview targeting. This page also supports all state pages via internal linking (\"See full tuition details →\").\n\n**Phase 4: Remaining State Pages (Week 4-6)**\n\n5. **`/online-emt-course/utah`** — 50/mo, second-highest state volume\n6. **`/online-emt-course/oregon`** — 40/mo, Pacific Northwest coverage\n7. **`/online-emt-course/arizona`** — 30/mo, Southwest market anchor\n8. **`/online-emt-course/washington`** — 10/mo, completes PNW triangle\n9. **`/online-emt-course/montana`** — 10/mo, rural market differentiation angle\n\nFor pages 5-9, use a consistent template built during the Idaho/California phase. Each state page should take no more than 2-3 hours to produce once the template exists, with state-specific customization for: certifying body, prerequisites, skills testing locations, and relevant testimonials.\n\n**Phase 5: Internal Linking & Schema Consolidation (Week 6-7)**\n\n10. **Retroactive internal linking pass:**\n    - Link from AEMT page to pillar page (disambiguate EMT-B vs. AEMT)\n    - Link from existing `/payment-plan-options/` to cost page\n    - Link from `/about-us/` to Idaho state page (depollute about-us of commercial Idaho EMT signals)\n    - Add pillar page to site navigation (primary nav or prominent sub-nav)\n    - Implement BreadcrumbList schema across all cluster pages: Home → Online EMT Course → [State]\n    - Verify Course schema renders correctly in Google Rich Results Test for all 9 pages\n\n**Ongoing: Content Enhancement (Week 8+)**\n\n11. **Add video walkthrough** to pillar page once enrollment data confirms traffic is converting\n12. **Collect and distribute state-attributed testimonials** to each state page as they become available\n13. **Monitor PAA boxes** for \"online emt course\" SERP — update FAQ section monthly to match emerging questions\n14. **Track position movement** for \"emt course online\" (currently pos 74) — this is the primary KPI for the cluster. Target: top 20 within 60 days of pillar page indexing, top 10 within 120 days with link building support.",
+    "recommended_pages": {
+      "pages": [
+        {
+          "volume": 9900,
+          "priority": 1,
+          "url_slug": "/online-emt-course",
+          "rationale": "This is the pillar page for the entire cluster and the single largest revenue gap on the site. It answers the core consideration-stage question: 'Which online EMT course should I choose and how does it work?' No page currently exists. The 9,900/mo keyword ranks at position 74 on the AEMT page — an intent mismatch that suppresses both clusters. This page must cover: program overview, self-paced format explanation, skills testing model, accreditation/AHA alignment, state coverage map with links to each state page, tuition overview with link to cost page, enrollment CTA. Secondary keywords: 'emt course online' (9,900/mo), 'emt-b online course' (480/mo). Expected to also capture 'emt training online' traffic.",
+          "buyer_stage": "consideration",
+          "schema_type": "Course",
+          "content_type": "service_page",
+          "target_entity": "Online EMT Course",
+          "primary_keyword": "online emt course"
+        },
+        {
+          "volume": 320,
+          "priority": 1,
+          "url_slug": "/online-emt-course/california",
+          "rationale": "Highest-volume state keyword in the cluster (320/mo). Answers the decision-stage question: 'Does this online EMT course meet California EMSA requirements and where do I complete skills testing in CA?' California has unique certification requirements (CA EMSA approval, county-level protocols) that demand dedicated content. No page exists. The page must cover: CA-specific certification pathway, EMSA alignment, Northern CA skills testing locations, CA prerequisites, state-specific testimonials if available, and enrollment CTA. This is the highest-priority state page because California volume alone exceeds all other states combined.",
+          "buyer_stage": "decision",
+          "schema_type": "Course",
+          "content_type": "location_page",
+          "target_entity": "Online EMT Course — California",
+          "primary_keyword": "online emt course california"
+        },
+        {
+          "volume": 50,
+          "priority": 2,
+          "url_slug": "/online-emt-course/utah",
+          "rationale": "Answers: 'Can I take this online EMT course and get certified in Utah?' Utah Bureau of EMS has specific training program approval requirements. No page exists. Must cover: UT certification pathway, skills testing locations in Utah, state prerequisites, enrollment CTA. Volume is modest (50/mo) but the page serves as a geo-trust signal for the entire cluster and supports the pillar page's state coverage claims.",
+          "buyer_stage": "decision",
+          "schema_type": "Course",
+          "content_type": "location_page",
+          "target_entity": "Online EMT Course — Utah",
+          "primary_keyword": "online emt course utah"
+        },
+        {
+          "volume": 40,
+          "priority": 2,
+          "url_slug": "/online-emt-course/oregon",
+          "rationale": "Answers: 'Is this online EMT course accepted by Oregon Health Authority?' Oregon has its own EMS certification framework that differs from neighboring states. No page exists. Must cover: OR certification pathway, OHA alignment, Portland-area and regional skills testing options, state-specific enrollment CTA.",
+          "buyer_stage": "decision",
+          "schema_type": "Course",
+          "content_type": "location_page",
+          "target_entity": "Online EMT Course — Oregon",
+          "primary_keyword": "online emt course oregon"
+        },
+        {
+          "volume": 30,
+          "priority": 2,
+          "url_slug": "/online-emt-course/arizona",
+          "rationale": "Answers: 'Can I get EMT certified in Arizona through an online course?' Arizona BEMS has distinct program approval requirements. No page exists. Must cover: AZ certification pathway, skills testing locations in AZ, AZ-specific prerequisites, enrollment CTA.",
+          "buyer_stage": "decision",
+          "schema_type": "Course",
+          "content_type": "location_page",
+          "target_entity": "Online EMT Course — Arizona",
+          "primary_keyword": "online emt course arizona"
+        },
+        {
+          "volume": 20,
+          "priority": 1,
+          "url_slug": "/online-emt-course/idaho",
+          "rationale": "Despite lower search volume (20/mo), this page is Priority 1 because: (a) Idaho is SMA's home market via Idaho Medical Academy, giving maximum topical authority and conversion potential; (b) market intelligence shows 'emt certification idaho' (260/mo, pos 26), 'idaho emt courses' (260/mo, pos 74), and 'idaho emt training' (260/mo, pos 77) are all expansion opportunities that this page can consolidate; (c) the about-us page currently ranks for Idaho EMT terms, causing intent mismatch — this page absorbs that signal. Must cover: Idaho EMS Bureau certification pathway, relationship to IMA, Boise-area skills testing, local employer partnerships, LocalBusiness schema with geo-coordinates.",
+          "buyer_stage": "decision",
+          "schema_type": "Course",
+          "content_type": "location_page",
+          "target_entity": "Online EMT Course — Idaho",
+          "primary_keyword": "online emt course idaho"
+        },
+        {
+          "volume": 10,
+          "priority": 2,
+          "url_slug": "/online-emt-course/washington",
+          "rationale": "Answers: 'Is this online EMT course approved by Washington State DOH?' Washington has specific EMS certification requirements through the Department of Health. No page exists. Low volume (10/mo) but Washington is a core service area and the page anchors geographic authority for the Pacific Northwest cluster positioning.",
+          "buyer_stage": "decision",
+          "schema_type": "Course",
+          "content_type": "location_page",
+          "target_entity": "Online EMT Course — Washington",
+          "primary_keyword": "online emt course washington"
+        },
+        {
+          "volume": 10,
+          "priority": 2,
+          "url_slug": "/online-emt-course/montana",
+          "rationale": "Answers: 'Can I complete EMT certification in Montana through an online program?' Montana DPHHS has its own EMS training requirements. No page exists. Volume is low (10/mo) but Montana is an underserved rural market where online training has a strong value proposition — the content angle of 'no need to drive hours to a classroom' is compelling for conversion.",
+          "buyer_stage": "decision",
+          "schema_type": "Course",
+          "content_type": "location_page",
+          "target_entity": "Online EMT Course — Montana",
+          "primary_keyword": "online emt course montana"
+        },
+        {
+          "volume": 2400,
+          "priority": 1,
+          "url_slug": "/online-emt-course/cost",
+          "rationale": "Answers the critical consideration-stage question: 'How much does an online EMT course cost and can I afford it?' Market intelligence identifies 'emt training cost' (2,400/mo, $4.42 CPC) and 'emt course cost' (2,400/mo, $4.42 CPC) as a combined 4,800/mo opportunity with no current page. This is a decision-gate query — price is the #1 barrier for EMT students. The page must cover: transparent tuition breakdown, comparison to traditional in-person program costs, payment plan details (linking to existing /payment-plan-options/), scholarship and financial assistance programs, ROI framing (EMT salary data vs. course investment). While the keyword is not in this cluster's keyword list, it is the most commercially critical supporting page for the pillar and directly referenced in market intelligence as a priority build.",
+          "buyer_stage": "consideration",
+          "schema_type": "Offer",
+          "content_type": "guide",
+          "target_entity": "EMT Course Tuition & Payment Plans",
+          "primary_keyword": "emt course cost"
+        }
+      ]
+    },
+    "buyer_stages": {
+      "stages": [
+        {
+          "notes": "No awareness-stage keywords exist in this cluster specifically, but the market intelligence shows 'what is emt certification' (720/mo, pos 63) and 'should i be an emt' (70/mo, pos 9) as adjacent awareness queries. These are better served by a separate informational cluster. Within this cluster, awareness intent is partially satisfied by the pillar page's introductory content.",
+          "stage": "awareness",
+          "has_page": false,
+          "keywords": [],
+          "gap_severity": "low",
+          "buyer_questions": [
+            "What does an EMT do?",
+            "Can I become an EMT with an online course?",
+            "Is online EMT training legitimate and accepted?",
+            "How long does it take to get EMT certified?",
+            "What is the difference between EMT-Basic and AEMT?"
+          ]
+        },
+        {
+          "notes": "The 9,900/mo 'online emt course' keyword is the core consideration query — the searcher knows they want online EMT training and is evaluating providers. No page exists. This is the highest-severity gap in the entire cluster.",
+          "stage": "consideration",
+          "has_page": false,
+          "keywords": [
+            "online emt course"
+          ],
+          "gap_severity": "high",
+          "buyer_questions": [
+            "Which online EMT course is best for my state?",
+            "How does self-paced online EMT training work?",
+            "Where do I complete skills testing if I take an online course?",
+            "Is the online EMT course accredited / will my state accept it?",
+            "How much does an online EMT course cost?",
+            "Are payment plans or scholarships available?",
+            "How long do I have to complete the online portion?"
+          ]
+        },
+        {
+          "notes": "All seven state-specific keywords are decision-stage — the searcher has chosen online EMT training and is narrowing by geography. Zero pages exist for any state. California alone is 320/mo. These are direct enrollment conversion pages.",
+          "stage": "decision",
+          "has_page": false,
+          "keywords": [
+            "online emt course california",
+            "online emt course utah",
+            "online emt course oregon",
+            "online emt course arizona",
+            "online emt course idaho",
+            "online emt course washington",
+            "online emt course montana"
+          ],
+          "gap_severity": "high",
+          "buyer_questions": [
+            "Does SMA's online EMT course work in my state (CA/UT/OR/AZ/ID/WA/MT)?",
+            "What are the specific certification requirements in my state?",
+            "Where are the in-person skills testing locations near me?",
+            "How do I enroll in the online EMT course for my state?",
+            "What do former students in my state say about this program?",
+            "When is the next available cohort or start date?"
+          ]
+        },
+        {
+          "notes": "Retention queries (CE, recertification, AEMT upgrade) are out of scope for this cluster but are flagged in market intelligence as a separate content gap. The AEMT and CE clusters should handle these. Within this cluster, a brief 'next steps after certification' section on the pillar page satisfies the minimal retention need.",
+          "stage": "retention",
+          "has_page": false,
+          "keywords": [],
+          "gap_severity": "low",
+          "buyer_questions": [
+            "How do I prepare for the NREMT exam after finishing the course?",
+            "What continuing education do I need to maintain my EMT certification?",
+            "Can I upgrade from EMT-B to AEMT through SMA?"
+          ]
+        }
+      ]
+    },
+    "format_gaps": {
+      "gaps": [
+        {
+          "format": "faq_schema",
+          "priority": "high",
+          "rationale": "The pillar page (/online-emt-course/) must include FAQPage schema targeting high-frequency questions: 'Can you take an EMT course online?', 'How long does an online EMT course take?', 'Is an online EMT course accepted by NREMT?', 'What states accept online EMT training?'. These are PAA (People Also Ask) trigger questions that appear for 'online emt course' SERPs. FAQ schema increases SERP real estate and is the primary structural mechanism for capturing AI Overview citations on definitional queries. Competitors in this space universally deploy FAQ sections; SMA has none."
+        },
+        {
+          "format": "state_comparison_table",
+          "priority": "high",
+          "rationale": "The pillar page needs a structured HTML table comparing certification requirements across all seven states (CA, UT, OR, AZ, ID, WA, MT) — columns for state, certifying body, minimum age, prerequisites, skills testing availability, and link to state page. This format is a featured snippet magnet for comparative queries like 'emt certification requirements by state' and provides a natural internal linking hub to all state pages. No competitor in the online EMT space currently offers a clean multi-state comparison table, creating a first-mover structural advantage."
+        },
+        {
+          "format": "video_walkthrough",
+          "priority": "medium",
+          "rationale": "An embedded video walkthrough of the online learning platform (LMS tour, sample lesson, skills testing day experience) addresses the trust gap inherent in online medical training. Video reduces bounce rate on the pillar page, increases time-on-page (a behavioral signal), and can be repurposed for YouTube SEO targeting 'online emt course review' and 'how online emt training works'. Competitors like Unitek EMT and NREMT Prep Academy use video testimonials and platform walkthroughs extensively."
+        },
+        {
+          "format": "pricing_calculator_or_comparison",
+          "priority": "medium",
+          "rationale": "The cost page (/online-emt-course/cost/) should include a visual cost comparison: SMA online course vs. average community college EMT program vs. private in-person academy. This can be a simple styled table or infographic. Pricing transparency is the #1 conversion driver in education verticals, and a structured comparison positions SMA's value proposition without requiring the user to research alternatives. Competitors bury pricing; SMA can differentiate by leading with it."
+        },
+        {
+          "format": "testimonial_cards_with_state_attribution",
+          "priority": "medium",
+          "rationale": "Each state landing page should include 2-3 student testimonials attributed to that specific state (e.g., 'Sarah M., Certified EMT, Sacramento, CA'). This serves dual purposes: social proof for decision-stage visitors and geo-relevance signals for search engines. Review/testimonial structured data (Review schema within the Course schema) can also trigger rich results. Currently the site has testimonials only on /about-us/testimonials/ with no state-level distribution."
+        },
+        {
+          "format": "step_by_step_enrollment_process",
+          "priority": "high",
+          "rationale": "A HowTo schema-marked step-by-step section ('How to Enroll in the Online EMT Course: Step 1 → Step 5') should appear on the pillar page and each state page (customized per state). This addresses the action-gap between consideration and enrollment, provides a featured snippet opportunity for 'how to enroll in online emt course', and reduces cognitive friction. The structural pattern (ordered list with clear actions) is the highest-performing format for conversion on education service pages."
+        }
+      ]
+    },
+    "ai_optimization_notes": "```json\n{\n  \"ai_targets\": [\n    {\n      \"query\": \"can you take an emt course online\",\n      \"target_type\": \"ai_overview\",\n      \"structural_pattern\": \"direct_answer\",\n      \"applies_to_page\": \"/online-emt-course\",\n      \"condition\": \"This is the gateway qualifying question for the entire cluster. AI Overviews for this query currently pull from generic health education sites with weak authority. The query demands a direct yes/no answer followed by a brief explanation of how the hybrid model works (online didactic + in-person skills). The direct_answer pattern is justified because the intent is binary confirmation with elaboration.\",\n      \"rationale\": \"SMA's pillar page will be the only page on the site architecturally designed to answer this question with first-hand provider authority. Opening the page with a clear 'Yes — here's how it works' paragraph with Course schema gives AI systems a clean extractable answer with entity attribution. The page's multi-state coverage table reinforces breadth-of-service authority that generic competitors lack.\"\n    },\n    {\n      \"query\": \"online emt course\",\n      \"target_type\": \"featured_snippet\",\n      \"structural_pattern\": \"list\",\n      \"applies_to_page\": \"/online-emt-course\",\n      \"condition\": \"The 9,900/mo keyword triggers a featured snippet opportunity because Google currently serves a mix of course listings and directory results — no single authoritative page owns the definition of what an online EMT course includes. An ordered list format ('What's Included in an Online EMT Course: 1. Self-paced didactic modules, 2. Virtual lab simulations, 3. In-person skills testing, 4. NREMT exam preparation, 5. State certification guidance') matches the implicit 'what do I get' intent behind this keyword.\",\n      \"rationale\": \"SMA can own this snippet by being the first provider to structure the answer as a clean numbered list within an H2 section. The list format is optimal because the query has a 'components' sub-intent — the searcher wants to understand what the course contains before evaluating providers. This list also feeds AI Overview extraction for related queries.\"\n    },\n    {\n      \"query\": \"online emt course california\",\n      \"target_type\": \"featured_snippet\",\n      \"structural_pattern\": \"prose_elaboration\",\n      \"applies_to_page\": \"/online-emt-course/california\",\n      \"condition\": \"State-specific EMT course queries trigger local intent enrichment in Google's systems. The current SERP for this query lacks a clear authoritative answer about whether online EMT courses are accepted in California and what the CA EMSA requirements are. A 40-60 word prose paragraph directly below the H1 — structured as 'Summit Medical Academy's Online EMT Course is approved for students seeking California EMT-Basic certification through the CA EMSA. The course includes [X hours] of self-paced online didactic training and in-person skills testing at [location(s)] in Northern California.' — matches the specificity this query demands.\",\n      \"rationale\": \"California is the highest-volume state keyword (320/mo) and the query carries implicit regulatory concern ('will this be accepted in my state?'). SMA's CA-specific page with Course schema including educationalCredentialAwarded and provider details gives AI systems a verifiable, attributable answer that generic course aggregator sites cannot provide.\"\n    },\n    {\n      \"query\": \"how long does an online emt course take\",\n      \"target_type\": \"paa\",\n      \"structural_pattern\": \"direct_answer\",\n      \"applies_to_page\": \"/online-emt-course\",\n      \"condition\": \"This is a high-frequency People Also Ask question that appears in SERPs for 'online emt course' and all state variants. The query demands a specific time range (e.g., '4-12 weeks depending on your pace') rather than a vague answer. The direct_answer pattern is appropriate because the intent is factual with a single data point.\",\n      \"rationale\": \"SMA's self-paced model is a differentiator here — the answer can highlight flexibility ('Complete in as few as 4 weeks or take up to 16 weeks') which simultaneously answers the question and positions the brand. Embedding this in an FAQ section with FAQPage schema on the pillar page gives it the highest probability of PAA capture. No competitor currently owns this PAA box with a provider-attributed answer.\"\n    },\n    {\n      \"query\": \"how much does an online emt course cost\",\n      \"target_type\": \"ai_overview\",\n      \"structural_pattern\": \"table\",\n      \"applies_to_page\": \"/online-emt-course/cost\",\n      \"condition\": \"Cost queries for EMT training are high-CPC ($4.42-$6.09) and AI Overviews increasingly pull pricing data from structured tables. The query intent is comparative — the searcher wants a number and context for whether it's reasonable. A table format (columns: Program Type, Average Cost, Includes) comparing 'SMA Online EMT Course' vs. 'Community College EMT Program' vs. 'Private In-Person Academy' satisfies the comparative sub-intent and provides AI systems with structured data to extract.\",\n      \"rationale\": \"SMA's competitive pricing and payment plan availability make cost transparency a conversion advantage, not a liability. Being the source AI systems cite for EMT course cost data creates persistent brand visibility across all cost-related queries. The table format is specifically chosen because AI Overviews prefer tabular data for comparison queries — prose answers for cost questions are systematically outperformed by structured formats.\"\n    }\n  ]\n}\n```",
+    "generated_at": "2026-04-01T17:51:28.23+00:00",
+    "model_used": "claude-opus-4-6",
+    "entity_map": {
+      "entity": {
+        "name": "Online EMT Course",
+        "type": "Course",
+        "schema_notes": "The pillar page should use Course schema (schema.org/Course) with hasCourseInstance pointing to individual CourseInstance nodes for each state variant. Each state landing page should carry its own Course schema with provider (Organization), educationalCredentialAwarded, coursePrerequisites, availableLanguage, and offers (Offer with price, priceCurrency, availability). Include LocationFeatureSpecification or spatial coverage via serviceArea using AdministrativeArea for each state. Add AggregateRating when reviews are collected. The pillar page should also include BreadcrumbList and FAQPage schema for embedded FAQ sections. Each state page should include hasCourseInstance with courseMode set to 'online' and courseWorkload reflecting self-paced hours. Link all state pages back to the pillar via isPartOf.",
+        "key_attributes": [
+          "provider: Summit Medical Academy (SMA), sister academy to Idaho Medical Academy (IMA)",
+          "delivery_mode: Online self-paced didactic with in-person skills testing",
+          "credential_issued: EMT-Basic (EMT-B) certification, eligibility for NREMT examination",
+          "accrediting_body: American Heart Association (AHA) Aligned Training Site; state EMS office approvals vary by state",
+          "duration: Self-paced didactic component; skills testing scheduled at student convenience",
+          "prerequisites: Must be 18 years old (varies by state), high school diploma or GED, current CPR/BLS certification",
+          "serviceArea: Washington, Oregon, Northern California, Utah, Arizona, Montana, Idaho",
+          "payment_options: Payment plans available, scholarship and financial assistance programs",
+          "occupationalCategory: Emergency Medical Technician (EMT-Basic)"
+        ],
+        "related_entities": [
+          {
+            "name": "Online EMT Course — California",
+            "type": "Course",
+            "relationship": "State-specific variant of the primary Online EMT Course, with California EMSA certification requirements and skills testing locations",
+            "warrants_own_page": true
+          },
+          {
+            "name": "Online EMT Course — Utah",
+            "type": "Course",
+            "relationship": "State-specific variant with Utah Bureau of EMS certification pathway and local skills testing",
+            "warrants_own_page": true
+          },
+          {
+            "name": "Online EMT Course — Oregon",
+            "type": "Course",
+            "relationship": "State-specific variant with Oregon Health Authority EMS certification pathway",
+            "warrants_own_page": true
+          },
+          {
+            "name": "Online EMT Course — Arizona",
+            "type": "Course",
+            "relationship": "State-specific variant with Arizona Department of Health Services Bureau of EMS certification pathway",
+            "warrants_own_page": true
+          },
+          {
+            "name": "Online EMT Course — Idaho",
+            "type": "Course",
+            "relationship": "State-specific variant aligned with Idaho Medical Academy (IMA); Idaho EMS Bureau certification pathway",
+            "warrants_own_page": true
+          },
+          {
+            "name": "Online EMT Course — Washington",
+            "type": "Course",
+            "relationship": "State-specific variant with Washington State DOH EMS certification pathway",
+            "warrants_own_page": true
+          },
+          {
+            "name": "Online EMT Course — Montana",
+            "type": "Course",
+            "relationship": "State-specific variant with Montana DPHHS EMS certification pathway",
+            "warrants_own_page": true
+          },
+          {
+            "name": "NREMT EMT-Basic Certification",
+            "type": "EducationalOccupationalCredential",
+            "relationship": "The national credential that graduates of this course become eligible to sit for",
+            "warrants_own_page": false
+          },
+          {
+            "name": "Summit Medical Academy",
+            "type": "Organization",
+            "relationship": "Provider/instructor organization for the Online EMT Course",
+            "warrants_own_page": false
+          },
+          {
+            "name": "EMT Course Tuition & Payment Plans",
+            "type": "Offer",
+            "relationship": "Pricing, payment plans, and financial assistance options for enrollment in the Online EMT Course",
+            "warrants_own_page": true
+          }
+        ]
+      }
+    },
+    "ai_optimization_targets": [
+      {
+        "query": "can you take an emt course online",
+        "condition": "This is the gateway qualifying question for the entire cluster. AI Overviews for this query currently pull from generic health education sites with weak authority. The query demands a direct yes/no answer followed by a brief explanation of how the hybrid model works (online didactic + in-person skills). The direct_answer pattern is justified because the intent is binary confirmation with elaboration.",
+        "rationale": "SMA's pillar page will be the only page on the site architecturally designed to answer this question with first-hand provider authority. Opening the page with a clear 'Yes — here's how it works' paragraph with Course schema gives AI systems a clean extractable answer with entity attribution. The page's multi-state coverage table reinforces breadth-of-service authority that generic competitors lack.",
+        "target_type": "ai_overview",
+        "applies_to_page": "/online-emt-course",
+        "structural_pattern": "direct_answer"
+      },
+      {
+        "query": "online emt course",
+        "condition": "The 9,900/mo keyword triggers a featured snippet opportunity because Google currently serves a mix of course listings and directory results — no single authoritative page owns the definition of what an online EMT course includes. An ordered list format ('What's Included in an Online EMT Course: 1. Self-paced didactic modules, 2. Virtual lab simulations, 3. In-person skills testing, 4. NREMT exam preparation, 5. State certification guidance') matches the implicit 'what do I get' intent behind this keyword.",
+        "rationale": "SMA can own this snippet by being the first provider to structure the answer as a clean numbered list within an H2 section. The list format is optimal because the query has a 'components' sub-intent — the searcher wants to understand what the course contains before evaluating providers. This list also feeds AI Overview extraction for related queries.",
+        "target_type": "featured_snippet",
+        "applies_to_page": "/online-emt-course",
+        "structural_pattern": "list"
+      },
+      {
+        "query": "online emt course california",
+        "condition": "State-specific EMT course queries trigger local intent enrichment in Google's systems. The current SERP for this query lacks a clear authoritative answer about whether online EMT courses are accepted in California and what the CA EMSA requirements are. A 40-60 word prose paragraph directly below the H1 — structured as 'Summit Medical Academy's Online EMT Course is approved for students seeking California EMT-Basic certification through the CA EMSA. The course includes [X hours] of self-paced online didactic training and in-person skills testing at [location(s)] in Northern California.' — matches the specificity this query demands.",
+        "rationale": "California is the highest-volume state keyword (320/mo) and the query carries implicit regulatory concern ('will this be accepted in my state?'). SMA's CA-specific page with Course schema including educationalCredentialAwarded and provider details gives AI systems a verifiable, attributable answer that generic course aggregator sites cannot provide.",
+        "target_type": "featured_snippet",
+        "applies_to_page": "/online-emt-course/california",
+        "structural_pattern": "prose_elaboration"
+      },
+      {
+        "query": "how long does an online emt course take",
+        "condition": "This is a high-frequency People Also Ask question that appears in SERPs for 'online emt course' and all state variants. The query demands a specific time range (e.g., '4-12 weeks depending on your pace') rather than a vague answer. The direct_answer pattern is appropriate because the intent is factual with a single data point.",
+        "rationale": "SMA's self-paced model is a differentiator here — the answer can highlight flexibility ('Complete in as few as 4 weeks or take up to 16 weeks') which simultaneously answers the question and positions the brand. Embedding this in an FAQ section with FAQPage schema on the pillar page gives it the highest probability of PAA capture. No competitor currently owns this PAA box with a provider-attributed answer.",
+        "target_type": "paa",
+        "applies_to_page": "/online-emt-course",
+        "structural_pattern": "direct_answer"
+      },
+      {
+        "query": "how much does an online emt course cost",
+        "condition": "Cost queries for EMT training are high-CPC ($4.42-$6.09) and AI Overviews increasingly pull pricing data from structured tables. The query intent is comparative — the searcher wants a number and context for whether it's reasonable. A table format (columns: Program Type, Average Cost, Includes) comparing 'SMA Online EMT Course' vs. 'Community College EMT Program' vs. 'Private In-Person Academy' satisfies the comparative sub-intent and provides AI systems with structured data to extract.",
+        "rationale": "SMA's competitive pricing and payment plan availability make cost transparency a conversion advantage, not a liability. Being the source AI systems cite for EMT course cost data creates persistent brand visibility across all cost-related queries. The table format is specifically chosen because AI Overviews prefer tabular data for comparison queries — prose answers for cost questions are systematically outperformed by structured formats.",
+        "target_type": "ai_overview",
+        "applies_to_page": "/online-emt-course/cost",
+        "structural_pattern": "table"
+      }
+    ],
+    "status": "deprecated",
+    "deprecated_at": "2026-04-09T20:46:32.93+00:00"
+  }
+]

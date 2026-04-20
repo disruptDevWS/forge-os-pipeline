@@ -61,11 +61,34 @@ Hybrid handles ONLY `canonical_key` and `canonical_topic` clustering. Other fiel
 - [x] Report: `scratch/shadow-reports/phase-2.2-size-gate-2026-04-20.md`
 - [x] No client promoted to hybrid default (per specification)
 
-### Phase 2.3: First Production Hybrid Promotion (next session)
-- [ ] Client TBD based on validation data (SMA is candidate — 100% lock stability, hybrid-origin)
-- [ ] Must meet ALL promotion criteria (see below)
-- [ ] Downstream consumer validation (Cluster Strategy, Michael, Pam)
-- [ ] Auto-assign rate >20% target (SMA currently 0% due to full prior-lock; IMA at 8.4%)
+### Phase 2.3a: Downstream Consumer Readiness Review (complete — 2026-04-20)
+- [x] 6 known consumers reviewed: rebuildClustersAndRollups, generateClusterStrategy, syncMichael, generate-brief (Pam), ClustersPage, PerformancePage
+- [x] 8 additional consumers discovered: StrategyPage, ExecutionPage, AuditSettings, AuditSidebar, ResearchPage, OverviewPage, track-rankings, pipeline-generate
+- [x] Classification: 1 READY WITH MONITORING (Pam keyword-join), 5 READY, 0 BLOCKS PROMOTION
+- [x] Architecture persistence verified via 3 scenario traces
+- [x] Report: `docs/phase-2.3a-downstream-readiness-2026-04-20.md`
+
+### Phase 2.3b: First Production Hybrid Promotion — SMA (complete — 2026-04-20)
+- [x] SMA promoted from `canonicalize_mode='legacy'` to `canonicalize_mode='hybrid'`
+- [x] `canonicalize_mode` column added to `audits` table (was CLI flag only)
+- [x] Full pipeline run completed (Phases 3c→6d + client brief)
+- [x] env propagation fix applied to `pipeline-generate.ts` (blocking issue)
+- [x] Smoke test checklist executed — all items pass except 1 observation
+- [x] **OBSERVATION: 21 of 127 keywords (16.5%) have different canonical_key post-promotion despite prior-lock**
+- [x] Zero operational impact on SMA (0 active clusters, no committed content affected)
+- [x] Performance data intact, no data loss
+- [x] Outcome: **SUCCESS WITH OBSERVATIONS**
+- [x] Report: `docs/phase-2.3b-sma-promotion-2026-04-20.md`
+
+### Phase 2.3c: Fix canonical_key drift (next session)
+- [ ] Debug why hybrid pre-cluster's `existingTopics` shows 14 topics when prior snapshot has 12 distinct keys
+- [ ] Fix topicMap construction to be purely snapshot-derived when all keywords are hybrid-origin
+- [ ] Re-run SMA in hybrid mode to validate fix (expect 0 drift on locked audit)
+- [ ] Then proceed to IMA promotion
+
+### Phase 2.4: IMA Promotion (blocked on 2.3c)
+- [ ] IMA has active clusters and committed content — requires deterministic prior-lock
+- [ ] Must validate canonical_key drift fix first
 
 ### Phase 3: Scout Deduplication (future)
 - [ ] Reuse embedding infrastructure for Scout keyword deduplication

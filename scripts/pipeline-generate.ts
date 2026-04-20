@@ -5838,6 +5838,11 @@ async function main() {
     console.error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in .env');
     process.exit(1);
   }
+  // Propagate to process.env for modules that read it directly (embeddings service, callClaude)
+  process.env.SUPABASE_URL = process.env.SUPABASE_URL || supabaseUrl;
+  process.env.SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || serviceRoleKey;
+  process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || env.OPENAI_API_KEY || '';
+
   const sb = createClient(supabaseUrl, serviceRoleKey);
 
   // Scout skips audit resolution — uses prospects table instead

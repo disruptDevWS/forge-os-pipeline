@@ -1,0 +1,240 @@
+=== Post-Audit Pipeline: summitmedicalacademy.com (2026-04-20) [mode=full] ===
+Pipeline status → audit (audit c07eb21d-3120-4242-8754-361a429a6f2c)
+  Resuming from Phase 3c (skipping earlier phases)
+  [SKIP] Phase 1: Dwight
+  [SKIP] Phase 1a: Verify Dwight
+  [SKIP] Phase 1c: GSC Data Fetch
+  [SKIP] Phase 1b: Strategy Brief
+  [SKIP] Phase 2: Keyword Research
+  [SKIP] Phase 3: Jim
+  [SKIP] Phase 3b: Sync Jim
+
+--- Phase 3c: Canonicalize Topics (Claude Sonnet) [canonicalize-mode=hybrid] ---
+  Audit: c07eb21d-3120-4242-8754-361a429a6f2c (running)
+  [canonicalize] Mode: hybrid
+  [canonicalize] 127 keywords to classify
+  [canonicalize] Snapshotted 127 prior hybrid assignments
+  [canonicalize] Batch 1: 12 groups identified
+  [canonicalize] Flagging 7 near-me keywords
+  [canonicalize] Updated 127/127 keywords across 12 topics
+  [hybrid] Processing 127 keywords
+  [hybrid] 14 existing canonical topics
+  [hybrid/pre-cluster] 127 variants → 121 unique hashes
+  [hybrid/pre-cluster] Computed centroids for 14/14 topics
+  [hybrid/pre-cluster] Decisions: 0 auto-assigned, 0 size-gated, 0 ambiguous, 0 new-topic, 121 prior-locked
+  [hybrid/persist] Updated 127/127 keywords → primary columns (0 failures)
+  [canonicalize] Hybrid path completed: 0 auto-assigned, 0 arbitrated, 121 prior-locked
+
+--- Phase 3d: Rebuild Clusters (post-canonicalize) ---
+
+Sync Bridge — summitmedicalacademy.com
+==================================================
+User: matt@forgegrowth.ai (6cd46a54-4449-44c4-a632-bcf5ee12c106)
+Audit ID: c07eb21d-3120-4242-8754-361a429a6f2c
+
+--- REBUILD CLUSTERS ---
+  [rebuild] 127 keywords with canonical_key, 9 clusters, 7 near-miss
+  [rebuild] Inserted 9 clusters
+  [rebuild] Near-miss revenue: $439.2 / $2065.61 / $4803.76 per mo
+  [rebuild] TAR (pos 5): $209481.6 / $985218.15 / $2291205 per mo
+
+Cluster rebuild complete.
+Pipeline status → architecture (audit c07eb21d-3120-4242-8754-361a429a6f2c)
+
+--- Phase 4: Competitor SERP Analysis ---
+  Audit: c07eb21d-3120-4242-8754-361a429a6f2c (running)
+  Loading keywords from Supabase...
+  90 eligible keywords across 9 topics (processing top 9)
+    [1/9] EMT Basic Course: 30 competitors (5 SERP calls)
+    [2/9] CPR / AHA Training: 19 competitors (5 SERP calls)
+    [3/9] NREMT Test Prep: 20 competitors (4 SERP calls)
+    [4/9] EMT Continuing Education: 31 competitors (5 SERP calls)
+    [5/9] Advanced EMT (AEMT) Course: 23 competitors (5 SERP calls)
+    [6/9] EMT Career & Certification Info: 15 competitors (4 SERP calls)
+    [7/9] Pharmacy Technician Training: 4 competitors (1 SERP calls)
+    [8/9] Phlebotomy Training: 8 competitors (1 SERP calls)
+    [9/9] Medical Assistant Programs: 10 competitors (2 SERP calls)
+  Competitor analysis complete: 9 topics, 32 SERP API calls
+  Classifying 130 competitor domains (industry: medical_training, market: Washington, Oregon, California, Utah, Arizona, Montana)...
+    Classified chunk 1: 80 domains
+    Classified chunk 2: 50 domains
+  Classification complete: 130/130 domains updated
+    authority_site: 62, industry_competitor: 49, unrelated: 8, aggregator: 11
+
+--- Phase 5: Content Gap Analysis ---
+  Audit: c07eb21d-3120-4242-8754-361a429a6f2c (running)
+  Gathering competitive data from Supabase...
+  Context: 64 competitor entries, 4 dominance scores, 127 keywords, 9 clusters, 52 planned pages
+  Generating content gap analysis via Anthropic API...
+  Gap analysis: 8 authority gaps, 8 format gaps, 0 unaddressed, 8 recommendations
+  Written content_gap_analysis.md to audits/summitmedicalacademy.com/research/2026-04-20/
+  Gap analysis complete — snapshot v4, run 1539b099-bfe6-4580-a310-cfc953f51713
+--- QA: Gap ---
+  QA PASSED: Gap
+
+--- Phase 6: Michael Architecture ---
+  Audit: c07eb21d-3120-4242-8754-361a429a6f2c (running)
+  Gathering context from disk + Supabase...
+  research_summary.md: using 2026-03-18/ (date fallback from 2026-04-20)
+  research_summary.md: 20525 chars
+  ranked_keywords.json: using 2026-03-18/ (date fallback from 2026-04-20)
+  ranked_keywords.json: 65 keywords → top 200 for prompt
+  content_gap_analysis.md: 9841 chars
+  Warning: internal_all.csv not found in architecture dir — Dwight may not have run
+  Platform Observations from AUDIT_REPORT.md: 2054 chars
+  strategy_brief.md: using 2026-03-18/ (date fallback from 2026-04-20)
+  Strategy brief: loaded for Michael (13438 chars)
+  Client context loaded: 4 services, 8 out-of-scope items
+  Re-run mode: 47 committed pages, isRerun=true
+  Context loaded: 9 clusters, research=true, keywords=true, gap=true, crawl=false, platform=true, rerun=true
+  Generating architecture blueprint via Anthropic API (sonnet)...
+  Blueprint: 38924 chars
+  WARNING: Blueprint has 32.8% invalid url_slug rows (22 rejected / 45 valid) — retrying...
+  Retry blueprint: 38589 chars
+  ERROR: Blueprint still has 30.3% invalid url_slug rows after retry (23 rejected / 53 valid) — syncMichael will drop these rows
+  Written architecture_blueprint.md to audits/summitmedicalacademy.com/architecture/2026-04-20/
+--- QA: Michael ---
+  QA PASSED: Michael
+
+--- Phase 6.5: Coverage Validation ---
+  Audit: c07eb21d-3120-4242-8754-361a429a6f2c (failed)
+  Gap analysis: 9841 chars, Blueprint: 38589 chars
+  Running coverage validation via Anthropic API (sonnet)...
+  Coverage: 16 addressed, 0 partially addressed, 0 unaddressed (of 16 gaps)
+  Written coverage_validation.md to audits/summitmedicalacademy.com/research/2026-04-20/
+  Inserted 16 rows into audit_coverage_validation
+  Validator complete — 16/16 gaps addressed
+
+--- Phase 6b: Sync Michael → Supabase ---
+
+Sync Bridge — summitmedicalacademy.com
+==================================================
+User: matt@forgegrowth.ai (6cd46a54-4449-44c4-a632-bcf5ee12c106)
+Audit ID: c07eb21d-3120-4242-8754-361a429a6f2c
+
+--- MICHAEL ---
+  [michael] Parsing /home/forgegrowth/forge-os-pipeline/audits/summitmedicalacademy.com/architecture/2026-04-20/architecture_blueprint.md
+  [michael] Extracted 53 architecture pages from tables
+  [michael] Rejected 23 row(s) with invalid url_slug values — see agent_runs.metadata.parse_warnings
+  [michael]   reject: forbidden_punctuation → how-online-emt-training-works, emt-online-vs-in-person
+  [michael]   reject: forbidden_punctuation → emt-online-vs-in-person, how-online-emt-training-works, emt-b-online-course
+  [michael]   reject: forbidden_punctuation → online-emt-course/cost, all geo cluster pages with enrollment CTA
+  [michael]   reject: dash_placeholder → —
+  [michael]   reject: forbidden_punctuation → emt-training-idaho, how-to-become-an-emt-in-idaho, all state cluster pages
+  [michael] Re-run scenario: strategic_rerun
+  [michael] Inserted 53 architecture pages
+  [michael] Inserted blueprint (38KB)
+  [michael] Deprecated by recommendation: emt-course-boise (NOT deprecated — page is valid and required. Prior committed architecture marked it deprecated incorrectly. It is the Boise-specific in-person cluster page within Silo 2 and must be created.)
+  [michael] Deprecated by recommendation: emt-continuing-education (Retained as a cluster page within Silo 5 targeting the unmodified 'emt continuing education' head term. Prior architecture listed it as deprecated but it serves a distinct cluster role from the pillar (emt-continuing-education-online). Keep.)
+  [michael] Deprecated 2 page(s) by Michael recommendation
+  [michael] Strategic re-run: 33 preserved, 16 updated, 4 new, 10 deprecated (stale), 14 stale-but-committed
+  [michael] Backfilled canonical_key for 34 of 53 pages
+  [michael] Backfilled cluster (silo) for 83 of 127 keywords
+
+Pipeline status: architecture (unchanged — architecture does not advance)
+
+Sync complete.
+
+--- Phase 6c: Sync Dwight → Supabase ---
+
+Sync Bridge — summitmedicalacademy.com
+==================================================
+User: matt@forgegrowth.ai (6cd46a54-4449-44c4-a632-bcf5ee12c106)
+Audit ID: c07eb21d-3120-4242-8754-361a429a6f2c
+
+--- DWIGHT ---
+  [dwight] ERROR: [dwight] No internal_all.csv found in /home/forgegrowth/forge-os-pipeline/audits/summitmedicalacademy.com/auditor/2026-03-16 — cannot sync technical data.
+
+Sync complete.
+
+--- Phase 6d: Local Presence Diagnostic (GBP + Citations) ---
+
+=== Local Presence Diagnostic: summitmedicalacademy.com (2026-04-20) ===
+
+  Audit: c07eb21d-3120-4242-8754-361a429a6f2c (status: failed)
+  WARNING: No city available — GBP lookup will use state only.
+  Business: "Summit  Medical Academy", Location: Washington
+
+--- GBP Lookup ---
+  Fetching GBP listing for "Summit  Medical Academy" in , Washington...
+  GBP lookup cost: $0.0000
+  No GBP listing found
+  GBP not found — checking client_profiles for manual NAP...
+  Using client_profiles NAP as canonical.
+  GBP snapshot saved (listing_found: false)
+
+--- Citation Scan (SERP) ---
+  Scanning Apple Maps (maps.apple.com)...
+    Apple Maps: FOUND
+  Scanning Bing Places (bing.com)...
+    Bing Places: not found
+  Scanning Facebook (facebook.com)...
+    Facebook: FOUND (NAP consistent)
+  Scanning Yelp (yelp.com)...
+    Yelp: FOUND (NAP mismatch)
+  Scanning BBB (bbb.org)...
+    BBB: FOUND
+  Scanning Angi (angi.com)...
+    Angi: FOUND
+  Scanning Thumbtack (thumbtack.com)...
+    Thumbtack: FOUND
+  Scanning Foursquare (foursquare.com)...
+    Foursquare: not found
+  Scanning Yellow Pages (yellowpages.com)...
+    Yellow Pages: FOUND
+  Scanning Manta (manta.com)...
+    Manta: FOUND
+
+  Citations: 8/11 found, 1 NAP-consistent
+
+  Done. Local presence snapshot 2026-04-20 for summitmedicalacademy.com complete.
+
+
+--- Client Intelligence Brief ---
+
+=== Client Intelligence Brief: summitmedicalacademy.com ===
+
+--- Loading disk artifacts ---
+  AUDIT_REPORT.md: 32.5KB
+  research_summary.md: not found
+  architecture_blueprint.md: 37.7KB
+  strategy_brief.md: not found
+
+--- Loading Supabase data ---
+  rollup: found
+  clusters: 0
+  gbp: not found (checked)
+  citations: 20 (16 found)
+
+--- Generating narrative sections (Sonnet) ---
+  exec_summary: 2050 chars
+  technical: 1635 chars
+  revenue: 1533 chars
+  architecture: 1659 chars
+  local_presence: 1162 chars
+  next_steps: 1508 chars
+
+--- Building HTML brief ---
+
+  Output: audits/summitmedicalacademy.com/reports/client_brief.html (27.4KB)
+=== Client Brief Complete ===
+
+Pipeline status → complete (audit c07eb21d-3120-4242-8754-361a429a6f2c)
+
+=== Pipeline Complete [mode=full] ===
+  Phase 1:  Dwight   — DataForSEO OnPage crawl → AUDIT_REPORT.md [QA ✓]
+  Phase 1c: GSC      — Google Search Console data fetch (non-fatal)
+  Phase 2:  KWRes.   — Service × city × intent matrix → keyword_research_summary.md
+  Phase 3:  Jim      — DataForSEO ranked-keywords + competitors → research_summary.md [QA ✓]
+  Phase 3b: sync     — ranked_keywords.json → audit_keywords (preliminary clusters)
+  Phase 3c: canon.   — Claude Haiku semantic topic grouping → canonical_key/topic
+  Phase 3d: rebuild  — Re-aggregate clusters using canonical groupings
+  Phase 4:  Compet.  — SERP analysis → audit_topic_competitors/dominance
+  Phase 5:  Gap      — Competitive gap synthesis → content_gap_analysis.md [QA ✓]
+  Phase 6:  Michael  — All artifacts → architecture_blueprint.md [QA ✓]
+  Phase 6.5: Valid.  — Coverage validation (gap vs blueprint cross-check)
+  Phase 6b: sync     — architecture_blueprint.md → Supabase
+  Phase 6c: sync     — internal_all.csv + AUDIT_REPORT.md → Supabase
+  Phase 6d: local    — GBP lookup + citation scan (11 directories)
+
+Dashboard tabs: Research, Strategy, Content Factory, Technical Audit

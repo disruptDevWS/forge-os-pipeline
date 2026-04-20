@@ -4,6 +4,16 @@ Non-obvious choices that would look wrong without context. Check here before "fi
 
 ---
 
+**2026-04-20: SMA promoted to hybrid canonicalize — SUCCESS WITH OBSERVATIONS**
+
+SMA (`c07eb21d`) promoted from `canonicalize_mode='legacy'` to `'hybrid'`. First production hybrid client. Pipeline ran to completion. All committed content preserved, performance data intact, no data loss.
+
+Key observation: 21 of 127 keywords (16.5%) have different canonical_key values post-promotion despite all being `prior_assignment_locked`. Root cause: hybrid pre-cluster's `existingTopics` map shows 14 topics when the prior snapshot contains 12 distinct keys, suggesting the topicMap is partially built from legacy's fresh Sonnet output rather than purely from the snapshot. Zero operational impact on SMA (0 active clusters, no committed content affected). Must be fixed before promoting IMA (which has active clusters).
+
+Infrastructure changes: Added `canonicalize_mode TEXT DEFAULT 'legacy'` column to `audits` table (was CLI flag only). Fixed env propagation bug in `pipeline-generate.ts` (same as `run-canonicalize.ts` fix from shadow validation). Report: `docs/phase-2.3b-sma-promotion-2026-04-20.md`.
+
+---
+
 **2026-04-20: Size gate — clusters with <3 members ineligible for vector auto-assign**
 
 `MIN_CLUSTER_SIZE_FOR_AUTO_ASSIGN = 3` in `src/agents/canonicalize/hybrid/pre-cluster.ts`. Clusters with fewer than 3 members route to Sonnet arbitration instead of vector auto-assign, regardless of similarity score. Prior-locked variants bypass the gate entirely (lock evaluates first).
