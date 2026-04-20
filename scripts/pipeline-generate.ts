@@ -2442,6 +2442,24 @@ export async function runCanonicalize(sb: SupabaseClient, auditId: string, domai
   }
   console.log(`  [canonicalize] ${keywords.length} keywords to classify`);
 
+  // Snapshot prior hybrid assignments BEFORE legacy runs (legacy overwrites canonical_key).
+  // This preserves hybrid-origin values so the lock predicate locks the correct assignment.
+  let priorHybridSnapshot: Map<string, { canonicalKey: string; canonicalTopic: string }> | undefined;
+  if (canonicalizeMode !== 'legacy') {
+    const { data: priorRows } = await (sb as any)
+      .from('audit_keywords')
+      .select('id, canonical_key, canonical_topic, classification_method')
+      .eq('audit_id', auditId)
+      .not('classification_method', 'is', null);
+    if (priorRows && priorRows.length > 0) {
+      priorHybridSnapshot = new Map();
+      for (const r of priorRows as any[]) {
+        priorHybridSnapshot.set(r.id, { canonicalKey: r.canonical_key, canonicalTopic: r.canonical_topic });
+      }
+      console.log(`  [canonicalize] Snapshotted ${priorHybridSnapshot.size} prior hybrid assignments`);
+    }
+  }
+
   // Build batches — if > 300 keywords, chunk by topic groups
   const MAX_BATCH = 250;
   let batches: typeof keywords[];
@@ -2668,7 +2686,7 @@ Default to "Service" when the category is ambiguous for a local service business
       _setCallClaude(callClaude);
 
       const { runHybridCanonicalize } = await import('../src/agents/canonicalize/hybrid/index.js');
-      const hybridResult = await runHybridCanonicalize(sb, auditId, domain, canonicalizeMode);
+      const hybridResult = await runHybridCanonicalize(sb, auditId, domain, canonicalizeMode, priorHybridSnapshot);
       console.log(`  [canonicalize] Hybrid path completed: ${hybridResult.autoAssigned} auto-assigned, ${hybridResult.arbitrated} arbitrated, ${hybridResult.priorLocked} prior-locked`);
     } catch (err: any) {
       if (canonicalizeMode === 'shadow') {

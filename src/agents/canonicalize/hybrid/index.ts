@@ -35,6 +35,9 @@ function resolveLocationLabel(auditRow: any): string {
   return parts.join(', ');
 }
 
+/** Prior hybrid assignment snapshot, keyed by keyword id. */
+export type PriorHybridSnapshot = Map<string, { canonicalKey: string; canonicalTopic: string }>;
+
 /**
  * Run the hybrid canonicalize pipeline.
  *
@@ -42,12 +45,16 @@ function resolveLocationLabel(auditRow: any): string {
  * @param auditId The audit ID
  * @param domain The domain
  * @param mode 'hybrid' (authoritative output) or 'shadow' (comparison only)
+ * @param priorSnapshot Snapshot of hybrid-origin assignments taken BEFORE legacy runs.
+ *   Legacy overwrites canonical_key — this snapshot preserves the hybrid values
+ *   so the lock predicate locks the correct (hybrid) assignment, not legacy's overwrite.
  */
 export async function runHybridCanonicalize(
   sb: SupabaseClient,
   auditId: string,
   domain: string,
   mode: 'hybrid' | 'shadow',
+  priorSnapshot?: PriorHybridSnapshot,
 ): Promise<HybridResult> {
   const canonicalizeMode = mode === 'shadow' ? 'shadow_hybrid' : 'hybrid';
 
@@ -83,28 +90,40 @@ export async function runHybridCanonicalize(
 
   console.log(`  [hybrid] Processing ${keywords.length} keywords`);
 
-  // 3. Build variant inputs with content hashes
-  const variants: VariantInput[] = keywords.map((kw) => ({
-    contentId: kw.id,
-    keyword: kw.keyword,
-    contentHash: contentHash(kw.keyword),
-    existingCanonicalKey: kw.canonical_key,
-    existingCanonicalTopic: kw.canonical_topic,
-    existingClassificationMethod: kw.classification_method,
-  }));
+  // 3. Build variant inputs with content hashes.
+  // If a prior hybrid snapshot exists, use its canonical_key/topic (not the DB's
+  // current values which legacy may have overwritten). The classification_method
+  // in the DB is still the hybrid-origin value (legacy doesn't touch it).
+  const variants: VariantInput[] = keywords.map((kw) => {
+    const prior = priorSnapshot?.get(kw.id);
+    const isHybridOrigin = kw.classification_method !== null && prior;
+    return {
+      contentId: kw.id,
+      keyword: kw.keyword,
+      contentHash: contentHash(kw.keyword),
+      existingCanonicalKey: isHybridOrigin ? prior.canonicalKey : kw.canonical_key,
+      existingCanonicalTopic: isHybridOrigin ? prior.canonicalTopic : kw.canonical_topic,
+      existingClassificationMethod: kw.classification_method,
+    };
+  });
 
-  // 4. Build existing canonical topics from current keyword assignments
-  // (These are the topics from the legacy run that just completed, or prior hybrid runs)
+  // 4. Build existing canonical topics from current keyword assignments.
+  // Use snapshot values for hybrid-origin keywords so centroids reflect
+  // the hybrid clustering, not legacy's overwritten assignments.
   const topicMap = new Map<string, CanonicalTopic>();
   for (const kw of keywords) {
-    if (kw.canonical_key && kw.canonical_topic) {
-      const existing = topicMap.get(kw.canonical_key);
+    const prior = priorSnapshot?.get(kw.id);
+    const isHybridOrigin = kw.classification_method !== null && prior;
+    const ck = isHybridOrigin ? prior.canonicalKey : kw.canonical_key;
+    const ct = isHybridOrigin ? prior.canonicalTopic : kw.canonical_topic;
+    if (ck && ct) {
+      const existing = topicMap.get(ck);
       if (existing) {
         existing.memberContentIds.push(kw.id);
       } else {
-        topicMap.set(kw.canonical_key, {
-          canonicalKey: kw.canonical_key,
-          canonicalTopic: kw.canonical_topic,
+        topicMap.set(ck, {
+          canonicalKey: ck,
+          canonicalTopic: ct,
           memberContentIds: [kw.id],
         });
       }
