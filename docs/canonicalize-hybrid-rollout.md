@@ -49,15 +49,23 @@ Hybrid handles ONLY `canonical_key` and `canonical_topic` clustering. Other fiel
 - [x] Promotion criteria documented (see below)
 - [x] Report: `scratch/shadow-reports/phase-2.1-threshold-tuning-2026-04-20.md`
 
-### Phase 2.2: Single-Member Cluster Mitigation (next session)
-- [ ] Mitigate cold-start centroid vulnerability (single-member clusters have centroid = single vector)
-- [ ] Re-shadow both clients to measure impact
-- [ ] Conditional: promote first client to hybrid default if validation data supports it
+### Phase 2.2: Single-Member Cluster Size Gate (complete — this session)
+- [x] MIN_CLUSTER_SIZE_FOR_AUTO_ASSIGN = 3 constant with rationale comment
+- [x] Size gate: auto-assign requires cluster to have 3+ members; otherwise route to Sonnet arbitration
+- [x] Lock precedence preserved (lock evaluates before size gate)
+- [x] New classification method: `sonnet_arbitration_size_gated` for audit trail
+- [x] SMA stability regression: 100% prior-lock, 0 size-gated — PASSES
+- [x] IMA behavioral validation: 50 size-gated, 62.7% redirected to different cluster by Sonnet
+- [x] N=3 calibration confirmed (9/57 IMA clusters gated, 5% of corpus, ~1 extra Sonnet batch)
+- [x] 3 new tests + existing tests updated (55/55 passing)
+- [x] Report: `scratch/shadow-reports/phase-2.2-size-gate-2026-04-20.md`
+- [x] No client promoted to hybrid default (per specification)
 
-### Phase 2.3: First Production Hybrid Promotion (future)
-- [ ] Client TBD based on validation data
+### Phase 2.3: First Production Hybrid Promotion (next session)
+- [ ] Client TBD based on validation data (SMA is candidate — 100% lock stability, hybrid-origin)
 - [ ] Must meet ALL promotion criteria (see below)
 - [ ] Downstream consumer validation (Cluster Strategy, Michael, Pam)
+- [ ] Auto-assign rate >20% target (SMA currently 0% due to full prior-lock; IMA at 8.4%)
 
 ### Phase 3: Scout Deduplication (future)
 - [ ] Reuse embedding infrastructure for Scout keyword deduplication
@@ -89,6 +97,12 @@ A client may be promoted from `canonicalize_mode='legacy'` (default) to
 - Auto-assign rate >20% on second hybrid run (confirms vector layer doing meaningful
   work, not just acting as arbitration trigger)
 - Sonnet arbitration rate trending toward <50% of first-run value on re-runs
+
+### Single-member cluster behavior
+- Size-gated keywords (routed to Sonnet due to cluster <3 members) should show >50%
+  redirect rate (Sonnet choosing a different cluster than vector proximity suggested)
+- If redirect rate drops below 30%, N=3 threshold should be re-evaluated
+- Lock precedence must hold: prior-locked keywords are never size-gated
 
 ### Consistency across audits
 - Pattern confirmed across at least two shadow runs on different audits

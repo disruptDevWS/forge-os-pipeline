@@ -28,6 +28,15 @@ import type {
 const AUTO_ASSIGN_THRESHOLD = 0.82;
 const AMBIGUITY_LOWER_BOUND = 0.75;
 
+// Minimum cluster size for vector auto-assign eligibility.
+// Clusters with fewer than N members route to Sonnet arbitration instead.
+// Rationale: single-member clusters have centroid = single vector, which can
+// pull proximate variants into clusters with narrower intent than the centroid
+// suggests. IMA Phase 2 data showed this with "EMT Jobs" (1 member) pulling
+// 4 geo variants. N=3 allows genuine small clusters while blocking single-vector
+// centroid pulls. Prior-locked variants are unaffected by this gate.
+const MIN_CLUSTER_SIZE_FOR_AUTO_ASSIGN = 3;
+
 // ── Centroid computation ──────────────────────────────────────
 
 /**
@@ -177,19 +186,38 @@ export async function preCluster(
     const aboveAutoThreshold = matches.filter((m) => m.similarity >= AUTO_ASSIGN_THRESHOLD);
 
     if (aboveAutoThreshold.length === 1) {
-      // Single match above auto-assign threshold → auto-assign
+      // Single match above auto-assign threshold — check cluster size gate
       const best = aboveAutoThreshold[0];
-      decisions.push({
-        contentHash: hash,
-        contentIds,
-        keyword: representative.keyword,
-        decision: 'auto_assigned',
-        classificationMethod: 'vector_auto_assign',
-        assignedCanonicalKey: best.canonicalKey,
-        assignedCanonicalTopic: best.canonicalTopic,
-        similarityScore: best.similarity,
-        topMatches,
-      });
+      const bestTopic = topicMeta.get(best.canonicalKey);
+      const clusterSize = bestTopic ? bestTopic.memberContentIds.length : 0;
+
+      if (clusterSize >= MIN_CLUSTER_SIZE_FOR_AUTO_ASSIGN) {
+        // Cluster has enough members → auto-assign
+        decisions.push({
+          contentHash: hash,
+          contentIds,
+          keyword: representative.keyword,
+          decision: 'auto_assigned',
+          classificationMethod: 'vector_auto_assign',
+          assignedCanonicalKey: best.canonicalKey,
+          assignedCanonicalTopic: best.canonicalTopic,
+          similarityScore: best.similarity,
+          topMatches,
+        });
+      } else {
+        // Cluster too small → route to Sonnet arbitration (size-gated)
+        decisions.push({
+          contentHash: hash,
+          contentIds,
+          keyword: representative.keyword,
+          decision: 'size_gated',
+          classificationMethod: 'sonnet_arbitration_size_gated',
+          assignedCanonicalKey: null,
+          assignedCanonicalTopic: null,
+          similarityScore: best.similarity,
+          topMatches,
+        });
+      }
     } else if (aboveAutoThreshold.length > 1) {
       // Multiple matches above auto-assign threshold → ambiguous
       decisions.push({
@@ -234,10 +262,11 @@ export async function preCluster(
 
   // Summary
   const autoCount = decisions.filter((d) => d.decision === 'auto_assigned').length;
+  const sizeGatedCount = decisions.filter((d) => d.decision === 'size_gated').length;
   const ambigCount = decisions.filter((d) => d.decision === 'ambiguous').length;
   const newCount = decisions.filter((d) => d.decision === 'new_topic_candidate').length;
   const lockCount = decisions.filter((d) => d.decision === 'prior_locked').length;
-  console.log(`  [hybrid/pre-cluster] Decisions: ${autoCount} auto-assigned, ${ambigCount} ambiguous, ${newCount} new-topic, ${lockCount} prior-locked`);
+  console.log(`  [hybrid/pre-cluster] Decisions: ${autoCount} auto-assigned, ${sizeGatedCount} size-gated, ${ambigCount} ambiguous, ${newCount} new-topic, ${lockCount} prior-locked`);
 
   return decisions;
 }

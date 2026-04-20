@@ -4,6 +4,18 @@ Non-obvious choices that would look wrong without context. Check here before "fi
 
 ---
 
+**2026-04-20: Size gate — clusters with <3 members ineligible for vector auto-assign**
+
+`MIN_CLUSTER_SIZE_FOR_AUTO_ASSIGN = 3` in `src/agents/canonicalize/hybrid/pre-cluster.ts`. Clusters with fewer than 3 members route to Sonnet arbitration instead of vector auto-assign, regardless of similarity score. Prior-locked variants bypass the gate entirely (lock evaluates first).
+
+Rationale: IMA data showed single-member clusters (e.g., "EMT Jobs" with 1 member) pulling geo variants via centroid = single vector. A single vector lacks the averaging effect of multi-member centroids, creating false-confidence auto-assigns. Post-gate validation: 62.7% of size-gated keywords were redirected to different (better-fit) clusters by Sonnet, confirming the cold-start vulnerability.
+
+N=3 calibration: IMA has 9 clusters with <3 members (15.8% of topics), affecting 50 keywords (5% of corpus). Cost: ~1.25 extra Sonnet batches per run. N=2 would miss 2-member clusters that still lack centroid diversity. N=4 would over-route and defeat the efficiency purpose of vector auto-assign.
+
+Classification method `sonnet_arbitration_size_gated` distinguishes these cases from natural-ambiguity arbitrations in the audit trail. This allows monitoring of size gate behavior without conflating it with genuine ambiguity.
+
+---
+
 **2026-04-20: Auto-assign threshold lowered from 0.85 to 0.82**
 
 IMA shadow data showed 82/83 cases in the 0.80–0.85 band were assign_existing Sonnet arbitrations (98.8% vector agreement). Lowering AUTO_ASSIGN_THRESHOLD from 0.85 to 0.82 in `src/agents/canonicalize/hybrid/pre-cluster.ts` eliminates ~50 redundant Sonnet calls per 1000-keyword audit. The ambiguity band becomes 0.75–0.82 (lower bound unchanged).

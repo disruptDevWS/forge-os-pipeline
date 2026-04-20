@@ -11,6 +11,7 @@ export type ClassificationMethod =
   | 'sonnet_arbitration_assigned'
   | 'sonnet_arbitration_new_topic'
   | 'sonnet_arbitration_merged'
+  | 'sonnet_arbitration_size_gated'
   | 'prior_assignment_locked';
 
 export interface VariantInput {
@@ -33,7 +34,7 @@ export interface PreClusterDecision {
   contentHash: string;
   contentIds: string[]; // all content_ids sharing this hash
   keyword: string;
-  decision: 'auto_assigned' | 'ambiguous' | 'new_topic_candidate' | 'prior_locked';
+  decision: 'auto_assigned' | 'ambiguous' | 'new_topic_candidate' | 'prior_locked' | 'size_gated';
   classificationMethod: ClassificationMethod;
   assignedCanonicalKey: string | null;
   assignedCanonicalTopic: string | null;
@@ -46,7 +47,7 @@ export interface ArbitrationInput {
   contentHash: string;
   contentIds: string[];
   keyword: string;
-  decision: 'ambiguous' | 'new_topic_candidate';
+  decision: 'ambiguous' | 'new_topic_candidate' | 'size_gated';
   topMatches: Array<{ canonicalKey: string; canonicalTopic: string; similarity: number }>;
 }
 

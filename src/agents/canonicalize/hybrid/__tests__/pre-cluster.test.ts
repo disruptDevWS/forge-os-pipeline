@@ -85,14 +85,13 @@ describe('preCluster()', () => {
     expect(result).toEqual([]);
   });
 
-  it('auto-assigns when single match above auto-assign threshold (0.82)', async () => {
+  it('auto-assigns when single match above threshold and cluster has 3+ members', async () => {
     const variant = makeVariant({ keyword: 'emt training boise' });
-    const topic = makeTopic('emt_training', 'EMT Training', ['kw-existing']);
+    const topic = makeTopic('emt_training', 'EMT Training', ['kw-a', 'kw-b', 'kw-c']);
 
-    // embedBatch returns embedding for our variant
     mockEmbedBatch.mockResolvedValueOnce([{ embedding: unitVector(0), fromCache: false }]);
-    // getEmbeddingsBatch for topic centroid
-    mockGetEmbeddingsBatch.mockResolvedValueOnce([unitVector(1)]);
+    // getEmbeddingsBatch for topic centroid (3 members)
+    mockGetEmbeddingsBatch.mockResolvedValueOnce([unitVector(1), unitVector(1), unitVector(1)]);
     // cosineSimilarity: variant vs centroid = 0.90 (above 0.82 threshold)
     mockCosineSimilarity.mockReturnValue(0.90);
 
@@ -107,13 +106,13 @@ describe('preCluster()', () => {
 
   it('marks ambiguous when multiple matches above auto-assign threshold (0.82)', async () => {
     const variant = makeVariant({ keyword: 'emt course' });
-    const topicA = makeTopic('emt_training', 'EMT Training', ['kw-a']);
-    const topicB = makeTopic('emt_certification', 'EMT Certification', ['kw-b']);
+    const topicA = makeTopic('emt_training', 'EMT Training', ['kw-a1', 'kw-a2', 'kw-a3']);
+    const topicB = makeTopic('emt_certification', 'EMT Certification', ['kw-b1', 'kw-b2', 'kw-b3']);
 
     mockEmbedBatch.mockResolvedValueOnce([{ embedding: unitVector(0), fromCache: false }]);
     mockGetEmbeddingsBatch
-      .mockResolvedValueOnce([unitVector(1)]) // topicA centroid
-      .mockResolvedValueOnce([unitVector(2)]); // topicB centroid
+      .mockResolvedValueOnce([unitVector(1), unitVector(1), unitVector(1)]) // topicA centroid (3 members)
+      .mockResolvedValueOnce([unitVector(2), unitVector(2), unitVector(2)]); // topicB centroid (3 members)
     // Both above 0.82 threshold
     mockCosineSimilarity.mockReturnValueOnce(0.88).mockReturnValueOnce(0.86);
 
@@ -125,10 +124,10 @@ describe('preCluster()', () => {
 
   it('marks new_topic_candidate when below 0.75', async () => {
     const variant = makeVariant({ keyword: 'restaurant reviews' });
-    const topic = makeTopic('emt_training', 'EMT Training', ['kw-a']);
+    const topic = makeTopic('emt_training', 'EMT Training', ['kw-a', 'kw-b', 'kw-c']);
 
     mockEmbedBatch.mockResolvedValueOnce([{ embedding: unitVector(0), fromCache: false }]);
-    mockGetEmbeddingsBatch.mockResolvedValueOnce([unitVector(1)]);
+    mockGetEmbeddingsBatch.mockResolvedValueOnce([unitVector(1), unitVector(1), unitVector(1)]);
     mockCosineSimilarity.mockReturnValue(0.20); // far below threshold
 
     const decisions = await preCluster([variant], [topic]);
@@ -144,12 +143,12 @@ describe('preCluster()', () => {
       existingCanonicalTopic: 'EMT Training',
       existingClassificationMethod: 'vector_auto_assign', // hybrid-originated
     });
-    const topic = makeTopic('emt_training', 'EMT Training', ['kw-existing']);
+    const topic = makeTopic('emt_training', 'EMT Training', ['kw-a', 'kw-b', 'kw-c']);
 
     // embedBatch still called (for all unique hashes), returns empty since only one variant and it's locked early
     mockEmbedBatch.mockResolvedValueOnce([{ embedding: unitVector(0), fromCache: true }]);
-    // getEmbeddingsBatch for topic centroid computation
-    mockGetEmbeddingsBatch.mockResolvedValueOnce([unitVector(1)]);
+    // getEmbeddingsBatch for topic centroid computation (3 members)
+    mockGetEmbeddingsBatch.mockResolvedValueOnce([unitVector(1), unitVector(1), unitVector(1)]);
 
     const decisions = await preCluster([variant], [topic]);
 
@@ -166,31 +165,90 @@ describe('preCluster()', () => {
       existingCanonicalTopic: 'EMT Training',
       existingClassificationMethod: null, // legacy-originated
     });
-    const topic = makeTopic('emt_training', 'EMT Training', ['kw-existing']);
+    const topic = makeTopic('emt_training', 'EMT Training', ['kw-a', 'kw-b', 'kw-c']);
 
     mockEmbedBatch.mockResolvedValueOnce([{ embedding: unitVector(0), fromCache: false }]);
-    mockGetEmbeddingsBatch.mockResolvedValueOnce([unitVector(1)]);
+    mockGetEmbeddingsBatch.mockResolvedValueOnce([unitVector(1), unitVector(1), unitVector(1)]);
     mockCosineSimilarity.mockReturnValue(0.92);
 
     const decisions = await preCluster([variant], [topic]);
 
     expect(decisions).toHaveLength(1);
-    // Should be classified normally, NOT prior_locked
+    // Should be classified normally, NOT prior_locked (3-member topic → auto-assign eligible)
     expect(decisions[0].decision).toBe('auto_assigned');
   });
 
   it('routes embedding failures to arbitration', async () => {
     const variant = makeVariant({ keyword: 'failed embed' });
-    const topic = makeTopic('emt_training', 'EMT Training', ['kw-a']);
+    const topic = makeTopic('emt_training', 'EMT Training', ['kw-a', 'kw-b', 'kw-c']);
 
     // embedBatch returns null for this variant
     mockEmbedBatch.mockResolvedValueOnce([null]);
-    mockGetEmbeddingsBatch.mockResolvedValueOnce([unitVector(1)]);
+    mockGetEmbeddingsBatch.mockResolvedValueOnce([unitVector(1), unitVector(1), unitVector(1)]);
 
     const decisions = await preCluster([variant], [topic]);
 
     expect(decisions).toHaveLength(1);
     expect(decisions[0].decision).toBe('ambiguous');
+  });
+
+  it('size-gates auto-assign when cluster has fewer than 3 members', async () => {
+    const variant = makeVariant({ keyword: 'emt jobs boise' });
+    // Single-member cluster — should trigger size gate
+    const topic = makeTopic('emt_jobs', 'EMT Jobs', ['kw-only-member']);
+
+    mockEmbedBatch.mockResolvedValueOnce([{ embedding: unitVector(0), fromCache: false }]);
+    mockGetEmbeddingsBatch.mockResolvedValueOnce([unitVector(1)]);
+    // High similarity — would auto-assign if cluster had enough members
+    mockCosineSimilarity.mockReturnValue(0.92);
+
+    const decisions = await preCluster([variant], [topic]);
+
+    expect(decisions).toHaveLength(1);
+    expect(decisions[0].decision).toBe('size_gated');
+    expect(decisions[0].classificationMethod).toBe('sonnet_arbitration_size_gated');
+    expect(decisions[0].assignedCanonicalKey).toBeNull();
+    expect(decisions[0].similarityScore).toBe(0.92);
+  });
+
+  it('lock precedence holds regardless of cluster size', async () => {
+    // Variant locked to a single-member cluster — lock should hold
+    const variant = makeVariant({
+      keyword: 'emt jobs',
+      existingCanonicalKey: 'emt_jobs',
+      existingCanonicalTopic: 'EMT Jobs',
+      existingClassificationMethod: 'vector_auto_assign',
+    });
+    // Single-member cluster
+    const topic = makeTopic('emt_jobs', 'EMT Jobs', ['kw-only-member']);
+
+    mockEmbedBatch.mockResolvedValueOnce([{ embedding: unitVector(0), fromCache: true }]);
+    mockGetEmbeddingsBatch.mockResolvedValueOnce([unitVector(1)]);
+
+    const decisions = await preCluster([variant], [topic]);
+
+    expect(decisions).toHaveLength(1);
+    expect(decisions[0].decision).toBe('prior_locked');
+    expect(decisions[0].classificationMethod).toBe('prior_assignment_locked');
+    expect(decisions[0].assignedCanonicalKey).toBe('emt_jobs');
+  });
+
+  it('ambiguity band routing unchanged by size gate', async () => {
+    const variant = makeVariant({ keyword: 'emt info' });
+    // Single-member cluster — but similarity is in ambiguity band, not auto-assign range
+    const topic = makeTopic('emt_info', 'EMT Info', ['kw-only-member']);
+
+    mockEmbedBatch.mockResolvedValueOnce([{ embedding: unitVector(0), fromCache: false }]);
+    mockGetEmbeddingsBatch.mockResolvedValueOnce([unitVector(1)]);
+    // Similarity in ambiguity band (0.75–0.82)
+    mockCosineSimilarity.mockReturnValue(0.78);
+
+    const decisions = await preCluster([variant], [topic]);
+
+    expect(decisions).toHaveLength(1);
+    // Should be ambiguous, NOT size_gated (ambiguity band, not auto-assign range)
+    expect(decisions[0].decision).toBe('ambiguous');
+    expect(decisions[0].classificationMethod).toBe('sonnet_arbitration_assigned');
   });
 
   it('collapses duplicate content hashes', async () => {
@@ -200,10 +258,10 @@ describe('preCluster()', () => {
     // Make their hashes match
     v2.contentHash = v1.contentHash;
 
-    const topic = makeTopic('emt_training', 'EMT Training', ['kw-existing']);
+    const topic = makeTopic('emt_training', 'EMT Training', ['kw-a', 'kw-b', 'kw-c']);
 
     mockEmbedBatch.mockResolvedValueOnce([{ embedding: unitVector(0), fromCache: false }]);
-    mockGetEmbeddingsBatch.mockResolvedValueOnce([unitVector(1)]);
+    mockGetEmbeddingsBatch.mockResolvedValueOnce([unitVector(1), unitVector(1), unitVector(1)]);
     mockCosineSimilarity.mockReturnValue(0.90);
 
     const decisions = await preCluster([v1, v2], [topic]);

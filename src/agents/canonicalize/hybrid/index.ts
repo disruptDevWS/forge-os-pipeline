@@ -135,14 +135,14 @@ export async function runHybridCanonicalize(
   // 5. Stage 1: Vector pre-clustering
   const decisions = await preCluster(variants, existingTopics);
 
-  // 6. Collect cases needing arbitration
+  // 6. Collect cases needing arbitration (ambiguous, new-topic, and size-gated)
   const arbitrationCases: ArbitrationInput[] = decisions
-    .filter((d) => d.decision === 'ambiguous' || d.decision === 'new_topic_candidate')
+    .filter((d) => d.decision === 'ambiguous' || d.decision === 'new_topic_candidate' || d.decision === 'size_gated')
     .map((d) => ({
       contentHash: d.contentHash,
       contentIds: d.contentIds,
       keyword: d.keyword,
-      decision: d.decision as 'ambiguous' | 'new_topic_candidate',
+      decision: d.decision as 'ambiguous' | 'new_topic_candidate' | 'size_gated',
       topMatches: d.topMatches,
     }));
 
@@ -186,7 +186,12 @@ export async function runHybridCanonicalize(
       if (arbResult) {
         canonicalKey = arbResult.canonicalKey;
         canonicalTopic = arbResult.canonicalTopic;
-        classificationMethod = arbResult.classificationMethod as any;
+        // Size-gated cases preserve their routing reason as the classification method
+        // even though Sonnet makes the final decision. This allows audit trail analysis
+        // of size gate behavior.
+        classificationMethod = decision.decision === 'size_gated'
+          ? 'sonnet_arbitration_size_gated'
+          : arbResult.classificationMethod as any;
         arbitrationReason = arbResult.arbitrationReason;
         arbitrated++;
         if (arbResult.classificationMethod === 'sonnet_arbitration_new_topic') newTopics++;
