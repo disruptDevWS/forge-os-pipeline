@@ -1,8 +1,8 @@
 /**
  * arbitrator.ts — Stage 2: Sonnet arbitration for ambiguous and new-topic cases.
  *
- * Receives only the cases Stage 1 couldn't resolve (ambiguous band 0.75-0.85,
- * multi-match above 0.85, new-topic candidates, embedding failures).
+ * Receives only the cases Stage 1 couldn't resolve (ambiguous band 0.75-0.82,
+ * multi-match above 0.82, new-topic candidates, embedding failures).
  * Sonnet's job is judgment on the hard cases, not re-clustering.
  *
  * Stage 1's classifications are INPUTS, not suggestions to second-guess.

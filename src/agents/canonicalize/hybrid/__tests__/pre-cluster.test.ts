@@ -85,7 +85,7 @@ describe('preCluster()', () => {
     expect(result).toEqual([]);
   });
 
-  it('auto-assigns when single match above 0.85', async () => {
+  it('auto-assigns when single match above auto-assign threshold (0.82)', async () => {
     const variant = makeVariant({ keyword: 'emt training boise' });
     const topic = makeTopic('emt_training', 'EMT Training', ['kw-existing']);
 
@@ -93,7 +93,7 @@ describe('preCluster()', () => {
     mockEmbedBatch.mockResolvedValueOnce([{ embedding: unitVector(0), fromCache: false }]);
     // getEmbeddingsBatch for topic centroid
     mockGetEmbeddingsBatch.mockResolvedValueOnce([unitVector(1)]);
-    // cosineSimilarity: variant vs centroid = 0.90 (above 0.85)
+    // cosineSimilarity: variant vs centroid = 0.90 (above 0.82 threshold)
     mockCosineSimilarity.mockReturnValue(0.90);
 
     const decisions = await preCluster([variant], [topic]);
@@ -105,7 +105,7 @@ describe('preCluster()', () => {
     expect(decisions[0].similarityScore).toBe(0.90);
   });
 
-  it('marks ambiguous when multiple matches above 0.85', async () => {
+  it('marks ambiguous when multiple matches above auto-assign threshold (0.82)', async () => {
     const variant = makeVariant({ keyword: 'emt course' });
     const topicA = makeTopic('emt_training', 'EMT Training', ['kw-a']);
     const topicB = makeTopic('emt_certification', 'EMT Certification', ['kw-b']);
@@ -114,7 +114,7 @@ describe('preCluster()', () => {
     mockGetEmbeddingsBatch
       .mockResolvedValueOnce([unitVector(1)]) // topicA centroid
       .mockResolvedValueOnce([unitVector(2)]); // topicB centroid
-    // Both above 0.85
+    // Both above 0.82 threshold
     mockCosineSimilarity.mockReturnValueOnce(0.88).mockReturnValueOnce(0.86);
 
     const decisions = await preCluster([variant], [topicA, topicB]);

@@ -19,9 +19,13 @@ import type {
   PreClusterDecision,
 } from './types.js';
 
-// ── Thresholds (starting values — do not tune this session) ───
-
-const AUTO_ASSIGN_THRESHOLD = 0.85;
+// ── Thresholds ───────────────────────────────────────────────
+// Auto-assign threshold: lowered from 0.85 → 0.82 on 2026-04-20
+// Rationale: IMA shadow data showed 82/83 cases in 0.80-0.85 band were
+// assign_existing Sonnet arbitrations (98.8% agreement with vector layer).
+// Lowering threshold eliminates ~80 redundant Sonnet calls per 1000-kw audit
+// while preserving genuine arbitration work in 0.75-0.82 band.
+const AUTO_ASSIGN_THRESHOLD = 0.82;
 const AMBIGUITY_LOWER_BOUND = 0.75;
 
 // ── Centroid computation ──────────────────────────────────────
@@ -173,7 +177,7 @@ export async function preCluster(
     const aboveAutoThreshold = matches.filter((m) => m.similarity >= AUTO_ASSIGN_THRESHOLD);
 
     if (aboveAutoThreshold.length === 1) {
-      // Single match above 0.85 → auto-assign
+      // Single match above auto-assign threshold → auto-assign
       const best = aboveAutoThreshold[0];
       decisions.push({
         contentHash: hash,
@@ -187,7 +191,7 @@ export async function preCluster(
         topMatches,
       });
     } else if (aboveAutoThreshold.length > 1) {
-      // Multiple matches above 0.85 → ambiguous
+      // Multiple matches above auto-assign threshold → ambiguous
       decisions.push({
         contentHash: hash,
         contentIds,
@@ -200,7 +204,7 @@ export async function preCluster(
         topMatches,
       });
     } else if (matches.length > 0) {
-      // Matches in 0.75–0.85 band → ambiguous
+      // Matches in ambiguity band (0.75–0.82) → ambiguous
       decisions.push({
         contentHash: hash,
         contentIds,

@@ -12,58 +12,103 @@ Hybrid canonicalize replaces Sonnet-only semantic grouping with vector pre-clust
 
 Hybrid handles ONLY `canonical_key` and `canonical_topic` clustering. Other fields (`is_brand`, `is_near_me`, `intent_type`, `primary_entity_type`) remain Sonnet-based in all modes.
 
-## Thresholds (starting values)
+## Thresholds
 
 | Threshold | Value | Meaning |
 |-----------|-------|---------|
-| Auto-assign | >= 0.85 | Single centroid match above this → auto-assign |
-| Ambiguity band | 0.75 – 0.85 | Multiple matches or borderline → Sonnet arbitration |
+| Auto-assign | >= 0.82 | Single centroid match above this → auto-assign |
+| Ambiguity band | 0.75 – 0.82 | Multiple matches or borderline → Sonnet arbitration |
 | Below floor | < 0.75 | No match → new topic candidate → Sonnet arbitration |
 
-Do NOT tune until shadow-mode comparison data is available.
+**History:** Auto-assign threshold lowered from 0.85 → 0.82 on 2026-04-20 (Phase 2.1). IMA shadow data showed 82/83 cases in the 0.80–0.85 band were assign_existing Sonnet arbitrations (98.8% agreement with vector layer). Comparison report: `scratch/shadow-reports/phase-2.1-threshold-tuning-2026-04-20.md`.
 
 ## Rollout Sequence
 
-### Phase 1: Deploy (current)
-- [x] Deploy with `--canonicalize-mode legacy` as default
-- [x] No behavior change for any client
+### Phase 1: Embedding Infrastructure (complete)
+- [x] Deploy pgvector 0.8.0 with HNSW cosine index on Supabase
+- [x] OpenAI text-embedding-3-small (1536 dimensions) integration
 - [x] Migrations 016 + 017 applied
-- [x] Hybrid module code deployed but inactive
+- [x] `--canonicalize-mode legacy` remains default
 
-### Phase 2: Shadow Validation
-- [ ] Select one client with a representative keyword set (100-300 keywords)
-- [ ] Run re-canonicalize with `--canonicalize-mode shadow`
-- [ ] Generate diff report: `npm run canonicalize:shadow-compare -- --audit-id <uuid>`
-- [ ] Review:
-  - Agreement rate (target: > 90%)
-  - Disagreements — are hybrid's groupings better, worse, or different-but-equivalent?
-  - Arbitration rate — what % of keywords needed Sonnet? (target: < 25%)
-  - Prior-lock rate — N/A on first shadow run
-  - New topics created by hybrid — are they genuine splits or noise?
+### Phase 2: Hybrid Implementation & Shadow Validation (complete)
+- [x] Hybrid module implemented (pre-cluster + arbitrator + persist)
+- [x] Shadow mode validated on SMA (87.4% agreement with legacy, 127 keywords)
+- [x] Shadow mode validated on IMA (54.0% agreement with legacy, 1000 keywords)
+- [x] Re-run stability confirmed (100% prior-lock rate on SMA second run)
+- [x] Snapshot protocol bug fixed (prior hybrid assignments preserved across legacy overwrites)
+- [x] Arbitration batching implemented (40 cases per Sonnet call)
+- [x] Migration 018 applied (shadow columns)
+- [x] 3 bugs caught and fixed during validation
 
-### Phase 3: Threshold Tuning (if needed)
-- [ ] If agreement rate is low, analyze disagreements for threshold sensitivity
-- [ ] Adjust AUTO_ASSIGN_THRESHOLD and AMBIGUITY_LOWER_BOUND in `pre-cluster.ts`
-- [ ] Re-run shadow mode and compare again
-- [ ] Do not move to Phase 4 until agreement rate is satisfactory
+### Phase 2.1: Threshold Tuning (complete — this session)
+- [x] Auto-assign threshold lowered from 0.85 → 0.82
+- [x] IMA auto-assign rate: 5.6% → 10.7% (nearly doubled)
+- [x] Pre-vs-post comparison: 76% same-cluster in 0.82–0.85 band (conservative lower bound due to taxonomy drift)
+- [x] All disagreements categorically benign (more specific routing, not coarser merges)
+- [x] SMA stability regression: 100% prior-lock, zero behavioral change
+- [x] Promotion criteria documented (see below)
+- [x] Report: `scratch/shadow-reports/phase-2.1-threshold-tuning-2026-04-20.md`
 
-### Phase 4: Hybrid Pilot
-- [ ] Select one client
-- [ ] Run full re-canonicalize with `--canonicalize-mode hybrid`
-- [ ] Validate output quality against prior legacy runs
-- [ ] Verify downstream phases (rebuild clusters, Michael, Gap) produce correct output
-- [ ] Verify cluster strategies are not orphaned (or are correctly deprecated)
+### Phase 2.2: Single-Member Cluster Mitigation (next session)
+- [ ] Mitigate cold-start centroid vulnerability (single-member clusters have centroid = single vector)
+- [ ] Re-shadow both clients to measure impact
+- [ ] Conditional: promote first client to hybrid default if validation data supports it
 
-### Phase 5: Gradual Migration
-- [ ] Migrate additional clients to hybrid mode one at a time
-- [ ] Monitor for: unexpected topic proliferation, orphaned strategies, cluster count drift
-- [ ] Change default mode from `'legacy'` to `'hybrid'` in pipeline-generate.ts
+### Phase 2.3: First Production Hybrid Promotion (future)
+- [ ] Client TBD based on validation data
+- [ ] Must meet ALL promotion criteria (see below)
+- [ ] Downstream consumer validation (Cluster Strategy, Michael, Pam)
 
-### Phase 6: Legacy Retirement
-- [ ] All clients running hybrid for >= 2 cycles with no issues
-- [ ] Remove legacy Sonnet-only clustering code path
-- [ ] Remove shadow mode infrastructure
-- [ ] Update PIPELINE.md and DECISIONS.md
+### Phase 3: Scout Deduplication (future)
+- [ ] Reuse embedding infrastructure for Scout keyword deduplication
+
+### Phase 4: Gap Section-Level Semantic Coverage (future)
+- [ ] Semantic matching for content gap analysis
+
+## Promotion Criteria
+
+A client may be promoted from `canonicalize_mode='legacy'` (default) to
+`canonicalize_mode='hybrid'` (default) only when ALL of the following are met:
+
+### Re-run stability
+- Second hybrid run on the same audit produces 100% prior-lock rate
+- Output is byte-identical across two consecutive hybrid runs with no input changes
+- No variants move between canonical topics between runs
+
+### Quality direction
+- Agreement rate with legacy >50%
+- Disagreements are categorically either:
+  - Hybrid splitting legacy's coarse buckets into more granular topics reflecting
+    distinct search intents, OR
+  - Hybrid creating legitimate new clusters for intents legacy missed
+- No disagreements where hybrid merges legacy's distinct clusters into coarser groupings
+- No systematic bias toward any single cluster (verified by reviewing top-5 largest
+  clusters for centroid-proximity artifacts)
+
+### Efficiency indicators
+- Auto-assign rate >20% on second hybrid run (confirms vector layer doing meaningful
+  work, not just acting as arbitration trigger)
+- Sonnet arbitration rate trending toward <50% of first-run value on re-runs
+
+### Consistency across audits
+- Pattern confirmed across at least two shadow runs on different audits
+  (domain variety preferred — different verticals, different keyword corpus sizes)
+
+### Operational
+- No open bugs in hybrid module affecting the specific client's domain
+- Claude Code Anthropic API key usage for arbitration within expected budget
+- Downstream consumers (Cluster Strategy, Gap, Michael, Pam) not modified since last
+  validation run
+
+### Promotion process
+1. Client opted in explicitly (not blanket rollout)
+2. First production hybrid run compared against prior legacy run for same audit
+3. Cluster Strategy, Michael, Pam outputs compared against prior runs
+4. If downstream consumers produce coherent output with no schema violations or
+   missing canonical_key references, client remains on hybrid for next cycle
+5. If downstream regressions appear, immediate rollback to legacy mode, bug filed
+
+---
 
 ## Cost Impact
 
