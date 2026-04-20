@@ -4,6 +4,24 @@ Non-obvious choices that would look wrong without context. Check here before "fi
 
 ---
 
+**2026-04-20: Lock predicate must snapshot hybrid assignments before legacy canonicalize runs**
+
+The hybrid lock predicate (classification_method IS NOT NULL → preserve prior assignment) has a sequencing dependency: legacy canonicalize runs FIRST and overwrites canonical_key in the DB, then hybrid reads from the DB. Without a snapshot, the lock preserves legacy's overwrite, not hybrid's prior value. This was caught by the re-run stability test: 76/127 SMA keywords moved clusters between identical hybrid runs because the lock was locking the wrong value.
+
+Fix: `runCanonicalize()` snapshots all (id → canonical_key, canonical_topic) pairs where classification_method IS NOT NULL before legacy runs. This snapshot passes to `runHybridCanonicalize()` as `priorHybridSnapshot`, which overrides DB-read values for hybrid-origin keywords. After fix: 0 movements, 100% lock rate, output identical between runs.
+
+This is a fundamental ordering constraint: any consumer of hybrid-origin data that runs after legacy must read hybrid's values from a pre-legacy snapshot, not from the DB. If a new module is added between legacy and hybrid, it must either not touch canonical_key or participate in the snapshot protocol.
+
+---
+
+**2026-04-20: Arbitration batches at 40 cases per Sonnet call**
+
+107 SMA arbitration cases in one call hit the 8192 default max_tokens limit, producing truncated JSON. Fix: (a) added `canonicalize-arbitration: 16384` to PHASE_MAX_TOKENS, (b) batched into chunks of 40. New topics from earlier batches accumulate into the topic list so later batches can reference them. IMA's 934 cases ran cleanly across 24 batches.
+
+40 was chosen because: ~80 tokens per case response × 40 = ~3200 output tokens, well within 16384. Prompt size grows linearly with case count + topic list (~50 tokens per topic × 49 IMA topics ≈ 2450). At 40 cases per batch, total prompt fits comfortably even with 50+ topics.
+
+---
+
 **2026-04-17: Hybrid canonicalize uses vector-first clustering with Sonnet arbitration only for ambiguous cases**
 
 Phase 2 of the embeddings initiative restructures canonicalization from pure-Sonnet single-shot to a three-stage pipeline: (1) embed keywords via OpenAI text-embedding-3-small, (2) cosine-similarity pre-cluster against existing topic centroids (0.85+ auto-assign, 0.75-0.85 ambiguity band, <0.75 new topic), (3) Sonnet arbitration only for the ambiguity band and new-topic candidates. This reduces Sonnet calls by ~60-80% on re-runs and produces deterministic, reproducible clustering for the auto-assigned majority.
