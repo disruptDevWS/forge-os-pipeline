@@ -4,6 +4,16 @@ Non-obvious choices that would look wrong without context. Check here before "fi
 
 ---
 
+**2026-04-20: Auto-assign threshold lowered from 0.85 to 0.82**
+
+IMA shadow data showed 82/83 cases in the 0.80–0.85 band were assign_existing Sonnet arbitrations (98.8% vector agreement). Lowering AUTO_ASSIGN_THRESHOLD from 0.85 to 0.82 in `src/agents/canonicalize/hybrid/pre-cluster.ts` eliminates ~50 redundant Sonnet calls per 1000-keyword audit. The ambiguity band becomes 0.75–0.82 (lower bound unchanged).
+
+Post-change validation: IMA auto-assign rate increased from 5.6% to 10.7%. In the 0.82–0.85 band specifically, 76% of newly auto-assigned keywords went to the same cluster Sonnet had previously chosen. The remaining 24% were categorically benign (more specific routing or equivalent cluster naming). SMA showed 100% prior-lock stability — the threshold change has no effect on locked keywords.
+
+This is a one-way door: reverting would cause re-run instability (auto-assigned keywords that are now locked at 0.82+ would need to re-arbitrate). The 0.75 lower bound was explicitly NOT tuned — that requires separate analysis.
+
+---
+
 **2026-04-20: Lock predicate must snapshot hybrid assignments before legacy canonicalize runs**
 
 The hybrid lock predicate (classification_method IS NOT NULL → preserve prior assignment) has a sequencing dependency: legacy canonicalize runs FIRST and overwrites canonical_key in the DB, then hybrid reads from the DB. Without a snapshot, the lock preserves legacy's overwrite, not hybrid's prior value. This was caught by the re-run stability test: 76/127 SMA keywords moved clusters between identical hybrid runs because the lock was locking the wrong value.
@@ -24,7 +34,7 @@ This is a fundamental ordering constraint: any consumer of hybrid-origin data th
 
 **2026-04-17: Hybrid canonicalize uses vector-first clustering with Sonnet arbitration only for ambiguous cases**
 
-Phase 2 of the embeddings initiative restructures canonicalization from pure-Sonnet single-shot to a three-stage pipeline: (1) embed keywords via OpenAI text-embedding-3-small, (2) cosine-similarity pre-cluster against existing topic centroids (0.85+ auto-assign, 0.75-0.85 ambiguity band, <0.75 new topic), (3) Sonnet arbitration only for the ambiguity band and new-topic candidates. This reduces Sonnet calls by ~60-80% on re-runs and produces deterministic, reproducible clustering for the auto-assigned majority.
+Phase 2 of the embeddings initiative restructures canonicalization from pure-Sonnet single-shot to a three-stage pipeline: (1) embed keywords via OpenAI text-embedding-3-small, (2) cosine-similarity pre-cluster against existing topic centroids (0.82+ auto-assign, 0.75-0.82 ambiguity band, <0.75 new topic), (3) Sonnet arbitration only for the ambiguity band and new-topic candidates. (Note: threshold was initially 0.85, lowered to 0.82 in Phase 2.1 — see separate entry.) This reduces Sonnet calls by ~60-80% on re-runs and produces deterministic, reproducible clustering for the auto-assigned majority.
 
 Three modes: `legacy` (unchanged), `hybrid` (vector-first, writes primary columns), `shadow_hybrid` (vector-first, writes shadow_* columns only). Shadow mode preserves legacy output untouched for A/B comparison.
 
