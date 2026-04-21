@@ -80,15 +80,18 @@ Hybrid handles ONLY `canonical_key` and `canonical_topic` clustering. Other fiel
 - [x] Outcome: **SUCCESS WITH OBSERVATIONS**
 - [x] Report: `docs/phase-2.3b-sma-promotion-2026-04-20.md`
 
-### Phase 2.3c: Fix canonical_key drift (next session)
-- [ ] Debug why hybrid pre-cluster's `existingTopics` shows 14 topics when prior snapshot has 12 distinct keys
-- [ ] Fix topicMap construction to be purely snapshot-derived when all keywords are hybrid-origin
-- [ ] Re-run SMA in hybrid mode to validate fix (expect 0 drift on locked audit)
-- [ ] Then proceed to IMA promotion
+### Phase 2.3c: Lock Determinism Bug Fix (complete — 2026-04-20)
+- [x] Root cause diagnosed: cross-cycle contamination from legacy writing to shared columns in hybrid mode
+- [x] Fix: `buildLegacyUpdatePayload()` excludes canonical_key/canonical_topic/cluster when `canonicalizeMode === 'hybrid'`
+- [x] 9 unit tests added (`src/agents/canonicalize/__tests__/build-legacy-payload.test.ts`)
+- [x] 64/64 tests passing, typecheck clean
+- [x] SMA re-run confidence check: 0 drift, all metrics match baseline
+- [x] Report: `docs/phase-2.3c-lock-determinism-fix-2026-04-20.md`
 
-### Phase 2.4: IMA Promotion (blocked on 2.3c)
-- [ ] IMA has active clusters and committed content — requires deterministic prior-lock
-- [ ] Must validate canonical_key drift fix first
+### Phase 2.4: IMA Promotion (next session — unblocked by 2.3c)
+- [ ] IMA has active clusters and committed content — requires deterministic prior-lock (now confirmed)
+- [ ] Promote IMA to `canonicalize_mode='hybrid'`
+- [ ] Run full pipeline and validate lock stability
 
 ### Phase 3: Scout Deduplication (future)
 - [ ] Reuse embedding infrastructure for Scout keyword deduplication

@@ -38,6 +38,7 @@ import {
 } from './dataforseo-llm-mentions.js';
 import { isCommitted } from './rerun-utils.js';
 import { parseBlueprintMarkdown } from './sync-to-dashboard.js';
+import { buildLegacyUpdatePayload } from '../src/agents/canonicalize/build-legacy-payload.js';
 
 // ============================================================
 // .env loader (same pattern as sync-to-dashboard)
@@ -2637,17 +2638,27 @@ Default to "Service" when the category is ambiguous for a local service business
   const BATCH_SIZE = 50;
   for (let i = 0; i < allGroups.length; i += BATCH_SIZE) {
     const chunk = allGroups.slice(i, i + BATCH_SIZE);
-    const promises = chunk.map(({ group, kwId }) =>
-      (sb as any).from('audit_keywords').update({
-        canonical_key: group.canonical_key,
-        canonical_topic: group.canonical_topic,
-        cluster: group.canonical_topic,
-        is_brand: group.keywords[0].is_brand,
-        intent_type: group.keywords[0].intent_type,
-        intent: group.keywords[0].intent_type,  // backfill intent for dashboard display
-        is_near_me: nearMeIds.has(kwId),
-        primary_entity_type: group.primary_entity_type ?? 'Service',
-      }).eq('id', kwId),
+    const promises = chunk.map(({ group, kwId }) => {
+      // Lock determinism fix (Phase 2.3c, 2026-04-20):
+      // In hybrid mode, canonical_key/canonical_topic/cluster are written exclusively by
+      // the hybrid persist step. Legacy must NOT write them because if hybrid fails after
+      // legacy writes, the DB is left with legacy's stochastic output. Any retry's
+      // priorHybridSnapshot then captures this contaminated state instead of the true prior
+      // hybrid values. This caused 16.5% canonical_key drift on SMA's Phase 2.3b promotion.
+      // Test: src/agents/canonicalize/__tests__/build-legacy-payload.test.ts
+      const payload = buildLegacyUpdatePayload(
+        {
+          isBrand: group.keywords[0].is_brand,
+          intentType: group.keywords[0].intent_type,
+          isNearMe: nearMeIds.has(kwId),
+          primaryEntityType: group.primary_entity_type ?? 'Service',
+          canonicalKey: group.canonical_key,
+          canonicalTopic: group.canonical_topic,
+        },
+        canonicalizeMode,
+      );
+      return (sb as any).from('audit_keywords').update(payload).eq('id', kwId);
+    },
     );
     const results = await Promise.all(promises);
     for (const r of results) {

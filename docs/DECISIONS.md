@@ -4,11 +4,23 @@ Non-obvious choices that would look wrong without context. Check here before "fi
 
 ---
 
+**2026-04-20: Lock determinism fix — legacy write exclusion in hybrid mode (Phase 2.3c)**
+
+Root cause of 16.5% canonical_key drift on SMA promotion: legacy and hybrid write to the SAME columns (`canonical_key`, `canonical_topic`, `cluster`) on `audit_keywords`. In hybrid mode, legacy's write is redundant — hybrid overwrites it. But if hybrid fails AFTER legacy writes (as happened during SMA's Phase 2.3b: env bug crashed hybrid, legacy's stochastic Sonnet output remained in DB), any retry captures the contaminated state via `priorHybridSnapshot`.
+
+Fix: `buildLegacyUpdatePayload()` in `src/agents/canonicalize/build-legacy-payload.ts` — when `canonicalizeMode === 'hybrid'`, payload excludes `canonical_key`, `canonical_topic`, `cluster`. These are written exclusively by hybrid's persist step. In legacy/shadow modes, no behavioral change.
+
+The lock predicate and topicMap construction were NOT the bug — both are correct. The 14-topic count (vs prior 12) was from legacy Sonnet's fresh stochastic output, not from a hybrid module defect. SMA's current 14-key state is accepted as the new baseline (legacy contamination from the failed attempt is now the committed state).
+
+Future consideration: dedicated hybrid columns (not sharing with legacy) would make this contamination vector architecturally impossible. Not scoped — current fix is sufficient. Report: `docs/phase-2.3c-lock-determinism-fix-2026-04-20.md`.
+
+---
+
 **2026-04-20: SMA promoted to hybrid canonicalize — SUCCESS WITH OBSERVATIONS**
 
 SMA (`c07eb21d`) promoted from `canonicalize_mode='legacy'` to `'hybrid'`. First production hybrid client. Pipeline ran to completion. All committed content preserved, performance data intact, no data loss.
 
-Key observation: 21 of 127 keywords (16.5%) have different canonical_key values post-promotion despite all being `prior_assignment_locked`. Root cause: hybrid pre-cluster's `existingTopics` map shows 14 topics when the prior snapshot contains 12 distinct keys, suggesting the topicMap is partially built from legacy's fresh Sonnet output rather than purely from the snapshot. Zero operational impact on SMA (0 active clusters, no committed content affected). Must be fixed before promoting IMA (which has active clusters).
+Key observation: 21 of 127 keywords (16.5%) had different canonical_key values post-promotion despite all being `prior_assignment_locked`. Root cause diagnosed and fixed in Phase 2.3c (see entry above). Zero operational impact on SMA (0 active clusters, no committed content affected).
 
 Infrastructure changes: Added `canonicalize_mode TEXT DEFAULT 'legacy'` column to `audits` table (was CLI flag only). Fixed env propagation bug in `pipeline-generate.ts` (same as `run-canonicalize.ts` fix from shadow validation). Report: `docs/phase-2.3b-sma-promotion-2026-04-20.md`.
 
