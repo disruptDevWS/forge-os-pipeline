@@ -745,7 +745,8 @@ export async function rebuildClustersAndRollups(sb: SupabaseClient, auditId: str
     .from('audit_keywords')
     .select('keyword, rank_pos, search_volume, cpc, delta_traffic, delta_revenue_low, delta_revenue_mid, delta_revenue_high, delta_leads_low, delta_leads_high, canonical_key, canonical_topic, cluster, intent_type, intent, is_brand, is_near_miss, topic, primary_entity_type')
     .eq('audit_id', auditId)
-    .not('canonical_key', 'is', null);
+    .not('canonical_key', 'is', null)
+    .limit(10000);
 
   let clusterMap = buildClusterMap((kwRows ?? []) as any[]);
 
@@ -2386,7 +2387,8 @@ async function syncMichael(
     const { data: allKw } = await sb
       .from('audit_keywords')
       .select('id, keyword, ranking_url')
-      .eq('audit_id', auditId);
+      .eq('audit_id', auditId)
+      .limit(10000);
 
     let siloUpdated = 0;
     for (const row of (allKw ?? []) as any[]) {

@@ -72,7 +72,8 @@ export async function runHybridCanonicalize(
   const { data: kwData, error: kwErr } = await (sb as any)
     .from('audit_keywords')
     .select('id, keyword, canonical_key, canonical_topic, classification_method')
-    .eq('audit_id', auditId);
+    .eq('audit_id', auditId)
+    .limit(10000);
 
   if (kwErr) throw new Error(`Failed to fetch keywords: ${kwErr.message}`);
   const keywords = (kwData ?? []) as Array<{
