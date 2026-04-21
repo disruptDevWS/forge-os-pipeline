@@ -4,6 +4,18 @@ Non-obvious choices that would look wrong without context. Check here before "fi
 
 ---
 
+**2026-04-20: IMA promoted to hybrid canonicalize — SUCCESS (Phase 2.4)**
+
+IMA (`08409ae8`) promoted from `canonicalize_mode='legacy'` to `'hybrid'`. First fresh-evaluation hybrid run (no prior hybrid state, all 1,100 keywords evaluated from scratch). Pipeline completed all phases (3c→6d + client brief). 76 distinct canonical_keys (up from 66), 64 clusters (up from 62), 89 vector auto-assigned, 905 Sonnet arbitrated, 0 prior-locked.
+
+Committed page `how-to-become-an-emt-in-idaho` preserved (status=in_progress, source=michael). Its canonical_key changed from orphaned `emt_training` → `emt_career_info` (improvement — now maps to live cluster). Performance snapshots preserved (32/32). Backfill rate improved from 45.8% → 54.7%.
+
+**Operational gap flagged:** `canonicalize_mode` column on `audits` is documentation only — pipeline-server-standalone.ts, edge functions, and dashboard re-triggers do NOT read it. The actual mechanism is the `--canonicalize-mode` CLI flag in run-pipeline.sh. Manual re-triggers from Settings page run whatever the pipeline server defaults to. This is acceptable for now (both clients are hybrid, all new audits will get the right default once the server reads the column) but should be addressed in an upcoming session.
+
+Phase 2.3c lock determinism fix is present but not load-bearing this run (no prior hybrid state to contaminate). Becomes load-bearing on next IMA re-canonicalize. Report: `docs/phase-2.4-ima-promotion-2026-04-20.md`.
+
+---
+
 **2026-04-20: Lock determinism fix — legacy write exclusion in hybrid mode (Phase 2.3c)**
 
 Root cause of 16.5% canonical_key drift on SMA promotion: legacy and hybrid write to the SAME columns (`canonical_key`, `canonical_topic`, `cluster`) on `audit_keywords`. In hybrid mode, legacy's write is redundant — hybrid overwrites it. But if hybrid fails AFTER legacy writes (as happened during SMA's Phase 2.3b: env bug crashed hybrid, legacy's stochastic Sonnet output remained in DB), any retry captures the contaminated state via `priorHybridSnapshot`.

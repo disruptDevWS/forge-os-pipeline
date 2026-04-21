@@ -88,10 +88,17 @@ Hybrid handles ONLY `canonical_key` and `canonical_topic` clustering. Other fiel
 - [x] SMA re-run confidence check: 0 drift, all metrics match baseline
 - [x] Report: `docs/phase-2.3c-lock-determinism-fix-2026-04-20.md`
 
-### Phase 2.4: IMA Promotion (next session — unblocked by 2.3c)
-- [ ] IMA has active clusters and committed content — requires deterministic prior-lock (now confirmed)
-- [ ] Promote IMA to `canonicalize_mode='hybrid'`
-- [ ] Run full pipeline and validate lock stability
+### Phase 2.4: IMA Promotion (complete — 2026-04-20)
+- [x] IMA promoted from `canonicalize_mode='legacy'` to `'hybrid'`
+- [x] Full pipeline run completed (Phases 3c→6d + client brief) — SUCCESS
+- [x] First fresh-evaluation hybrid run: 89 auto-assigned, 905 arbitrated, 0 prior-locked
+- [x] Canonical keys: 66 → 76 (3 deprecated, 13 new)
+- [x] Committed page `how-to-become-an-emt-in-idaho` preserved, canonical_key improved (`emt_training` → `emt_career_info`)
+- [x] Performance snapshots preserved (32/32), cluster strategy 0/0
+- [x] Backfill rate improved from 45.8% → 54.7%
+- [x] Phase 2.3c contamination fix present but not load-bearing (no prior hybrid state)
+- [x] Report: `docs/phase-2.4-ima-promotion-2026-04-20.md`
+- [x] **Both production clients (SMA + IMA) now on hybrid. Core rollout sequence complete.**
 
 ### Phase 3: Scout Deduplication (future)
 - [ ] Reuse embedding infrastructure for Scout keyword deduplication
