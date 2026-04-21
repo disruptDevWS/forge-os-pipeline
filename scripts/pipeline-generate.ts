@@ -2429,11 +2429,12 @@ export async function runCanonicalize(sb: SupabaseClient, auditId: string, domai
   const canonGeo = resolveGeoScope(auditRow);
   const locationCtx = canonGeo.label;
 
-  // Fetch all keywords for this audit
+  // Fetch all keywords for this audit (Supabase default limit is 1000; use explicit large limit)
   const { data: kwData, error: kwErr } = await sb
     .from('audit_keywords')
     .select('id, keyword, intent, search_volume, topic')
-    .eq('audit_id', auditId);
+    .eq('audit_id', auditId)
+    .limit(10000);
   if (kwErr) throw new Error(`Failed to fetch keywords: ${kwErr.message}`);
   const keywords = (kwData ?? []) as { id: string; keyword: string; intent: string | null; search_volume: number; topic: string | null }[];
 
