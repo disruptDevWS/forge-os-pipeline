@@ -2418,11 +2418,11 @@ async function syncMichael(
       }
 
       if (silo) {
-        await sb.from('audit_keywords').update({ cluster: silo }).eq('id', row.id);
+        await (sb as any).from('audit_keywords').update({ silo }).eq('id', row.id);
         siloUpdated++;
       }
     }
-    console.log(`  [michael] Backfilled cluster (silo) for ${siloUpdated} of ${(allKw ?? []).length} keywords`);
+    console.log(`  [michael] Backfilled silo for ${siloUpdated} of ${(allKw ?? []).length} keywords`);
   }
 
   // Record snapshot and update staleness

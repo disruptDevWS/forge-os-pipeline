@@ -30,6 +30,7 @@ export const PHASE_MAX_TOKENS: Record<string, number> = {
   'keyword-research-extract': 4096,
   'keyword-research-synth': 16384,
   canonicalize: 4096,
+  classify: 4096,
   'canonicalize-arbitration': 16384,
   competitors: 4096,
   validator: 16384,

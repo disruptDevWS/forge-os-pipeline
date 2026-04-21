@@ -2461,6 +2461,88 @@ export async function runCanonicalize(sb: SupabaseClient, auditId: string, domai
     }
   }
 
+  // ── HYBRID MODE: Classification extraction + hybrid path (Session B) ──
+  // In hybrid mode, skip legacy Sonnet grouping entirely.
+  // Path: classification extraction (Haiku + rules) → hybrid pre-cluster + arbitrate + persist → is_near_miss clear → rebuild
+  if (canonicalizeMode === 'hybrid') {
+    // Step 1: Lightweight classification extraction
+    const { _setClassifyCallClaude, classifyKeywords } = await import('../src/agents/canonicalize/classify-keywords.js');
+    _setClassifyCallClaude(callClaude);
+
+    // Load client context for brand detection
+    let clientBusinessName: string | undefined;
+    let competitorNames: string[] | undefined;
+    let verticalDefault = 'Service';
+    try {
+      const { data: auditCtx } = await (sb as any).from('audits').select('client_context').eq('id', auditId).maybeSingle();
+      if (auditCtx?.client_context) {
+        const ctx = typeof auditCtx.client_context === 'string' ? JSON.parse(auditCtx.client_context) : auditCtx.client_context;
+        clientBusinessName = ctx.business_name || ctx.company_name;
+        competitorNames = ctx.competitors;
+        if (ctx.vertical === 'education' || ctx.vertical === 'training') verticalDefault = 'Course';
+      }
+    } catch {
+      // Non-fatal: classification will use domain-based brand detection
+    }
+
+    const classifyResult = await classifyKeywords(sb, keywords as any, {
+      auditId,
+      domain,
+      serviceKey,
+      canonicalizeMode,
+      clientBusinessName,
+      competitorNames,
+      verticalDefault,
+    });
+
+    // Step 2: is_near_miss clear (depends on is_brand, intent_type now written)
+    const BATCH_SIZE = 50;
+    const { data: staleNearMiss } = await sb.from('audit_keywords')
+      .select('id')
+      .eq('audit_id', auditId)
+      .eq('is_near_miss', true)
+      .or('is_brand.eq.true,intent_type.eq.navigational');
+    if (staleNearMiss && staleNearMiss.length > 0) {
+      const ids = staleNearMiss.map((r: any) => r.id);
+      for (let i = 0; i < ids.length; i += BATCH_SIZE) {
+        const chunk = ids.slice(i, i + BATCH_SIZE);
+        await sb.from('audit_keywords')
+          .update({ is_near_miss: false, delta_revenue_low: 0, delta_revenue_mid: 0, delta_revenue_high: 0, delta_leads_low: 0, delta_leads_high: 0, delta_traffic: 0 })
+          .in('id', chunk);
+      }
+      console.log(`  [canonicalize] Cleared is_near_miss for ${ids.length} branded/navigational keywords`);
+    }
+
+    // Step 3: Hybrid pre-cluster + arbitrate + persist
+    const { _setCallClaude } = await import('../src/agents/canonicalize/hybrid/arbitrator.js');
+    _setCallClaude(callClaude);
+
+    const { runHybridCanonicalize } = await import('../src/agents/canonicalize/hybrid/index.js');
+    const hybridResult = await runHybridCanonicalize(sb, auditId, domain, canonicalizeMode, priorHybridSnapshot);
+    console.log(`  [canonicalize] Hybrid path completed: ${hybridResult.autoAssigned} auto-assigned, ${hybridResult.arbitrated} arbitrated, ${hybridResult.priorLocked} prior-locked`);
+
+    // Audit trail
+    const runDate = new Date().toISOString().slice(0, 10);
+    await (sb as any).from('agent_runs').insert({
+      audit_id: auditId,
+      agent_name: 'canonicalize',
+      run_date: runDate,
+      status: 'completed',
+      metadata: {
+        mode: canonicalizeMode,
+        keyword_count: keywords.length,
+        classified: classifyResult.classified,
+        haiku_calls: classifyResult.haikuCalls,
+        hybrid_auto_assigned: hybridResult.autoAssigned,
+        hybrid_arbitrated: hybridResult.arbitrated,
+        hybrid_prior_locked: hybridResult.priorLocked,
+      },
+    });
+
+    return; // Hybrid path complete — skip legacy path below
+  }
+
+  // ── LEGACY MODE: Full legacy Sonnet grouping path ─────────────
   // Build batches — if > 300 keywords, chunk by topic groups
   const MAX_BATCH = 250;
   let batches: typeof keywords[];
@@ -2689,8 +2771,8 @@ Default to "Service" when the category is ambiguous for a local service business
     console.log(`  [canonicalize] Cleared is_near_miss for ${ids.length} branded/navigational keywords`);
   }
 
-  // ── Mode dispatch: hybrid and shadow modes ──────────────────
-  if (canonicalizeMode === 'hybrid' || canonicalizeMode === 'shadow') {
+  // ── Mode dispatch: shadow mode (hybrid returns early above) ──
+  if (canonicalizeMode === 'shadow') {
     try {
       // Inject callClaude into the hybrid arbitrator (scripts/ is outside src/ rootDir)
       const { _setCallClaude } = await import('../src/agents/canonicalize/hybrid/arbitrator.js');
@@ -2700,11 +2782,7 @@ Default to "Service" when the category is ambiguous for a local service business
       const hybridResult = await runHybridCanonicalize(sb, auditId, domain, canonicalizeMode, priorHybridSnapshot);
       console.log(`  [canonicalize] Hybrid path completed: ${hybridResult.autoAssigned} auto-assigned, ${hybridResult.arbitrated} arbitrated, ${hybridResult.priorLocked} prior-locked`);
     } catch (err: any) {
-      if (canonicalizeMode === 'shadow') {
-        console.warn(`  [canonicalize] Shadow hybrid path failed (non-fatal): ${err.message}`);
-      } else {
-        throw err; // hybrid mode: let it propagate
-      }
+      console.warn(`  [canonicalize] Shadow hybrid path failed (non-fatal): ${err.message}`);
     }
   }
 

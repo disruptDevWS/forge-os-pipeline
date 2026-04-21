@@ -69,7 +69,8 @@
 | `ranking_url` | Pipeline | Dashboard | |
 | `intent` | Pipeline | Dashboard | |
 | `topic` | Pipeline | Dashboard | |
-| `cluster` | Pipeline | Dashboard | = topic initially |
+| `cluster` | Pipeline | Dashboard | = canonical_topic after Phase 3c (canonical_topic-exclusive post-Session-B) |
+| `silo` | Pipeline (Phase 6b) | Dashboard | syncMichael silo backfill. NULL until syncMichael matches keyword to a silo. Added migration 019. |
 | `canonical_key` | Pipeline (Phase 3c) | Dashboard | Geo-agnostic slug |
 | `canonical_topic` | Pipeline (Phase 3c) | Dashboard | Display name |
 | `is_near_miss` | Pipeline | Dashboard | |
@@ -97,7 +98,7 @@
 | `delta_leads_low/high` | Pipeline | Dashboard | |
 | `delta_revenue_low/mid/high` | Pipeline | Dashboard | |
 
-**Pipeline writes**: Phase 2 (source=keyword_research), Phase 3/3b (source=ranked), Phase 3c (canonical_key, canonical_topic, is_brand, intent_type, classification metadata in hybrid/shadow modes)
+**Pipeline writes**: Phase 2 (source=keyword_research), Phase 3/3b (source=ranked), Phase 3c (canonical_key, canonical_topic, classification metadata in hybrid/shadow modes), Phase 3c classification extraction (is_brand, intent_type, primary_entity_type, intent, canonicalize_mode — via Haiku+rules in hybrid mode, via legacy Sonnet in legacy mode), Phase 6b syncMichael (silo)
 **Dashboard reads**: `useAllKeywords()`, `useAssumptionsPreview()`, `useAudit()` relation
 **Dashboard writes**: `useDeleteKeywords()` (DELETE by id)
 

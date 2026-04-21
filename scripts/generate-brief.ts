@@ -185,18 +185,21 @@ async function gatherContext(sb: SupabaseClient, req: PamRequest) {
   const brief = (pageData?.page_brief ?? {}) as Record<string, any>;
   const canonicalKey = (pageData as any)?.canonical_key ?? null;
 
-  // 3. Keywords for this silo/cluster
+  // 3. Keywords for this page's cluster (via canonical_key)
+  // Session B: join through canonical_key instead of silo/cluster.
+  // canonical_key is the stable cluster identity. Pages with NULL canonical_key
+  // fall through to the volume-based fallback.
   const siloName = req.silo_name ?? pageData?.silo ?? null;
   let keywords: KeywordRow[] = [];
-  if (siloName) {
-    const { data } = await sb
+  if (canonicalKey) {
+    const { data } = await (sb as any)
       .from('audit_keywords')
       .select('keyword, search_volume, position, intent, ranking_url, cpc')
       .eq('audit_id', req.audit_id)
-      .eq('cluster', siloName);
+      .eq('canonical_key', canonicalKey);
     keywords = (data ?? []) as KeywordRow[];
   }
-  // Fallback: all keywords if cluster match returned empty
+  // Fallback: top keywords by volume if canonical_key match returned empty
   if (keywords.length === 0) {
     const { data } = await sb
       .from('audit_keywords')
@@ -386,6 +389,7 @@ async function gatherContext(sb: SupabaseClient, req: PamRequest) {
         .select('entity_map')
         .eq('audit_id', req.audit_id)
         .eq('canonical_key', canonicalKey)
+        .eq('status', 'active')
         .maybeSingle();
       entityMap = (strategyRow as any)?.entity_map ?? null;
     } catch {
@@ -610,6 +614,7 @@ async function gatherContext(sb: SupabaseClient, req: PamRequest) {
         .select('ai_optimization_targets')
         .eq('audit_id', req.audit_id)
         .eq('canonical_key', canonicalKey)
+        .eq('status', 'active')
         .maybeSingle();
       const targets = (strategyRow2 as any)?.ai_optimization_targets ?? [];
       if (Array.isArray(targets) && targets.length > 0) {

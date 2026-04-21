@@ -4,6 +4,52 @@ Non-obvious choices that would look wrong without context. Check here before "fi
 
 ---
 
+**2026-04-21: Session B — Legacy Sonnet eliminated in hybrid mode; classification extracted to Haiku + rules**
+
+In hybrid mode, legacy Sonnet grouping is skipped entirely. The new path: classification extraction (Haiku + deterministic rules) → hybrid pre-cluster + arbitrate + persist → rebuild. Legacy mode retains the full legacy Sonnet path unchanged. Shadow mode runs legacy Sonnet + hybrid (unchanged).
+
+Classification extraction decisions per field:
+- `is_brand`: Hybrid — deterministic string match against domain/business name/competitor names, Haiku fallback for ambiguous cases (~65% deterministic, ~35% Haiku)
+- `intent_type`: Haiku only — deterministic rules too error-prone (21-34% coverage, 22-30% error rate)
+- `primary_entity_type`: Hybrid — vertical default (e.g., "Course" for education) + Haiku for ambiguous cases (~85% deterministic)
+- `is_near_me`: Deterministic (unchanged) — `keyword.includes(' near me')`
+- `intent`: Backward-compatible copy of `intent_type` (addendum correction #4)
+
+The extraction path writes `canonicalize_mode` on every keyword it processes, maintaining the Session A invariant. Cost: ~$0.02-0.03 per 1000 keywords vs ~$0.30-0.50 for legacy Sonnet (~90-95% reduction).
+
+Code: `src/agents/canonicalize/classify-keywords.ts` (new), integrated in `pipeline-generate.ts` `runCanonicalize()`.
+
+---
+
+**2026-04-21: Session B — `audit_keywords.cluster` column split: `silo` column added (migration 019)**
+
+The `cluster` column on `audit_keywords` was overloaded: it stored either `canonical_topic` (from canonicalize) or `silo_name` (from syncMichael's backfill). Migration 019 adds a dedicated `silo` column, backfills it from `cluster` where values differed from `canonical_topic`, and restores `cluster` to be canonical_topic-exclusive.
+
+syncMichael now writes to `silo` instead of `cluster`. Pam now joins keywords via `canonical_key` instead of `cluster` (locked per Session B addendum — architecturally correct long-term join). Pages with NULL `canonical_key` fall through to volume-based fallback (top 50 by search_volume).
+
+Accepted consequence: pages with NULL `canonical_key` (~45% IMA, ~14% forgegrowth, ~57% ecohvac) get less keyword context in briefs until Phase 3+ embedding-based backfill raises coverage.
+
+---
+
+**2026-04-21: Pam filters `cluster_strategy` by `status='active'` — prevents deprecated strategy leakage**
+
+Pam's `generate-brief.ts` had two queries against `cluster_strategy` (entity_map and ai_optimization_targets) that didn't filter on `status`. After re-canonicalization orphans a strategy (sets status='deprecated'), Pam could pull stale strategy data for briefs. Both queries now include `.eq('status', 'active')`. Fallback behavior when no active strategy exists: `entityMap=null`, `clusterAiTargets=[]` — brief still generates, just without strategy enrichment.
+
+---
+
+**2026-04-21: syncMichael execution_pages.status protection is already comprehensive — no additional guard needed**
+
+Session B Check 5 verified that `isCommitted()` in `rerun-utils.ts` + syncMichael's manual SELECT→UPDATE/INSERT branching in `sync-to-dashboard.ts` already protects `execution_pages.status` from being reset on re-runs. The `isCommitted()` predicate covers: non-`not_started` status (catches Oscar `in_progress`/`review`), `source='cluster_strategy'`, `source='manual'`, and `published_at != null`. All paths confirmed:
+
+- Strategic rerun + committed page: metadata-only update, status preserved.
+- Strategic rerun + non-committed page: status reset to `not_started` (intentional — allows re-processing).
+- First-run / failure-resume + existing page: metadata-only update, status preserved.
+- New page: inserted as `not_started`.
+
+No new guard was needed. If future status values are added (beyond `not_started`, `in_progress`, `review`), verify they are covered by `isCommitted()`.
+
+---
+
 **2026-04-21: Column-wiring discipline — columns added to `audits` must be wired in the same phase they're introduced**
 
 The `canonicalize_mode` column was added to `audits` in migration (Phase 2.3b, 2026-04-20) but neither `handleTrigger` nor `handleRecanonicalize` in `pipeline-server-standalone.ts` read it. The column existed as documentation only — the actual mechanism was the `--canonicalize-mode` CLI flag hardcoded to `legacy` in `run-pipeline.sh`. Both production clients (SMA, IMA) were promoted to hybrid via manual flag overrides, masking the gap. The fix (Session A, 2026-04-21) added DB lookups in both handlers to read `audits.canonicalize_mode` and pass it to downstream scripts.
