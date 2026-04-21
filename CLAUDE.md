@@ -13,11 +13,14 @@ These documents are the source of truth. If a phase responsibility changes, upda
 
 ## Session End
 
-Before ending a session, update these documents if significant changes were made:
-- **MEMORY.md** — project state, decisions, and context for next session
-- **DECISIONS.md** — any non-obvious architectural choices
-- **DATA_CONTRACT.md** — any new/changed tables, columns, edge functions, or sync patterns
-- **PIPELINE.md** — any phase responsibility changes
+Before ending a session, execute this checklist:
+
+1. **Update MEMORY.md** with what was accomplished this session, what's in progress, and what's blocked.
+2. **Update PIPELINE.md** — review every section touched by this session's work. PIPELINE.md is the authoritative contract for the pipeline's behavior. If any phase, trigger path, Supabase write, CLI flag, external API, mode, threshold, or data flow changed, PIPELINE.md must reflect it before the session ends. Stale documentation causes bugs in future sessions.
+3. **Update DECISIONS.md** with any non-obvious architectural choices made this session.
+4. **Update DATA_CONTRACT.md** with any new/changed tables, columns, edge functions, or sync patterns.
+5. **Commit and push everything** including docs. Never leave uncommitted work.
+6. **List the top 3 things to start with next session** so the user has a clear handoff.
 
 ## Quick Context
 

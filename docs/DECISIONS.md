@@ -4,6 +4,24 @@ Non-obvious choices that would look wrong without context. Check here before "fi
 
 ---
 
+**2026-04-21: Column-wiring discipline — columns added to `audits` must be wired in the same phase they're introduced**
+
+The `canonicalize_mode` column was added to `audits` in migration (Phase 2.3b, 2026-04-20) but neither `handleTrigger` nor `handleRecanonicalize` in `pipeline-server-standalone.ts` read it. The column existed as documentation only — the actual mechanism was the `--canonicalize-mode` CLI flag hardcoded to `legacy` in `run-pipeline.sh`. Both production clients (SMA, IMA) were promoted to hybrid via manual flag overrides, masking the gap. The fix (Session A, 2026-04-21) added DB lookups in both handlers to read `audits.canonicalize_mode` and pass it to downstream scripts.
+
+**Principle**: When a new column is added to `audits` (or any table that controls pipeline behavior), the wiring — the code path that reads the column and acts on it — must ship in the same commit or be explicitly flagged as pending wiring with a TODO and a tracking item. "The column exists" is not the same as "the column works." The wiring gap was caught by a post-Phase-2 architectural review; it should have been caught by the migration author.
+
+NULL `canonicalize_mode` is treated as `legacy` per the column DEFAULT. If the DEFAULT ever changes, the read-site mapping in `handleTrigger` and `handleRecanonicalize` must change with it.
+
+---
+
+**2026-04-21: Sales-mode audits DO run Phase 3c and 3d — orphaned clusters on legacy prospects are historical**
+
+The post-Phase-2 architectural review (Area 4) hypothesized that foxhvacpro's 15 orphaned clusters were caused by Phase 3c being skipped in sales mode. Investigation of `run-pipeline.sh` shows Phase 3c and 3d run in ALL modes — only Phases 4 (Competitors), 5 (Gap), and 6.5 (Validator) are skipped in sales mode. The orphaned clusters on foxhvacpro and boiseserviceplumbers are historical artifacts from pre-canonicalize era runs, not a repeating pattern.
+
+No sales-mode guard was implemented. The affected clients (foxhvacpro, boiseserviceplumbers) are legacy prospects that Matt is not pursuing; they will be deleted or left as-is. If future sales-mode orphan patterns emerge, the investigation should start from the specific write path producing orphans, not from a mode-skip assumption.
+
+---
+
 **2026-04-20: IMA promoted to hybrid canonicalize — SUCCESS (Phase 2.4)**
 
 IMA (`08409ae8`) promoted from `canonicalize_mode='legacy'` to `'hybrid'`. First fresh-evaluation hybrid run (no prior hybrid state, all 1,100 keywords evaluated from scratch). Pipeline completed all phases (3c→6d + client brief). 76 distinct canonical_keys (up from 66), 64 clusters (up from 62), 89 vector auto-assigned, 905 Sonnet arbitrated, 0 prior-locked.
@@ -86,7 +104,7 @@ Three modes: `legacy` (unchanged), `hybrid` (vector-first, writes primary column
 
 Re-run lock predicate has three AND clauses: (a) prior canonical_key exists, (b) that topic still exists in the current run's topic set, (c) prior classification_method IS NOT NULL (i.e., hybrid-originated). Legacy assignments (classification_method=NULL) are intentionally NOT locked — hybrid's first run after legacy reclassifies everything using vector similarity. This prevents inheriting potentially suboptimal legacy clustering decisions.
 
-Scope is deliberately narrow: hybrid handles ONLY canonical_key/canonical_topic. The is_brand, is_near_me, intent_type, primary_entity_type classifications remain Sonnet-based in the legacy path.
+Scope is deliberately narrow: hybrid handles ONLY canonical_key/canonical_topic. The is_brand, intent_type, primary_entity_type classifications remain Sonnet-based in the legacy path. `is_near_me` is deterministic (string match `keyword.includes(' near me')` at Phase 3c line ~2628 of `pipeline-generate.ts`), not Sonnet-classified.
 
 ---
 
@@ -239,7 +257,7 @@ This is NOT a Scout-level fix. Scout processes one domain at a time and has no v
 
 **2026-04-07: "Near me" keywords filtered from Scout — GBP-driven, not on-page SEO**
 
-"Near me" queries (e.g., "locksmith near me") are resolved by Google using user location + GBP signals, not on-page content. DataForSEO position data for these terms is noise — position 100 (synthetic) is meaningless, and real rankings are GBP-driven. Filtering happens in two places: (1) removed from synthetic candidate generation (saves DataForSEO budget), (2) stripped from ranked keywords after dedup, before topic filtering (catches "near me" from DataForSEO ranked results). `near_me_filtered` count added to scope.json for transparency. Phase 2 (full pipeline) is NOT changed — Phase 3c already flags with `is_near_me: true`.
+"Near me" queries (e.g., "locksmith near me") are resolved by Google using user location + GBP signals, not on-page content. DataForSEO position data for these terms is noise — position 100 (synthetic) is meaningless, and real rankings are GBP-driven. Filtering happens in two places: (1) removed from synthetic candidate generation (saves DataForSEO budget), (2) stripped from ranked keywords after dedup, before topic filtering (catches "near me" from DataForSEO ranked results). `near_me_filtered` count added to scope.json for transparency. Phase 2 (full pipeline) is NOT changed — Phase 3c already flags with `is_near_me` via deterministic string match (`keyword.includes(' near me')` in `pipeline-generate.ts`), not Sonnet classification.
 
 ---
 

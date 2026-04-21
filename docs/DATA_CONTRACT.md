@@ -2,7 +2,7 @@
 
 > **Purpose**: Authoritative map of every Supabase table, who writes it (pipeline), who reads it (dashboard), and which columns matter. Use this before adding columns, changing sync logic, or building new UI components.
 >
-> **Last updated**: 2026-04-17
+> **Last updated**: 2026-04-21
 
 ---
 
@@ -42,6 +42,7 @@
 | `status` | Both | Dashboard | TEXT: `draft`, `running`, `completed`, `failed`, `awaiting_review` |
 | `error_message` | Pipeline | Dashboard | |
 | `client_context` | Dashboard | Pipeline | JSONB: `{core_services, differentiators, service_area, notes}` |
+| `canonicalize_mode` | Dashboard / Pipeline | Pipeline | TEXT: `legacy` (default), `hybrid`, `shadow_hybrid`. Controls Phase 3c clustering algorithm. Read by `handleTrigger` and `handleRecanonicalize` to pass `--canonicalize-mode` flag to downstream scripts. |
 | `review_gate_enabled` | Dashboard | Pipeline | Boolean, default false |
 | `performance_tracking_enabled` | Dashboard | Pipeline (cron) | Boolean, default false. Opt-in for monthly cron ranking tracking. |
 | `research_snapshot_at` | Pipeline (syncJim) | Dashboard | Staleness timestamp |
@@ -536,6 +537,8 @@ Written by syncMichael (Phase 6b) and Cluster Strategy (on-demand), updated by P
 | `published_at` | Dashboard | Set when status → published |
 | `snapshot_version` | syncMichael | |
 
+**Dual taxonomy — `silo` vs `canonical_topic`**: `silo` is Michael's architectural grouping (human-readable name from blueprint silo headers). `canonical_topic` on `audit_clusters` is Phase 3c's semantic grouping. They overlap but are NOT identical — Michael may group pages differently than Phase 3c groups keywords. `canonical_key` is the contractual join between `execution_pages` and `audit_clusters`. `silo` is a display label with no foreign key relationship. The silo-match fallback in cluster activation (step 12b) bridges the gap for pages where `canonical_key` is NULL by matching `silo = canonical_topic`.
+
 **Dashboard reads**: `useExecutionPages()` → ContentPage, ImplementationPage, ClustersPage. Query filters `.neq('status','deprecated')` — deprecated rows are invisible to the dashboard.
 **Dashboard writes**: `useUpdateExecutionPageStatus()` (status), `useAddRecommendedPages()` (INSERT), `useDeprecateExecutionPage()` (sets status=deprecated, soft-delete)
 
@@ -583,9 +586,38 @@ Written by `generate-cluster-strategy.ts` (on-demand, per-cluster via `/activate
 | `entity_map` | JSONB — entity type mapping from Section 0 |
 | `ai_optimization_notes` | Section 5 prose fallback |
 | `ai_optimization_targets` | JSONB — structured AI/search targets from Section 5: `[{query, target_type, structural_pattern, applies_to_page, condition, rationale}]` |
+| `status` | TEXT: `active` (default), `deprecated`. Deprecated by `rebuildClustersAndRollups()` when canonical_key no longer exists in rebuilt clusters. Migration 014. |
+| `deprecated_at` | TIMESTAMPTZ, set when status → `deprecated`. NULL for active strategies. |
 | `model_used` | |
 
-**Dashboard reads**: `useClusterStrategy()`, `useClusterStrategyPoll()` → StrategyPage
+**Dashboard reads**: `useClusterStrategy()`, `useClusterStrategyPoll()` → StrategyPage. Dashboard should filter `status='active'` (Session B work — currently unfiltered).
+
+---
+
+## Embedding Infrastructure Tables
+
+### `embeddings`
+
+Polymorphic vector store for OpenAI text-embedding-3-small (1536 dimensions). Migration 015. Internal pipeline infrastructure — no dashboard access.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | UUID PK | Auto-generated |
+| `content_type` | TEXT NOT NULL | `keyword`, `page_section`, `cluster_seed`, `client_context` |
+| `content_id` | TEXT NOT NULL | Opaque identifier (e.g., `{audit_id}:{keyword_id}`) |
+| `content_hash` | TEXT NOT NULL | SHA-256 of `text_input`, enables cache-hit path before calling OpenAI |
+| `text_input` | TEXT NOT NULL | Original text that was embedded |
+| `embedding` | VECTOR(1536) NOT NULL | pgvector column, cosine similarity via `<=>` operator |
+| `model_version` | TEXT NOT NULL | e.g., `openai/text-embedding-3-small@2024-01` |
+| `created_at` | TIMESTAMPTZ | Auto |
+
+**Unique**: `(content_type, content_id, model_version)`
+**Indexes**: `content_hash + model_version` (cache lookup), HNSW cosine on active model version (partial), `content_type + model_version` (filtered queries)
+**RPC**: `find_similar_embeddings(query_embedding, match_content_type, match_model_version, match_threshold, match_limit, exclude_content_id)` — cosine similarity search filtered by type and model version.
+
+**Pipeline writes**: `src/embeddings/service.ts` — `embedSingle()`, `embedBatch()`. Called by hybrid canonicalize (Phase 3c) for keyword embeddings.
+**Pipeline reads**: `getEmbedding()`, `getEmbeddingsBatch()`, `findSimilar()`, `computePairwiseSimilarity()`. Used by hybrid pre-clustering for centroid computation and similarity scoring.
+**Dashboard**: No access (service_role only RLS).
 
 ---
 
@@ -750,6 +782,7 @@ Server-side view computing position changes from `ranking_snapshots`.
 | Function | Parameters | Returns | Used By |
 |----------|-----------|---------|---------|
 | `has_role` | `{_user_id, _role}` | `boolean` | AuthContext (role check loop), edge function auth |
+| `find_similar_embeddings` | `{query_embedding, match_content_type, match_model_version, match_threshold, match_limit, exclude_content_id?}` | `TABLE(content_id, similarity, text_input)` | Hybrid canonicalize centroid matching (Migration 015) |
 
 ---
 

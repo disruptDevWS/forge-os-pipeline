@@ -2,7 +2,7 @@
 
 > **This is a contract.** Every phase declares what it reads, what it writes, and what must exist before it runs. When a phase's responsibility changes, update this file in the same commit. See also: `docs/DECISIONS.md` for the "why" behind non-obvious choices.
 
-Orchestrator: `./scripts/run-pipeline.sh <domain> <email> [seed_matrix.json] [competitor_urls] [--mode sales|full|prospect] [--prospect-config <path>]`
+Orchestrator: `./scripts/run-pipeline.sh <domain> <email> [seed_matrix.json] [competitor_urls] [--mode sales|full|prospect] [--prospect-config <path>] [--canonicalize-mode legacy|hybrid|shadow]`
 
 Trigger paths:
 - **New audit:** Dashboard `useCreateAudit` → `run-audit` Edge Function → HTTP POST to Forge OS pipeline server → `run-pipeline.sh`
@@ -31,6 +31,33 @@ Core scripts:
 - `scripts/pipeline-generate.ts` — agent generation logic
 - `scripts/sync-to-dashboard.ts` — Supabase sync logic
 - `scripts/foundational_scout.sh` — DataForSEO CLI wrapper
+
+## Phase 2 Embedding Infrastructure Status (2026-04-20)
+
+Phase 2 added hybrid canonicalize mode (vector pre-clustering + Sonnet arbitration) as an alternative to legacy Sonnet-only grouping. Both production clients (SMA, IMA) are promoted to hybrid. The embedding service, hybrid module, size gate, snapshot protocol, and contamination fix are all in production.
+
+**Key components:**
+- Embedding service: `src/embeddings/` — OpenAI `text-embedding-3-small` (1536 dims) with Supabase caching via pgvector
+- Hybrid module: `src/agents/canonicalize/hybrid/` — pre-cluster + arbitrate + persist
+- Lock determinism fix: `src/agents/canonicalize/build-legacy-payload.ts` — prevents canonical field contamination
+- Migrations 016-018: pgvector RPC enhancement, classification metadata, shadow columns
+
+**Production clients:**
+
+| Client | Mode | Promoted | Keywords | Canonical Keys |
+|--------|------|----------|----------|----------------|
+| summitmedicalacademy.com | hybrid | 2026-04-20 (Phase 2.3b) | 127 | 27 |
+| idahomedicalacademy.com | hybrid | 2026-04-20 (Phase 2.4) | 1,100 | 76 |
+| All others | legacy | — | — | — |
+
+**Known limitation:** `audits.canonicalize_mode` DB column is not read by any trigger path. See Phase 3c Known Limitation and `docs/architectural-review-post-phase-2-2026-04-21.md`.
+
+**Phase 2 documentation:**
+- `docs/canonicalize-hybrid-rollout.md` — complete rollout checklist (Phases 2.1-2.4)
+- `docs/phase-2.3b-sma-promotion-2026-04-20.md` — SMA promotion report
+- `docs/phase-2.3c-lock-determinism-fix-2026-04-20.md` — contamination bug fix
+- `docs/phase-2.4-ima-promotion-2026-04-20.md` — IMA promotion report
+- `docs/architectural-review-post-phase-2-2026-04-21.md` — system-wide architectural audit
 
 ## Prerequisites (must exist before pipeline starts)
 
@@ -121,16 +148,25 @@ Phase 3b (sync jim)
              Supabase → audit_clusters, audit_rollups (preliminary — rebuilt in 3d)
       │
       ▼
-Phase 3c (Canonicalize)
-  READS:     Supabase ← audit_keywords
+Phase 3c (Canonicalize) — supports legacy and hybrid modes
+  READS:     Supabase ← audit_keywords, audits (canonicalize_mode)
+  MODES:     legacy (Sonnet-only), hybrid (vector pre-clustering + Sonnet arbitration),
+             shadow (both paths, legacy authoritative)
   PRODUCES:  Supabase → audit_keywords (canonical_key, canonical_topic, cluster,
-             intent_type, is_brand, is_near_me)
+             intent_type, is_brand, is_near_me, classification_method,
+             similarity_score, canonicalize_mode)
+  EXTERNAL:  OpenAI text-embedding-3-small (hybrid/shadow only)
   POST-STEP: Clears is_near_miss for branded/navigational keywords
       │
       ▼
 Phase 3d (Rebuild Clusters)
-  READS:     Supabase ← audit_keywords (with canonical_key from 3c)
-  PRODUCES:  Supabase → audit_clusters (DELETE+INSERT), audit_rollups (DELETE+INSERT)
+  READS:     Supabase ← audit_keywords (with canonical_key from 3c),
+             audit_clusters (activation status preservation),
+             cluster_strategy (deprecation of orphaned strategies)
+  PRODUCES:  Supabase → audit_clusters (DELETE+INSERT with status preservation),
+             audit_rollups (DELETE+INSERT),
+             cluster_strategy (deprecated orphaned rows),
+             execution_pages (cluster_active preserved/deactivated)
   WHY:       3b builds clusters before canonical_key exists; 3d rebuilds using
              canonical groupings so "ac repair boise" + "ac repair boise id" merge
       │
@@ -478,21 +514,88 @@ Each `audit_keywords` row includes revenue estimates: `delta_revenue_low/mid/hig
 
 ### Phase 3c: Canonicalize — Semantic Topic Grouping
 
-**Function:** `runCanonicalize()` | **Model:** Claude Sonnet (sync, batches of up to 250)
+**Function:** `runCanonicalize()` in `pipeline-generate.ts` | **Hybrid module:** `src/agents/canonicalize/hybrid/`
 
-Batches all `audit_keywords` (up to 250 per call) through Sonnet for semantic grouping. Returns `canonical_key` (slug), `canonical_topic` (display name), `is_brand`, `intent_type`, `primary_entity_type` per keyword.
+**Modes:** Controlled by `--canonicalize-mode` CLI flag (default: `legacy`). The `audits.canonicalize_mode` DB column stores the intended mode per client but is **not yet wired** to trigger paths — see Known Limitation below.
 
-**Near-me flagging:** After grouping, flags keywords containing "near me" with `is_near_me: true`. This supplements the flags already set by KeywordResearch on seeded keywords.
+- **Legacy** (`--canonicalize-mode legacy`): Sonnet-only batching (up to 250 keywords/call). Returns `canonical_key`, `canonical_topic`, `is_brand`, `intent_type`, `primary_entity_type` per keyword.
+- **Hybrid** (`--canonicalize-mode hybrid`): Two-stage pipeline: Stage 1 (vector pre-clustering via OpenAI embeddings) + Stage 2 (Sonnet arbitration for edge cases). Authoritative output. Classification fields (`is_brand`, `intent_type`, `primary_entity_type`) still use the legacy Sonnet path; canonical grouping (`canonical_key`, `canonical_topic`, `cluster`) written exclusively by hybrid persist.
+- **Shadow** (`--canonicalize-mode shadow`): Runs both paths. Legacy output written first (authoritative), hybrid output written to `shadow_*` columns for comparison. Used during Phase 2 validation; not used in production post-promotion.
 
-**Post-canonicalize cleanup:** Clears `is_near_miss` (and zeroes revenue fields) for any keywords where canonicalize set `is_brand=true` or `intent_type=navigational`, since these shouldn't appear in striking distance opportunities.
+**Production status (2026-04-20):** SMA and IMA are promoted to hybrid mode. All other audits remain on legacy.
 
-**Entity type classification:** Each keyword group receives a `primary_entity_type` (Service, Course, Product, LocalBusiness, FAQPage, Article). This flows downstream: Phase 3d aggregates to `audit_clusters`, Cluster Strategy uses it for Section 0 Entity Map, Pam uses it for Page Identity. Prompt includes split/merge decision rules and informational keyword placement rules.
+#### Hybrid canonicalize pipeline (`src/agents/canonicalize/hybrid/`)
 
-**Supabase writes:** `audit_keywords` UPDATE (canonical_key, canonical_topic, cluster, is_brand, intent_type, is_near_me, primary_entity_type)
+**Stage 1 — Vector Pre-Clustering** (`hybrid/pre-cluster.ts`):
+1. Collapse keyword variants by content hash (SHA-256 of normalized text)
+2. Embed unique hashes via OpenAI `text-embedding-3-small` (1536 dimensions, cached in Supabase `embeddings` table)
+3. Compute in-memory centroids for existing canonical topics
+4. Classify each hash against centroids:
 
-**Why before Competitors:** Clean canonical keys eliminate duplicate SERP calls (e.g., "plumber boise" and "plumber boise id" map to the same canonical_key).
+| Classification | Condition | Action |
+|---------------|-----------|--------|
+| `prior_assignment_locked` | Prior hybrid assignment exists + topic still active | Keep prior assignment (re-run stability) |
+| `vector_auto_assign` | Single centroid match ≥ 0.82 AND cluster has ≥ 3 members | Auto-assign to cluster |
+| `sonnet_arbitration_size_gated` | Single match ≥ 0.82 BUT cluster < 3 members | Route to Sonnet (62.7% redirect rate observed) |
+| Ambiguous | Multiple matches ≥ 0.82 OR matches in 0.75–0.82 band | Route to Sonnet |
+| `new_topic_candidate` | No matches ≥ 0.75 | Route to Sonnet for new topic creation |
+
+**Constants:** `AUTO_ASSIGN_THRESHOLD = 0.82` (lowered from 0.85 on 2026-04-20, Phase 2.1). `AMBIGUITY_LOWER_BOUND = 0.75`. `MIN_CLUSTER_SIZE_FOR_AUTO_ASSIGN = 3` (Phase 2.2 size gate).
+
+**Stage 2 — Sonnet Arbitration** (`hybrid/arbitrator.ts`):
+- Batches of up to 40 unresolved cases per Sonnet call
+- Prompt includes existing topic list + unresolved cases with vector match scores
+- Decisions: `assign_existing`, `create_new`, `merge_candidate`
+- New topics from earlier batches become context for later batches
+
+**Persist** (`hybrid/persist.ts`):
+- Hybrid mode: writes `canonical_key`, `canonical_topic`, `cluster`, `classification_method`, `similarity_score`, `canonicalize_mode` to primary columns
+- Shadow mode: writes to `shadow_canonical_key`, `shadow_canonical_topic`, etc.
+- Batches of 50
+
+#### Lock determinism fix (Phase 2.3c)
+
+In hybrid mode, legacy Sonnet still runs for classification fields but **must not write** `canonical_key`, `canonical_topic`, or `cluster`. These are written exclusively by the hybrid persist step. `buildLegacyUpdatePayload()` (`src/agents/canonicalize/build-legacy-payload.ts:33-37`) enforces this exclusion when `canonicalizeMode === 'hybrid'`.
+
+**Why:** If hybrid fails after legacy writes, the DB is left with legacy's stochastic output. Any retry's `priorHybridSnapshot` then captures this contaminated state. This caused 16.5% canonical_key drift on SMA's Phase 2.3b promotion. See `docs/phase-2.3c-lock-determinism-fix-2026-04-20.md`.
+
+#### Classification fields (all modes)
+
+- `is_brand` — Sonnet-classified (legacy path)
+- `intent_type` — Sonnet-classified (legacy path)
+- `is_near_me` — **Deterministic**: `keyword.toLowerCase().includes(' near me')` (`pipeline-generate.ts:2628`). Not Sonnet-classified.
+- `primary_entity_type` — Sonnet-classified (legacy path)
+
+**Near-me flagging:** Supplements flags already set by KeywordResearch on seeded keywords.
+
+**Post-canonicalize cleanup:** Clears `is_near_miss` (and zeroes revenue fields) for any keywords where canonicalize set `is_brand=true` or `intent_type=navigational`.
+
+**Entity type classification:** Each keyword group receives a `primary_entity_type` (Service, Course, Product, LocalBusiness, FAQPage, Article). Flows downstream to Phase 3d (`audit_clusters`), Cluster Strategy (Entity Map), and Pam (Page Identity).
+
+#### External APIs
+
+| API | Endpoint | Purpose | Used In |
+|-----|----------|---------|---------|
+| OpenAI Embeddings | `text-embedding-3-small` via `openai` SDK | Vector embeddings for pre-clustering | Hybrid/shadow only |
+| Anthropic API (sonnet) | `callClaude()` | Keyword grouping (legacy) + arbitration (hybrid) | All modes |
+
+**Embedding cost:** $0.02/1M tokens. 1,100 keywords ≈ 11K tokens ≈ $0.0002. Negligible.
+
+#### Supabase writes
+
+`audit_keywords` UPDATE:
+- All modes: `is_brand`, `intent_type`, `intent`, `is_near_me`, `primary_entity_type`
+- Legacy only: `canonical_key`, `canonical_topic`, `cluster`
+- Hybrid only (via persist): `canonical_key`, `canonical_topic`, `cluster`, `classification_method`, `similarity_score`, `canonicalize_mode`
+- Shadow only (via persist): `shadow_canonical_key`, `shadow_canonical_topic`, `shadow_classification_method`, `shadow_similarity_score`, `shadow_arbitration_reason`
+
+**Why before Competitors:** Clean canonical keys eliminate duplicate SERP calls.
 
 **Does NOT rebuild clusters.** Phase 3d handles that.
+
+#### Known Limitation: `canonicalize_mode` wiring gap
+
+The `audits.canonicalize_mode` DB column exists and stores each client's intended mode, but **no trigger path reads it**. All trigger paths (`/trigger-pipeline`, `/recanonicalize`, edge functions) default to `legacy`. The `--canonicalize-mode` flag must be passed explicitly via CLI. This means a re-trigger from the Settings page will silently run legacy mode on hybrid-promoted clients. See `docs/architectural-review-post-phase-2-2026-04-21.md` Area 1 for the fix plan (~25 lines across `pipeline-server-standalone.ts`).
 
 ---
 
@@ -507,12 +610,21 @@ Batches all `audit_keywords` (up to 250 per call) through Sonnet for semantic gr
 **Clustering key priority:** `canonical_key > cluster > topic > 'general'`
 
 **Supabase writes:**
-- `audit_clusters` — DELETE + INSERT (using canonical groupings)
+- `audit_clusters` — DELETE + INSERT (using canonical groupings), with activation status preservation
 - `audit_rollups` — DELETE + INSERT (recalculated totals)
+- `cluster_strategy` — UPDATE `status='deprecated'`, `deprecated_at` for orphaned strategies (canonical_key no longer exists in rebuilt clusters)
+- `execution_pages` — UPDATE `cluster_active` (preserved for surviving active clusters, set false for lost clusters)
+- `agent_runs` — INSERT warning metadata for orphaned activations and deprecated strategies
+
+**Cluster status preservation** (`sync-to-dashboard.ts:725-878`): Before DELETE, saves activation state (`status`, `activated_at`, `activated_by`, `target_publish_date`, `notes`, `hidden_reason`) for all non-inactive clusters. After INSERT, restores state for clusters that survived the rebuild. Logs orphaned active clusters (canonical_key removed by re-canonicalization) to `agent_runs` with `warning: 'orphaned_cluster_activations'`. See DECISIONS.md entry "cluster_strategy orphaning by canonicalization is deprecation, not remap" (2026-04-09).
+
+**Strategy deprecation** (`sync-to-dashboard.ts:880-922`): Any `cluster_strategy` row whose `canonical_key` is no longer present in the rebuilt `audit_clusters` set is marked `status='deprecated'` with `deprecated_at` timestamp. Strategy documents are preserved — deprecation is a soft flag, not a delete.
 
 **Entity type aggregation:** Each cluster's `primary_entity_type` is set from its constituent keywords, preferring non-Service types (e.g., if any keyword in the cluster is `Course`, the cluster gets `Course`).
 
 **Filters:** Excludes `is_brand=true`, `intent_type=informational`, `intent_type=navigational` from clusters.
+
+**Known concern:** The DELETE+INSERT pattern creates a brief window (~200-500ms) where `audit_clusters` has zero rows for the audit. A concurrent dashboard read during this window would see an empty Clusters page. No production incidents reported. See `docs/architectural-review-post-phase-2-2026-04-21.md` Area 2.3.
 
 ---
 
@@ -628,7 +740,14 @@ Cross-checks Gap's identified gaps against Michael's blueprint to verify coverag
 | `agent_architecture_pages` | Parsed page records (slug, silo, role, keyword, volume, action) — always DELETE+INSERT |
 | `agent_architecture_blueprint` | Full markdown + executive summary — always DELETE+INSERT |
 | `execution_pages` | Conditional UPSERT — committed pages preserved on strategic re-run. Writes `source: 'michael'` on INSERT. |
-| `audit_keywords` | UPDATE cluster field from silo assignments |
+| `audit_keywords` | UPDATE `cluster` field from silo assignments (3-tier matching: exact primary_keyword → substring match → URL slug match). Achieves ~50-60% backfill rate. Known limitation: editorial/informational slugs often don't match keyword text. |
+
+**Silo backfill detail** (`sync-to-dashboard.ts:2371-2425`): Maps keywords to Michael's silos via:
+1. Exact `primary_keyword` match
+2. Bidirectional substring match on `primary_keyword`
+3. `ranking_url` slug match against page slugs
+
+This writes to `audit_keywords.cluster` — the same column that canonicalize writes `canonical_topic` to. The two values serve different purposes (architecture taxonomy vs keyword grouping). syncMichael runs after canonicalize, so its writes overwrite canonicalize's `cluster` value for matched keywords. This doesn't affect cluster computation (which reads `canonical_key`/`canonical_topic`, not `cluster`) but means the `cluster` column is unreliable as a single source of truth.
 
 ---
 
@@ -924,18 +1043,21 @@ Re-canonicalize runs Phase 3c + 3d without the full pipeline. Used from the Sett
 
 ### run-canonicalize.ts
 
-**Script:** `scripts/run-canonicalize.ts` | **Model:** Claude Haiku (Phase 3c)
+**Script:** `scripts/run-canonicalize.ts` | **Model:** Claude Sonnet (legacy grouping + hybrid arbitration)
 
-**Invocation:** `npx tsx scripts/run-canonicalize.ts --domain <d> --user-email <e>`
+**Invocation:** `npx tsx scripts/run-canonicalize.ts --domain <d> --user-email <e> [--canonicalize-mode legacy|hybrid|shadow]`
 
 **Steps:**
 1. Resolve audit from Supabase (domain + email)
-2. Run Phase 3c (`runCanonicalize()`) — semantic topic grouping
-3. Run Phase 3d (`rebuildClustersAndRollups()`) — delete + insert clusters with status preservation
-4. Re-backfill `execution_pages.canonical_key` from updated `audit_keywords`
-5. Log `agent_runs` entry
+2. Parse `--canonicalize-mode` flag (default: `legacy`)
+3. Run Phase 3c (`runCanonicalize()`) — semantic topic grouping in specified mode
+4. Run Phase 3d (`rebuildClustersAndRollups()`) — delete + insert clusters with status preservation + strategy deprecation
+5. Re-backfill `execution_pages.canonical_key` from updated `audit_keywords`
+6. Log `agent_runs` entry
 
-**Status preservation:** `rebuildClustersAndRollups()` saves cluster activation status (status, activated_at, activated_by, target_publish_date, notes) before DELETE and restores it after INSERT for clusters that survive the rebuild. Also preserves `execution_pages.cluster_active` for surviving active clusters and deactivates pages for lost clusters.
+**Status preservation:** `rebuildClustersAndRollups()` saves cluster activation status (status, activated_at, activated_by, target_publish_date, notes) before DELETE and restores it after INSERT for clusters that survive the rebuild. Also preserves `execution_pages.cluster_active` for surviving active clusters and deactivates pages for lost clusters. See Phase 3d section for details.
+
+**Known wiring gap:** The `/recanonicalize` endpoint (`pipeline-server-standalone.ts:390`) does not pass `--canonicalize-mode` to this script — it always runs in legacy mode regardless of the client's `audits.canonicalize_mode` column. See Phase 3c Known Limitation.
 
 ### Pipeline Server Endpoint
 
@@ -943,7 +1065,7 @@ Re-canonicalize runs Phase 3c + 3d without the full pipeline. Used from the Sett
 |--------|------|---------|
 | POST | `/recanonicalize` | Start re-canonicalize (async, 202) |
 
-**Body:** `{ domain, email }` — same auth as other endpoints.
+**Body:** `{ domain, email }` — same auth as other endpoints. Does not accept `canonicalize_mode` parameter (wiring gap).
 
 ---
 
@@ -1033,7 +1155,7 @@ Cluster activation is an on-demand step that generates a strategy document for a
 
 | Table | Purpose |
 |-------|---------|
-| `cluster_strategy` | Per-cluster strategy document (UNIQUE: audit_id, canonical_key) |
+| `cluster_strategy` | Per-cluster strategy document (UNIQUE: audit_id, canonical_key). Columns include `status` (TEXT: 'active', 'deprecated'), `deprecated_at` (TIMESTAMPTZ), `entity_map` (JSONB). Migration 014. |
 | `audit_clusters.status` | `inactive` → `active` → `complete` lifecycle |
 | `audit_clusters.canonical_key` | Join key to `execution_pages.canonical_key` |
 | `execution_pages.cluster_active` | Boolean flag for content queue filtering |
@@ -1114,6 +1236,7 @@ The pipeline server runs on Railway's managed infrastructure. Supabase Edge Func
 | DataForSEO SERP Advanced | `https://api.dataforseo.com/v3/serp/google/organic/live/advanced` | Pam | Basic auth |
 | DataForSEO Credits | `https://api.dataforseo.com/v3/appendix/user_data` | foundational_scout.sh | Basic auth |
 | Anthropic API | `@anthropic-ai/sdk` via `scripts/anthropic-client.ts` | All generation phases | ANTHROPIC_API_KEY |
+| OpenAI Embeddings | `openai` SDK via `src/embeddings/service.ts` | Phase 3c hybrid/shadow canonicalize | OPENAI_API_KEY |
 | DataForSEO OnPage | `scripts/dataforseo-onpage.ts` | Dwight (Phase 1 only) | DATAFORSEO_LOGIN/PASSWORD |
 
 ## Claude Model Usage
@@ -1124,7 +1247,8 @@ The pipeline server runs on Railway's managed infrastructure. Supabase Edge Func
 | 1 | Dwight | **sonnet** | `callClaude()` | AUDIT_REPORT.md [QA gated] |
 | 2 | KeywordResearch | **haiku** + **sonnet** | `callClaude()` | Service extraction (haiku) + synthesis (sonnet) |
 | 3 | Jim | **sonnet** | `callClaude()` | research_summary.md [QA gated] |
-| 3c | Canonicalize | **haiku** | `callClaude()` | Topic grouping JSON (small batches) |
+| 3c | Canonicalize (legacy) | **sonnet** | `callClaude()` | Topic grouping JSON (batches of 250) + classification fields |
+| 3c | Canonicalize (hybrid) | **sonnet** + OpenAI embeddings | `callClaude()` + `openai` SDK | Legacy Sonnet for classification fields; hybrid: vector pre-clustering + Sonnet arbitration (batches of 40) |
 | 4 | Competitors | **haiku** | `callClaude()` | Domain classification (small batches) |
 | 5 | Gap | **sonnet** | `callClaude()` | Gap analysis JSON [QA gated] |
 | 6 | Michael | **sonnet** | `callClaude()` | architecture_blueprint.md [QA gated] |
@@ -1142,8 +1266,9 @@ The pipeline server runs on Railway's managed infrastructure. Supabase Edge Func
 |-------|---------|------------|
 | `audits` | All agents, all syncs | Jim, sync-jim, sync-michael, sync-dwight |
 | `audits.client_context` (JSONB) | Settings page (dashboard reads/writes) | Settings page `useUpdateClientContext`. Pipeline reads from disk (`prospect-config.json`), not this column |
-| `audit_keywords` | Canonicalize, Competitors, Gap, sync-jim, sync-michael | KeywordResearch (INSERT, source='keyword_research'), sync-jim (DELETE+INSERT, source='ranked'), Canonicalize (UPDATE), sync-michael (UPDATE cluster) |
-| `audit_clusters` | Gap, Michael, Clusters page (status + authority_score), Performance page (authority_score) | sync-jim (preliminary), rebuild-clusters Phase 3d (canonical, authoritative), generate-cluster-strategy.ts (status UPDATE), track-rankings.ts (authority_score UPDATE) |
+| `audits.canonicalize_mode` | pipeline-server (should read, currently doesn't), run-canonicalize.ts | SET during hybrid promotion (Phase 2.3b/2.4). Values: 'legacy', 'hybrid'. **Known wiring gap: not read by any trigger path.** |
+| `audit_keywords` | Canonicalize, Competitors, Gap, sync-jim, sync-michael | KeywordResearch (INSERT, source='keyword_research'), sync-jim (DELETE+INSERT, source='ranked'), Canonicalize legacy (UPDATE classification fields), Canonicalize hybrid persist (UPDATE canonical fields + metadata), sync-michael (UPDATE cluster) |
+| `audit_clusters` | Gap, Michael, Clusters page (status + authority_score), Performance page (authority_score) | sync-jim (preliminary), rebuild-clusters Phase 3d (canonical, authoritative, preserves status/activation), generate-cluster-strategy.ts (status UPDATE → 'active'), deactivate-cluster (status UPDATE → 'inactive'), track-rankings.ts (authority_score UPDATE) |
 | `audit_rollups` | — | sync-jim (preliminary), rebuild-clusters Phase 3d (canonical, authoritative) |
 | `audit_assumptions` | sync-jim, rebuild-clusters, Settings page | Dashboard `useCreateAudit` (primary), `ensureAssumptions()` in sync (fallback from benchmarks), Settings page `useUpdateAssumptions` |
 | `ctr_models` | sync-jim, rebuild-clusters | — (seeded) |
@@ -1164,7 +1289,8 @@ The pipeline server runs on Railway's managed infrastructure. Supabase Edge Func
 | `oscar_requests` | Oscar | Dashboard (INSERT, status='pending') |
 | `client_profiles` | Pam, Oscar | Dashboard (manual) |
 | `agent_implementation_pages` | — | sync-pam (DELETE+INSERT, legacy compat) |
-| `cluster_strategy` | Cluster activation dashboard | generate-cluster-strategy.ts (UPSERT) |
+| `cluster_strategy` | Cluster activation dashboard, Pam (entity_map) | generate-cluster-strategy.ts (UPSERT), rebuildClustersAndRollups (UPDATE status='deprecated', deprecated_at) |
+| `embeddings` | Hybrid canonicalize (embedding cache) | `src/embeddings/service.ts` (UPSERT on content_type + content_id) |
 | `ranking_snapshots` | Performance tab, ranking_deltas view | track-rankings.ts (UPSERT) |
 | `cluster_performance_snapshots` | Performance page (authority trend chart), Clusters page (authority delta) | track-rankings.ts (UPSERT) |
 | `page_performance` | Performance tab | track-rankings.ts (UPSERT) |
@@ -1196,3 +1322,25 @@ All paths relative to `audits/{domain}/`. Cross-phase reads use `resolveArtifact
 | `content/_debug/{slug}-oscar-raw.html` | Oscar | — (debug) |
 | `configs/oscar/system-prompt.md` | Manual | Oscar |
 | `configs/oscar/seo-playbook.md` | Manual | Oscar |
+
+**Key source files (Phase 2 embedding infrastructure):**
+
+| Path | Purpose |
+|------|---------|
+| `src/agents/canonicalize/hybrid/index.ts` | Hybrid canonicalize orchestrator (Stage 1 + Stage 2) |
+| `src/agents/canonicalize/hybrid/pre-cluster.ts` | Stage 1: vector pre-clustering (thresholds, size gate, lock) |
+| `src/agents/canonicalize/hybrid/arbitrator.ts` | Stage 2: Sonnet arbitration for ambiguous/new-topic/size-gated cases |
+| `src/agents/canonicalize/hybrid/persist.ts` | Write hybrid results to audit_keywords (hybrid or shadow columns) |
+| `src/agents/canonicalize/hybrid/types.ts` | TypeScript types: ClassificationMethod, VariantInput, PreClusterDecision, etc. |
+| `src/agents/canonicalize/build-legacy-payload.ts` | Phase 2.3c fix: excludes canonical fields in hybrid mode |
+| `src/embeddings/service.ts` | Embedding service: OpenAI embed + Supabase cache + pgvector similarity |
+| `src/embeddings/config.ts` | Embedding constants: model, dimensions, thresholds |
+| `src/embeddings/hash.ts` | Content hash (SHA-256) for embedding deduplication |
+
+**Migrations (Phase 2):**
+
+| Migration | Purpose |
+|-----------|---------|
+| `scripts/migrations/016-findsimilar-hash-exclusion.sql` | Add `exclude_content_hash` param to `find_similar_embeddings()` RPC |
+| `scripts/migrations/017-canonicalize-classification-metadata.sql` | Add `classification_method`, `similarity_score`, `arbitration_reason`, `canonicalize_mode` to `audit_keywords` |
+| `scripts/migrations/018-shadow-canonicalize-columns.sql` | Add `shadow_canonical_key`, `shadow_canonical_topic`, `shadow_classification_method`, `shadow_similarity_score`, `shadow_arbitration_reason` to `audit_keywords` |
