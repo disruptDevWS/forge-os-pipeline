@@ -82,28 +82,10 @@ export async function classifyKeywords(
     console.log(`  [classify] ${deterministicBrand.size} brand keywords detected deterministically`);
   }
 
-  // ── Step 3: Deterministic primary_entity_type (partial) ───────
+  // ── Step 3: Haiku batch for intent_type, primary_entity_type, + unresolved is_brand ───
+  // All keywords need intent_type and primary_entity_type from Haiku
+  // (deterministic entity_type rules too fragile — vertical detection unreliable)
   const verticalDefault = opts.verticalDefault || 'Service';
-  const deterministicEntity = new Map<string, string>();
-  for (const kw of keywords) {
-    const lower = kw.keyword.toLowerCase();
-    // Article patterns: interrogative, how-to, guide content
-    if (/^(what|why|how|when|where|who|does|do|can|is|are|should) /.test(lower)) {
-      deterministicEntity.set(kw.id, 'Article');
-    }
-    // LocalBusiness: explicit near-me or business-seeking patterns
-    else if (nearMeSet.has(kw.id) && deterministicBrand.has(kw.id)) {
-      deterministicEntity.set(kw.id, 'LocalBusiness');
-    }
-    // Default: use vertical default for remaining
-    else {
-      deterministicEntity.set(kw.id, verticalDefault);
-    }
-  }
-
-  // ── Step 4: Haiku batch for intent_type + unresolved fields ───
-  // All keywords need intent_type from Haiku (deterministic rules too error-prone)
-  // Keywords without deterministic is_brand also get Haiku classification
   const HAIKU_BATCH_SIZE = 100;
   let haikuCalls = 0;
   const haikuResults = new Map<string, { intent_type: string; is_brand?: boolean; primary_entity_type?: string }>();
@@ -128,6 +110,7 @@ export async function classifyKeywords(
 
 For EVERY keyword, provide:
 - intent_type: exactly one of "informational", "commercial", "transactional", "navigational"
+- primary_entity_type: exactly one of "Service", "Course", "Product", "LocalBusiness", "FAQPage", "Article"
 
 For keywords marked [classify_brand], ALSO provide:
 - is_brand: true if the keyword contains a brand/company name, false otherwise
@@ -138,14 +121,24 @@ Intent definitions:
 - "transactional": ready to act NOW (buy, enroll, sign up, book, schedule, hire, "near me", get quote)
 - "navigational": looking for a specific website/brand BY NAME
 
+primary_entity_type definitions:
+- "Service": a service the business performs (most common for local service businesses)
+- "Course": an educational program with defined duration, credential, enrollment
+- "Product": a physical or digital product
+- "LocalBusiness": the business itself (use only for brand/homepage cluster)
+- "FAQPage": primarily Q&A content with no single service anchor
+- "Article": purely informational content not tied to a specific service or course
+
+When uncertain between Service and Course: if the offering grants a credential or certification, use Course. If it's a job performed for a customer, use Service.
+
 Business context: ${opts.serviceKey || 'local service'} business, domain: ${opts.domain}
 
 KEYWORDS:
 ${kwList}
 
 Respond with raw JSON only. No markdown fences. Array of objects:
-[{"index": 1, "intent_type": "commercial", "is_brand": false}, ...]
-Only include is_brand for keywords marked [classify_brand]. Always include intent_type.`;
+[{"index": 1, "intent_type": "commercial", "primary_entity_type": "Course", "is_brand": false}, ...]
+Only include is_brand for keywords marked [classify_brand]. Always include intent_type and primary_entity_type.`;
 
     for (let attempt = 1; attempt <= 2; attempt++) {
       try {
@@ -187,7 +180,7 @@ Only include is_brand for keywords marked [classify_brand]. Always include inten
       const intentType = haiku?.intent_type || 'unknown';
       const isBrand = deterministicBrand.has(kw.id) ? true : (haiku?.is_brand ?? false);
       const isNearMe = nearMeSet.has(kw.id);
-      const primaryEntityType = deterministicEntity.get(kw.id) || haiku?.primary_entity_type || verticalDefault;
+      const primaryEntityType = normalizeEntityType(haiku?.primary_entity_type) || verticalDefault;
 
       const payload: Record<string, unknown> = {
         is_brand: isBrand,
@@ -208,7 +201,7 @@ Only include is_brand for keywords marked [classify_brand]. Always include inten
     }
   }
 
-  console.log(`  [classify] Classified ${classified}/${keywords.length} keywords (${haikuCalls} Haiku calls, ${deterministicBrand.size} deterministic brand, ${nearMeSet.size} near-me)`);
+  console.log(`  [classify] Classified ${classified}/${keywords.length} keywords (${haikuCalls} Haiku calls, ${deterministicBrand.size} deterministic brand matches, ${nearMeSet.size} near-me)`);
   return { classified, haikuCalls };
 }
 
@@ -228,6 +221,15 @@ function buildBrandPatterns(domain: string, businessName?: string, competitors?:
     }
   }
   return patterns;
+}
+
+const VALID_ENTITY_TYPES = ['Service', 'Course', 'Product', 'LocalBusiness', 'FAQPage', 'Article'];
+
+function normalizeEntityType(raw: string | undefined): string | null {
+  if (!raw) return null;
+  // Case-insensitive match against valid types
+  const match = VALID_ENTITY_TYPES.find((t) => t.toLowerCase() === raw.toLowerCase());
+  return match || null;
 }
 
 function normalizeIntent(raw: string | undefined): string {
