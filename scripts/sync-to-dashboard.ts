@@ -741,17 +741,29 @@ export async function rebuildClustersAndRollups(sb: SupabaseClient, auditId: str
   await sb.from('audit_rollups').delete().eq('audit_id', auditId);
 
   // Pull ALL keywords with a canonical_key (full topic map, not just near-miss)
-  const { data: kwRows } = await sb
-    .from('audit_keywords')
-    .select('keyword, rank_pos, search_volume, cpc, delta_traffic, delta_revenue_low, delta_revenue_mid, delta_revenue_high, delta_leads_low, delta_leads_high, canonical_key, canonical_topic, cluster, intent_type, intent, is_brand, is_near_miss, topic, primary_entity_type')
-    .eq('audit_id', auditId)
-    .not('canonical_key', 'is', null)
-    .limit(10000);
+  // Paginated fetch (Supabase PostgREST max-rows=1000)
+  const kwRows: any[] = [];
+  {
+    const PAGE_SIZE = 1000;
+    let offset = 0;
+    while (true) {
+      const { data: page } = await sb
+        .from('audit_keywords')
+        .select('keyword, rank_pos, search_volume, cpc, delta_traffic, delta_revenue_low, delta_revenue_mid, delta_revenue_high, delta_leads_low, delta_leads_high, canonical_key, canonical_topic, cluster, intent_type, intent, is_brand, is_near_miss, topic, primary_entity_type')
+        .eq('audit_id', auditId)
+        .not('canonical_key', 'is', null)
+        .range(offset, offset + PAGE_SIZE - 1);
+      if (!page || page.length === 0) break;
+      kwRows.push(...page);
+      if (page.length < PAGE_SIZE) break;
+      offset += PAGE_SIZE;
+    }
+  }
 
-  let clusterMap = buildClusterMap((kwRows ?? []) as any[]);
+  let clusterMap = buildClusterMap(kwRows as any[]);
 
-  const allKwCount = (kwRows ?? []).length;
-  const nearMissCount = (kwRows ?? []).filter((r: any) => r.is_near_miss === true).length;
+  const allKwCount = kwRows.length;
+  const nearMissCount = kwRows.filter((r: any) => r.is_near_miss === true).length;
   console.log(`  [${label}] ${allKwCount} keywords with canonical_key, ${clusterMap.size} clusters, ${nearMissCount} near-miss`);
 
   const clusterRecords = Array.from(clusterMap.entries())
@@ -2383,15 +2395,26 @@ async function syncMichael(
       if (kw) siloByKeyword.set(kw, p.silo_name);
     }
 
-    // Fetch all keywords with their ranking_url
-    const { data: allKw } = await sb
-      .from('audit_keywords')
-      .select('id, keyword, ranking_url')
-      .eq('audit_id', auditId)
-      .limit(10000);
+    // Fetch all keywords with their ranking_url (paginated)
+    const allKw: any[] = [];
+    {
+      const PAGE_SIZE = 1000;
+      let offset = 0;
+      while (true) {
+        const { data: page } = await sb
+          .from('audit_keywords')
+          .select('id, keyword, ranking_url')
+          .eq('audit_id', auditId)
+          .range(offset, offset + PAGE_SIZE - 1);
+        if (!page || page.length === 0) break;
+        allKw.push(...page);
+        if (page.length < PAGE_SIZE) break;
+        offset += PAGE_SIZE;
+      }
+    }
 
     let siloUpdated = 0;
-    for (const row of (allKw ?? []) as any[]) {
+    for (const row of allKw) {
       const kwLower = String(row.keyword).toLowerCase().trim();
       let silo: string | undefined;
 
@@ -2424,7 +2447,7 @@ async function syncMichael(
         siloUpdated++;
       }
     }
-    console.log(`  [michael] Backfilled silo for ${siloUpdated} of ${(allKw ?? []).length} keywords`);
+    console.log(`  [michael] Backfilled silo for ${siloUpdated} of ${allKw.length} keywords`);
   }
 
   // Record snapshot and update staleness

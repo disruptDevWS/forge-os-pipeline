@@ -2429,14 +2429,22 @@ export async function runCanonicalize(sb: SupabaseClient, auditId: string, domai
   const canonGeo = resolveGeoScope(auditRow);
   const locationCtx = canonGeo.label;
 
-  // Fetch all keywords for this audit (Supabase default limit is 1000; use explicit large limit)
-  const { data: kwData, error: kwErr } = await sb
-    .from('audit_keywords')
-    .select('id, keyword, intent, search_volume, topic')
-    .eq('audit_id', auditId)
-    .limit(10000);
-  if (kwErr) throw new Error(`Failed to fetch keywords: ${kwErr.message}`);
-  const keywords = (kwData ?? []) as { id: string; keyword: string; intent: string | null; search_volume: number; topic: string | null }[];
+  // Fetch all keywords for this audit (paginated — Supabase PostgREST max-rows=1000)
+  const keywords: { id: string; keyword: string; intent: string | null; search_volume: number; topic: string | null }[] = [];
+  const PAGE_SIZE = 1000;
+  let offset = 0;
+  while (true) {
+    const { data: page, error: pageErr } = await sb
+      .from('audit_keywords')
+      .select('id, keyword, intent, search_volume, topic')
+      .eq('audit_id', auditId)
+      .range(offset, offset + PAGE_SIZE - 1);
+    if (pageErr) throw new Error(`Failed to fetch keywords: ${pageErr.message}`);
+    if (!page || page.length === 0) break;
+    keywords.push(...(page as typeof keywords));
+    if (page.length < PAGE_SIZE) break;
+    offset += PAGE_SIZE;
+  }
 
   if (keywords.length === 0) {
     console.log('  [canonicalize] No keywords found, skipping');
@@ -2448,14 +2456,27 @@ export async function runCanonicalize(sb: SupabaseClient, auditId: string, domai
   // This preserves hybrid-origin values so the lock predicate locks the correct assignment.
   let priorHybridSnapshot: Map<string, { canonicalKey: string; canonicalTopic: string }> | undefined;
   if (canonicalizeMode !== 'legacy') {
-    const { data: priorRows } = await (sb as any)
-      .from('audit_keywords')
-      .select('id, canonical_key, canonical_topic, classification_method')
-      .eq('audit_id', auditId)
-      .not('classification_method', 'is', null);
-    if (priorRows && priorRows.length > 0) {
+    // Paginated fetch — IMA has >1000 keywords with classification_method
+    const priorRows: any[] = [];
+    {
+      const PAGE_SIZE = 1000;
+      let offset = 0;
+      while (true) {
+        const { data: page } = await (sb as any)
+          .from('audit_keywords')
+          .select('id, canonical_key, canonical_topic, classification_method')
+          .eq('audit_id', auditId)
+          .not('classification_method', 'is', null)
+          .range(offset, offset + PAGE_SIZE - 1);
+        if (!page || page.length === 0) break;
+        priorRows.push(...page);
+        if (page.length < PAGE_SIZE) break;
+        offset += PAGE_SIZE;
+      }
+    }
+    if (priorRows.length > 0) {
       priorHybridSnapshot = new Map();
-      for (const r of priorRows as any[]) {
+      for (const r of priorRows) {
         priorHybridSnapshot.set(r.id, { canonicalKey: r.canonical_key, canonicalTopic: r.canonical_topic });
       }
       console.log(`  [canonicalize] Snapshotted ${priorHybridSnapshot.size} prior hybrid assignments`);

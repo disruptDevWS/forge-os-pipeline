@@ -68,21 +68,30 @@ export async function runHybridCanonicalize(
   const serviceKey = auditRow?.service_key ?? '';
   const locationCtx = resolveLocationLabel(auditRow);
 
-  // 2. Fetch all keywords for this audit
-  const { data: kwData, error: kwErr } = await (sb as any)
-    .from('audit_keywords')
-    .select('id, keyword, canonical_key, canonical_topic, classification_method')
-    .eq('audit_id', auditId)
-    .limit(10000);
-
-  if (kwErr) throw new Error(`Failed to fetch keywords: ${kwErr.message}`);
-  const keywords = (kwData ?? []) as Array<{
+  // 2. Fetch all keywords for this audit (paginated — Supabase PostgREST max-rows=1000)
+  const keywords: Array<{
     id: string;
     keyword: string;
     canonical_key: string | null;
     canonical_topic: string | null;
     classification_method: string | null;
-  }>;
+  }> = [];
+  {
+    const PAGE_SIZE = 1000;
+    let offset = 0;
+    while (true) {
+      const { data: page, error: pageErr } = await (sb as any)
+        .from('audit_keywords')
+        .select('id, keyword, canonical_key, canonical_topic, classification_method')
+        .eq('audit_id', auditId)
+        .range(offset, offset + PAGE_SIZE - 1);
+      if (pageErr) throw new Error(`Failed to fetch keywords: ${pageErr.message}`);
+      if (!page || page.length === 0) break;
+      keywords.push(...page);
+      if (page.length < PAGE_SIZE) break;
+      offset += PAGE_SIZE;
+    }
+  }
 
   if (keywords.length === 0) {
     console.log('  [hybrid] No keywords found, skipping');
