@@ -48,6 +48,7 @@ Phase 2 added hybrid canonicalize mode (vector pre-clustering + Sonnet arbitrati
 |--------|------|----------|----------|----------------|
 | summitmedicalacademy.com | hybrid | 2026-04-20 (Phase 2.3b) | 127 | 27 |
 | idahomedicalacademy.com | hybrid | 2026-04-20 (Phase 2.4) | 1,100 | 76 |
+| forgegrowth.ai | hybrid | 2026-04-22 | 25 | 7 |
 | All others | legacy | — | — | — |
 
 **Known limitation:** `audits.canonicalize_mode` DB column is not read by any trigger path. See Phase 3c Known Limitation and `docs/architectural-review-post-phase-2-2026-04-21.md`.
