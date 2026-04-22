@@ -35,10 +35,17 @@ Each entry is self-contained: picking it up 3 months later should not require re
 
 ---
 
-### [Pipeline] IMA classification NULL backfill (self-healing)
+### [Pipeline] Inject `core_services` into Haiku classification prompt for vocational verticals
 
-- **Issue:** 198 IMA keywords have NULL `is_brand`/`intent_type`/`primary_entity_type` from legacy Sonnet's group-level classification propagation bug. These NULLs pass the `is_brand.is.null` filter in `run-competitor-dominance`, inadvertently including unclassified keywords in competitor analysis.
-- **Why it matters:** Affects competitor dominance filtering accuracy for IMA. 198/1100 = 18% of keywords have incomplete classification.
-- **Prerequisites:** Session B classification extraction path deployed. Self-healing: next IMA pipeline run (or re-canonicalize) will populate all classification fields per-keyword.
-- **Scope estimate:** S — no code change needed. Self-heals on next IMA pipeline trigger.
+- **Issue:** The Haiku classification prompt (`classify-keywords.ts`) receives `service_key` and `domain` but not `core_services` from `client_context`. For vocational/training businesses (IMA), this means Haiku doesn't know which keywords map to specific course offerings. "NREMT Test Prep" is classified as Article (informational concept) when it's actually a specific IMA product (should be Course).
+- **Why it matters:** ~10-30 keywords per training-vertical audit get Article instead of Course. Downstream impact: Pam generates article-framed content instead of course-landing-page content for these clusters. Entity Map in cluster strategy uses wrong entity type.
+- **Prerequisites:** Classification validation complete (report: `docs/classification-validation-report-2026-04-21.md`). Enhancement is non-blocking — current rubric is 90% accurate on entity_type.
+- **Scope estimate:** S — inject `opts.coreServices` into the Haiku prompt as "This business offers: [list]". Add `coreServices?: string` to `ClassifyOptions`. Load from `client_context.core_services` in `pipeline-generate.ts`.
+- **Captured:** Classification validation investigation, 2026-04-21
+
+---
+
+### ~~[Pipeline] IMA classification NULL backfill (self-healing)~~ RESOLVED
+
+- **Resolved:** Session B re-canonicalize run (2026-04-21) populated all 1,100 IMA keywords. is_brand NULLs 198→0, intent_type NULLs 198→0, entity_type NULLs 410→0.
 - **Captured:** Session B Check 1, 2026-04-21
