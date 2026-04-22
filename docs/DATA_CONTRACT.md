@@ -37,7 +37,7 @@
 | `service_key` | Dashboard / Pipeline | Both | Pipeline auto-detects if 'other' |
 | `market_city`, `market_state` | Dashboard | Pipeline | Geo targeting |
 | `country_code`, `language_code` | Dashboard | Pipeline | |
-| `geo_mode` | Dashboard | Pipeline | `local` / `regional` / `national` |
+| `geo_mode` | Dashboard | Pipeline | `city` / `metro` / `state` / `national` |
 | `market_geos` | Dashboard | Pipeline | JSON array of {city, state} |
 | `status` | Both | Dashboard | TEXT: `draft`, `running`, `completed`, `failed`, `awaiting_review` |
 | `error_message` | Pipeline | Dashboard | |

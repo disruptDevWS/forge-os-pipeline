@@ -1827,6 +1827,62 @@ Based on ${pageCount} new pages targeting ${totalVolume.toLocaleString()} monthl
 *Based on industry benchmark conversion rates and average contract values for ${verticalLabel}.*`;
 }
 
+// ============================================================
+// Michael — Geographic Architecture Blocks (conditional injection)
+// ============================================================
+
+const CITY_METRO_GEO_BLOCK = `## Geographic Architecture
+
+The business has geographic service delivery. Geographic pages are part of the architecture. The following principles apply.
+
+**Service is the primary topical container; location is the qualifier.** Service pillars (\`/services/{service}\`) are geography-agnostic and accumulate topical authority for the service across all markets. Service+location pages nest under the service pillar (\`/services/{service}/{location}\`), inheriting the service's topical authority with geographic specificity. Do not invert this — never produce location-primary URL structures (\`/locations/{city}/{service}\` or \`/boise/water-heater-repair\`). This is a load-bearing structural claim about how topical authority accumulates.
+
+**Produce service+location pages where combined signal justifies them.** A service+location page is justified when (a) the service is location-sensitive (service delivery involves on-site execution, local dispatch, same-day response, market-specific pricing, or local permits/regulations) AND (b) either aggregate keyword volume for the service+location combination is meaningful OR competitive gap analysis shows weak or absent competitors for that combination. Do not produce service+location pages for every service × location combination — coverage should be intentional, where the data supports it, not exhaustive.
+
+**Services that are not location-sensitive do not get location variants.** Educational content, general service explainers, pricing guides, maintenance tips remain as service-level pillars or support pages without geographic children. Location pages exist for service delivery, not for content that applies regardless of market.
+
+**Geographic hub pages are complementary, not primary.** If the business has multiple delivery markets, produce a geographic hub per market (\`/service-area/{location}\` or similar, matching client naming convention). City/metro hubs capture the high-volume generic local query (e.g., "plumber boise") and link to all service+location pages for that market. They do not compete with service pillars for topical authority.
+
+**Service+location pages have two parents.** The service pillar is the topical parent (primary breadcrumb, primary upward link, primary schema \`isPartOf\`). The location hub is the geographic parent (secondary cross-silo link, "other services in this area" relationship). Surface this dual-parent relationship in your Internal Linking Strategy section — it's the load-bearing internal link structure for geographic clients.
+
+**Never create near-me slugs.** See Rule 14. Near-me queries are captured through location-modified primary keywords on properly-structured geographic pages.`;
+
+const STATE_GEO_BLOCK = `## Geographic Architecture
+
+The business operates across one or more states. Geographic pages are part of the architecture, following the same principles that apply to city-level geographic clients, with an additional consideration for state-qualified search intent.
+
+**Service is the primary topical container; location is the qualifier.** Service pillars are geography-agnostic. Service+location pages nest under service pillars. Never invert this structure.
+
+**"Location" can be state or city depending on where keyword signal exists.** For state-mode clients, search intent occurs at multiple geographic levels:
+
+- **Delivery-intent queries** are typically city-level ("emt course boise," "paramedic program spokane"). When keyword data shows city-level volume, produce service+city pages (\`/services/{service}/{city}\`). This is where most search traffic for service delivery happens.
+- **Regulatory, licensing, certification, and state-varying service queries** are typically state-level ("idaho emt license requirements," "washington paramedic certification," "emt salary oregon"). When keyword data shows state-level volume for these query types, produce service+state pages (\`/services/{service}/{state}\`) or state-qualified support pages. These capture state-scoped intent that doesn't exist at the city level.
+- **Comparative/evaluative queries** may exist at either level ("best emt schools idaho," "top paramedic programs in seattle"). Place these where the data shows volume.
+
+**Let keyword data drive the geographic level of pages, not a presumed structure.** A state-mode client with one primary state and active city markets will have mostly city-level delivery pages plus state-level regulatory pages. A state-mode client distributed across many states with no home market will have more state-level pages and fewer city-level pages. Michael reads the keyword matrix and produces pages at the level where intent exists — the pattern follows the data.
+
+**State hub pages exist when state-level content warrants a container.** A state hub (\`/states/{state}\` or similar) aggregates state-specific regulatory, licensing, and service delivery content, and links to the service+state and service+city pages within that state. Produce state hubs where the volume of state-scoped content justifies an organized container. Do not produce state hubs as placeholders when there's no state-level content to organize.
+
+**Service+location pages have two parents** (service pillar + geographic hub). Same dual-parent relationship as city-mode. For state mode, the geographic parent can be a state hub or a city hub depending on whether the page is service+state or service+city.
+
+**Never create near-me slugs.** See Rule 14.
+
+**Combined-signal rule still applies.** Produce service+location pages (whether city or state) where the service is location-sensitive AND signal supports the page. Do not produce exhaustive service × state or service × city combinations.`;
+
+function getGeographicArchitectureBlock(
+  geoMode: 'national' | 'city' | 'metro' | 'state',
+): string {
+  switch (geoMode) {
+    case 'national':
+      return ''; // No geographic rules — Michael builds topical architecture only
+    case 'city':
+    case 'metro':
+      return CITY_METRO_GEO_BLOCK;
+    case 'state':
+      return STATE_GEO_BLOCK;
+  }
+}
+
 async function runMichael(sb: SupabaseClient, auditId: string, domain: string, researchDate?: string, mode: CliArgs['mode'] = 'full') {
   const today = todayStr();
   const researchDir = path.join(AUDITS_BASE, domain, 'research', researchDate ?? today);
@@ -1843,6 +1899,7 @@ async function runMichael(sb: SupabaseClient, auditId: string, domain: string, r
     .single();
   if (!audit) throw new Error('Audit metadata not found');
   const michaelGeo = resolveGeoScope(audit);
+  const geoArchBlock = getGeographicArchitectureBlock(michaelGeo.mode as 'national' | 'city' | 'metro' | 'state');
 
   const { data: clusterData } = await sb
     .from('audit_clusters')
@@ -1994,7 +2051,17 @@ ${semanticSummary.rows}`;
 
 The following directives were produced by synthesizing the client profile, Scout data, and technical audit. They have been QA-validated.
 
-CRITICAL INSTRUCTION: The Architecture Directive below is pre-validated. Build on it — do not re-derive the competitive positioning or structural gaps it describes. Your silo structure must implement the requirements listed in the Architecture Directive. The Risk Flags section contains issues you must address — do not independently re-analyze the same technical findings.
+**Strategy Brief Authority**
+
+The Strategy Brief contains strategic framing and binding constraints. Both inform your output differently.
+
+**Binding constraints** are statements the brief marks as prohibitions or exclusions. These include any sentence containing "do not," "avoid," "exclude," "must not," "out of scope," or equivalent language. They also include any statement whose clear intent is to prevent specific pages or targeting choices, even when phrased without those specific anchors. Binding constraints are not suggestions — they constrain your output.
+
+**Strategic framing** is everything else: market context, visibility posture, competitive analysis, positioning rationale. This shapes your judgment but does not constrain specific outputs.
+
+When structured data (keyword matrix, revenue clusters, gap analysis) suggests building a page that conflicts with a binding constraint, the constraint wins. Surface the deferred opportunity in the Executive Summary under "Deferred Targets" — state what the opportunity is, what the constraint is, and the fact that you deferred to the constraint. Do not create the page.
+
+When the brief is silent on a specific choice, your architectural judgment applies.
 
 ${parts.join('\n\n')}`;
       console.log(`  Strategy brief: loaded for Michael (${michaelStrategyBlock.length} chars)`);
@@ -2181,6 +2248,20 @@ You MUST produce output in this EXACT format. The parser depends on these headin
 [CMS type, URL slug limitations, any required workarounds for the recommended architecture.]
 \`\`\`
 
+### Then (only if any structured-data opportunities were deferred to brief constraints):
+\`\`\`
+## Deferred Targets
+
+For each opportunity surfaced by the keyword matrix, revenue clusters, or gap analysis that you chose not to build due to a binding constraint in the Strategy Brief, report:
+
+- **Opportunity:** The keyword, cluster, or gap that the structured data surfaced
+- **Signal:** Volume, CPC, or gap data that indicates the opportunity
+- **Constraint:** The specific Strategy Brief language that deferred this opportunity
+- **Decision:** Confirmation that no page was created for this opportunity
+
+If no opportunities were deferred, omit this section entirely.
+\`\`\`
+
 ### Then for each silo (3-7 silos):
 \`\`\`
 ### Silo N: [Silo Name]
@@ -2190,6 +2271,8 @@ You MUST produce output in this EXACT format. The parser depends on these headin
 |----------|--------|------|------|-----------------|--------|--------|
 | service-slug | new/exists | Silo Name | pillar/cluster/support | target keyword | 1234 | create/optimize |
 \`\`\`
+
+**Pre-finalization self-check:** Before finalizing your silo tables, review them against the cannibalization patterns you are about to document in the Cannibalization Warnings section. If any pages in your own silo tables create cannibalization risk with other pages in your output — competing for the same primary keyword, near-duplicate intent coverage, parent/child topical overlap — consolidate or remove pages before finalizing the silo tables. The Cannibalization Warnings section should report resolved risks or cross-silo linking concerns, not flag risks you created and left unresolved in your own output.
 
 ### Then:
 \`\`\`
@@ -2261,7 +2344,7 @@ Rules for coverage assessment:
      - "support" — an informational or FAQ page that supports the pillar and cluster pages without competing with them
      Do not use any other Role values. sync-michael parses on these exact strings.
 4. 3-7 silos total, organized by service category and intent
-4b. Total new pages (Action: "create") should be proportional to the client's current site size and realistic execution capacity. As a guideline: for sites with fewer than 10 existing pages, recommend no more than 15 new pages; for sites with 10-30 pages, no more than 25 new pages; for sites with 30+ pages, scale as needed. If the gap analysis warrants more pages than this ceiling, note the excess as a "Phase 2 expansion" in the Executive Summary rather than including all pages in the initial blueprint.
+4b. **Cluster coherence over page count.** Each silo must be topically complete — a pillar plus sufficient cluster pages to cover distinct commercial intent variants plus sufficient support pages to cover the buyer journey. Do not inflate page counts by splitting adjacent intents into separate pages, creating near-duplicate variants of the pillar or cluster pages, or adding support pages that do not address distinct buyer questions. A silo with 4 well-targeted pages covering the buyer journey is better than 8 pages with overlapping intents. Total site page count is a downstream operational decision managed by cluster activation — your job is topical completeness per cluster, not page volume per site.
 5. Primary keyword from actual keyword data where available. If the keyword matrix does not contain a suitable primary keyword for a page (common on sparse datasets), use the best-fit keyword from Jim's research narrative and note the Volume cell as "est." to indicate the figure is inferred rather than validated. Do not leave Primary Keyword blank or use a near-me variant as fallback.
 6. Volume must match the keyword data
 7. Action: "create" for new pages, "optimize" for existing pages
@@ -2275,19 +2358,10 @@ Rules for coverage assessment:
 11b. MISROUTED PAGES: If the Strategy Brief or Jim's research identifies pages ranking for queries they cannot convert (e.g., an About page ranking for commercial keywords), the architecture must: (a) include a new dedicated page that correctly targets those queries, (b) note the misrouted page in Cannibalization Warnings with a specific remediation instruction (strip commercial signals, add internal link to the new dedicated page), and (c) set the new dedicated page as Action: "create" with the misrouted keywords as its Primary Keyword.
 12. If crawl data shows technical issues (broken pages, redirects), note them alongside affected URL slugs
 13. If Platform Constraints are provided, validate all URL slugs against CMS limitations. Flag any pattern not natively achievable with the workaround required.
-14. Do NOT use near-me keywords as primary_keyword. If the only available keyword for a page is a near-me variant, derive the location-modified equivalent (e.g., "commercial plumbing service near me" → "commercial plumbing boise") and use that as the primary keyword. Note the near-me variant as a secondary keyword in the Executive Summary or Cannibalization Warnings if relevant.
+14. **Near-me slug prohibition.** Do not create pages whose URL slug contains "near-me" or equivalent geographic-proximity modifiers. When keyword data surfaces "near-me" query volume for a service+location combination, capture that intent through a properly-constructed geographic page using a location-modified primary keyword (e.g., \`/services/water-heater-repair/boise\` with primary keyword "water heater repair boise," not "water heater repair near me"). Near-me queries are a search pattern, not a slug pattern.
 15. Every silo must have at least one page covering Consideration stage and one covering Decision stage.
     If keyword data doesn't support a dedicated page, combine stages on the pillar and note the constraint in the Coverage Assessment.
-16. GEO PAGES ARE ROLES WITHIN A SILO, NOT SEPARATE SILOS. For multi-market clients serving multiple cities/states:
-    - One silo per topic. "EMT Training" is one silo regardless of targeting Idaho, Washington, and Oregon.
-    - Geo hub pages (state-level) and geo-service pages (city-level) are page roles WITHIN the silo.
-    - Valid page roles for geo targeting: "cluster" for geo hub pages (e.g., /emt-training/washington), "support" for city-specific pages (e.g., /emt-training/boise-id)
-    - The pillar page is geography-agnostic (e.g., /emt-training) — it covers the topic nationally with schema and entity authority.
-    - Supporting content (cost guides, requirements, FAQs) informs all geos and belongs in the silo once, not duplicated per market.
-    - Topic authority accumulates to the silo's canonical entity across all geo variants. Splitting into "Idaho EMT Training" and "Washington EMT Training" as separate silos fragments this authority.
-    - Internal linking: geo pages link up to the pillar (reinforcing entity signal), pillar links down to geo hubs, geo hubs link down to city pages.
-    - Do NOT create separate silos for each market when the underlying service/topic is the same.
-
+${geoArchBlock ? '\n' + geoArchBlock + '\n' : ''}
 REMINDER: Your response IS the blueprint content — start with "## Executive Summary" and output the full architecture. No preamble, no narration, no summary of what you did.`;
 
   console.log('  Generating architecture blueprint via Anthropic API (sonnet)...');

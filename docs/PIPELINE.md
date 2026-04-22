@@ -745,19 +745,25 @@ All cross-phase reads use `resolveArtifactPath()` with date fallback for operati
 
 **Client context (full mode):** `## Client Business Context` block injected with business model, target audience, pricing, services, and out-of-scope reasoning constraints.
 
-**Output:** `architecture/{date}/architecture_blueprint.md` — Executive Summary + Platform Constraints + 3-7 Silos (each with page table: URL slug, status, role, primary keyword, volume, action) + Cannibalization Warnings + Internal Linking Strategy. In sales mode, additionally includes `## Revenue Opportunity` section.
+**Strategy Brief authority (two-tier):** Strategy Brief sections are classified as binding constraints (prohibitions/exclusions: "do not," "avoid," "exclude") vs strategic framing (everything else). When structured data suggests building a page that conflicts with a binding constraint, the constraint wins and the opportunity is reported in a `## Deferred Targets` section.
 
-**Structural validation:** Blueprint must contain `## Executive Summary` and at least one `### Silo N:` heading. If missing, Michael auto-retries once.
+**Output:** `architecture/{date}/architecture_blueprint.md` — Executive Summary + Platform Constraints (conditional) + Deferred Targets (conditional, when brief constraints deferred opportunities) + 3-7 Silos (each with page table: URL slug, status, role, primary keyword, volume, action + Buyer Journey Coverage Assessment) + Cannibalization Warnings + Internal Linking Strategy. In sales mode, additionally includes `## Revenue Opportunity` section.
 
-**Key rules:**
+**Structural validation:** Blueprint must contain `## Executive Summary` and at least one `### Silo N:` heading. If missing, Michael auto-retries once. Slug corruption ratio > 10% also triggers a retry (coverage assessment rows cause false positives — see known limitation).
+
+**Key rules (revised 2026-04-22):**
+- **Rule 4b — Cluster coherence over page count.** Each silo must be topically complete (pillar + distinct commercial intents + buyer journey support). Do not inflate page counts by splitting adjacent intents. Total site page count is a downstream cluster activation decision.
+- **Rule 14 — Near-me slug prohibition.** No URL slugs containing "near-me." Near-me query volume captured through location-modified primary keywords on properly-structured geographic pages.
+- **Rule 15 — Buyer Journey Coverage.** Every silo must have Consideration + Decision stage coverage. Coverage Assessment table required per silo.
+- **Cannibalization pre-finalization self-check.** Before finalizing silo tables, Michael reviews for internal cannibalization (competing primary keywords, near-duplicate intent, parent/child overlap) and consolidates. Cannibalization Warnings section reports resolved risks, not self-created ones.
 - Platform Constraints section required when Dwight detects CMS-specific limitations
-- Near-me keywords prohibited as `primary_keyword` for any page
 - Every authority gap from Gap analysis must map to at least one architecture page
-- **Buyer Journey Coverage (Rule 15):** Every silo must have Consideration + Decision stage coverage
-- **Geo Pages as Silo Roles (Rule 16):** Geo pages are roles within a silo (e.g., `/services/plumbing/boise/`), not separate silos
-- Buyer Journey Coverage Assessment table required: per-silo matrix of Awareness/Consideration/Decision/Retention coverage
+
+**Geographic architecture (conditional by `geo_mode`):** Geographic rules are injected conditionally via `getGeographicArchitectureBlock()`. National mode = no geographic rules (topical architecture only). City/metro mode = service-primary container with city/metro geographic pages. State mode = service-primary container with state/city geographic pages driven by keyword data. All modes follow the principle: service is the primary topical container, location is the qualifier. See `docs/prompts/michael-architecture-blueprint.md` for full block text.
 
 **Prompt framing:** Uses "YOUR ENTIRE RESPONSE IS THE BLUEPRINT" top/bottom framing.
+
+**Known limitation:** Slug corruption detection counts Buyer Journey Coverage Assessment table rows (e.g., "Awareness (problem recognition...)") as rejected slugs, causing false positive corruption ratios of ~30%. The parser correctly produces only valid page rows. Non-blocking.
 
 ---
 

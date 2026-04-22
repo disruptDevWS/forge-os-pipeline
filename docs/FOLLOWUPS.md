@@ -46,3 +46,53 @@ Each entry is self-contained: picking it up 3 months later should not require re
 
 - **Resolved:** Session B re-canonicalize run (2026-04-21) populated all 1,100 IMA keywords. is_brand NULLs 198→0, intent_type NULLs 198→0, entity_type NULLs 410→0.
 - **Captured:** Session B Check 1, 2026-04-21
+
+---
+
+### [Pipeline] IMA/SMA state page production gap — pending operator-directed content surface
+
+- **Issue:** IMA (`geo_mode: state`, single state Idaho) has 17 state-level and 6 city-level geo pages in architecture. SMA (`geo_mode: state`, 6 states) has 28 state-level and 1 city-level. Both are `not_started`/`deprecated`. The new `STATE_GEO_BLOCK` provides principled guidance (delivery-intent → city, regulatory → state, follow the data), but existing architectures pre-date these principles.
+- **Why it matters:** Re-running Michael on IMA/SMA with the new prompt will produce more principled geographic page structures. But this is an operator decision — the existing architectures have committed pages and cluster activations.
+- **Prerequisites:** Operator decides whether to re-run Michael on IMA/SMA. If yes, review committed page preservation behavior on strategic re-run.
+- **Scope estimate:** S per client — one Michael re-run + review deprecation candidates.
+- **Captured:** Michael prompt revision session, 2026-04-22
+
+---
+
+### [Pipeline] Strategy brief prompt quality review — directive precision now load-bearing
+
+- **Issue:** The Michael prompt now treats Strategy Brief binding constraints as hard constraints that suppress page creation. This means imprecise or overly broad Strategy Brief language can silently prevent legitimate pages from being built. The Strategy Brief prompt (`scripts/strategy-brief.ts`) was written when brief content was advisory, not binding.
+- **Why it matters:** An overly broad prohibition like "avoid competitor terms" could suppress pages targeting legitimate keywords. Strategy Brief quality is now on the critical path for architecture accuracy.
+- **Prerequisites:** Review `strategy-brief.ts` prompt for directive precision. Ensure the four sections (Visibility Posture, Keyword Research Directive, Architecture Directive, Risk Flags) use specific, falsifiable language rather than vague guidance.
+- **Scope estimate:** M — prompt review + potential revision of strategy brief generation prompt.
+- **Captured:** Michael prompt revision session, 2026-04-22
+
+---
+
+### [Schema] `geo_mode` semantic cleanup — city/metro conflate geographic unit with market count
+
+- **Issue:** `geo_mode` values `city` and `metro` conflate the geographic unit (city) with the market type (single vs multi-market). A single-city client and a 5-city client both use `city` mode but may need different geographic architecture guidance. Similarly, `state` covers single-state (IMA) and multi-state (SMA) with different patterns.
+- **Why it matters:** The `getGeographicArchitectureBlock()` function returns the same block for both single-city and multi-city clients. The geographic architecture principles are the same, but the scale implications differ.
+- **Prerequisites:** Evaluate whether the current city/metro/state/national taxonomy is sufficient or whether market-count should be a separate dimension.
+- **Scope estimate:** L — schema change across pipeline + dashboard + edge functions.
+- **Captured:** Michael prompt revision session, 2026-04-22
+
+---
+
+### [Pipeline] Pam brief handling for dual-parent service+location pages
+
+- **Issue:** The geographic architecture blocks describe a dual-parent relationship for service+location pages (service pillar = topical parent, geographic hub = geographic parent). Pam's content brief generation (`scripts/generate-brief.ts`) currently treats each page as belonging to a single silo. Dual-parent pages need both parents referenced in the brief.
+- **Why it matters:** Content briefs for geographic service pages should reference both the service pillar's positioning and the geographic hub's market context. Without this, briefs may miss geographic specificity or service depth.
+- **Prerequisites:** Review Pam's brief generation prompt for silo/parent context injection. Determine how dual-parent relationship should surface in the brief.
+- **Scope estimate:** M — Pam prompt update + brief schema addition for secondary parent.
+- **Captured:** Michael prompt revision session, 2026-04-22
+
+---
+
+### [Pipeline] Coverage assessment rows cause false positive slug corruption in Michael validation
+
+- **Issue:** `runMichael()` pre-flight slug corruption check counts Buyer Journey Coverage Assessment table rows (e.g., "Awareness (problem recognition, research queries)") as rejected slugs. This produces false positive corruption ratios of ~30%, triggering unnecessary retries.
+- **Why it matters:** Each retry costs one additional Sonnet call (~$0.10-0.15). The parser (`parseBlueprintMarkdown`) correctly filters these rows — the corruption check is less sophisticated.
+- **Prerequisites:** The `checkBlueprint()` function in `runMichael()` uses `parseBlueprintMarkdown()` which has its own silo table regex. The regex should be tightened to only match actual silo page tables, not coverage assessment tables.
+- **Scope estimate:** S — tighten the silo table regex in `parseBlueprintMarkdown()` to exclude `### Silo N Coverage Assessment` sections.
+- **Captured:** Michael prompt revision validation, 2026-04-22

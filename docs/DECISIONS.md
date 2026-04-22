@@ -4,6 +4,30 @@ Non-obvious choices that would look wrong without context. Check here before "fi
 
 ---
 
+**2026-04-22: Michael prompt revision — 8 architectural decisions**
+
+The Michael prompt was revised to fix material regressions in the forgegrowth.ai April 22 architecture blueprint: split GEO/AEO into distinct commercial pages, created near-me slug pages, inflated page count, and included geographic pages on a national client. Eight changes were made:
+
+1. **Two-tier Strategy Brief authority** — Strategy Brief content is classified as binding constraints (prohibitions: "do not," "avoid," "exclude") vs strategic framing (everything else). When structured data (keyword matrix, revenue clusters, gap analysis) conflicts with a binding constraint, the constraint wins. Deferred opportunities surface in a new `## Deferred Targets` section. *Why:* The previous "CRITICAL INSTRUCTION" framing was too vague — Michael treated all brief content as authoritative framing but overrode specific prohibitions when volume data looked compelling.
+
+2. **Cluster coherence over page count (Rule 4b)** — Replaced fixed page-count caps ("max 15/25 new pages") with a coherence principle: each silo must be topically complete with distinct intent coverage. Do not inflate by splitting adjacent intents. Total page count is a downstream cluster activation decision. *Why:* Caps were arbitrary and either too tight (suppressing legitimate coverage) or gaming-incentivized (splitting intents to hit the cap with more pages).
+
+3. **Near-me slug prohibition (Rule 14)** — Changed from "do not use near-me keywords as primary_keyword" to "do not create pages whose URL slug contains near-me." Near-me queries are captured through properly-structured geographic pages with location-modified primary keywords. *Why:* The old rule banned near-me *keywords* but Michael still created near-me *slugs* because the rule didn't explicitly cover URL construction.
+
+4. **Conditional geographic injection by `geo_mode`** — Replaced rigid Rule 16 ("geo pages are roles within a silo") with `getGeographicArchitectureBlock()` that injects no geographic rules for `national`, `CITY_METRO_GEO_BLOCK` for `city/metro`, and `STATE_GEO_BLOCK` for `state`. *Why:* Rule 16 was hardcoded for multi-state medical education clients (IMA/SMA) and actively harmful for national clients (forgegrowth) — prescribing geographic page structures when no geographic pages should exist.
+
+5. **Service-primary container methodology** — Both geographic blocks establish: service is the primary topical container, location is the qualifier. Service+location pages nest under service pillars, not under locations. Geographic hub pages are complementary, not primary. Dual-parent relationship (service pillar + geographic hub). *Why:* This is the load-bearing structural claim. Inverting it (location-primary structure) fragments topical authority across geographic siblings instead of accumulating it at the service level.
+
+6. **Deferred Targets mechanism** — New output format section that reports opportunities the structured data surfaced but that were deferred due to Strategy Brief binding constraints. Each entry: Opportunity, Signal, Constraint, Decision. *Why:* Without this, Michael silently suppressed opportunities when brief constraints won — making it impossible to audit what was deferred and whether the constraint was correct.
+
+7. **Cannibalization pre-finalization self-check** — Before finalizing silo tables, Michael reviews them for internal cannibalization (competing primary keywords, near-duplicate intent, parent/child overlap) and consolidates. The Cannibalization Warnings section reports resolved risks, not self-created ones. *Why:* Michael was creating cannibalization risks in silo tables and then flagging them post-hoc in the warnings section — generating the problem and the diagnosis simultaneously.
+
+8. **State-mode geographic guidance** — The STATE_GEO_BLOCK adds: delivery-intent queries are typically city-level, regulatory/licensing are state-level, comparative follow the data. Let keyword data drive the geographic level. *Why:* Rule 16 prescribed city-level pages uniformly, but state-mode clients have mixed geographic intent levels that keyword data should drive.
+
+Validation: forgegrowth.ai (national, `geo_mode='national'`) blueprint produced 46 valid pages in 6 silos. Zero near-me slugs, zero geographic pages, 3 deferred targets, 6 resolved cannibalization warnings. GEO/AEO in one silo (not split). Coverage assessment rows cause false positive slug corruption (~30%) — non-blocking, pre-existing parser issue.
+
+---
+
 **2026-04-22: Review gate is a full process exit, not a pause — programmatic re-runs must account for it**
 
 During forgegrowth.ai hybrid promotion, a full pipeline trigger (`/trigger-pipeline` without `start_from`) silently stopped after Phase 1b because `review_gate_enabled = true`. The pipeline child process exited cleanly with code 0 (`exit 0` in `run-pipeline.sh:240`), the in-flight tracker cleared, and the audit sat in `awaiting_review`. The operator had to make a second API call with `start_from: '2'` to complete the remaining phases.
