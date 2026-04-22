@@ -35,12 +35,9 @@ Each entry is self-contained: picking it up 3 months later should not require re
 
 ---
 
-### [Pipeline] Inject `core_services` into Haiku classification prompt for vocational verticals
+### ~~[Pipeline] Inject `core_services` into Haiku classification prompt for vocational verticals~~ RESOLVED
 
-- **Issue:** The Haiku classification prompt (`classify-keywords.ts`) receives `service_key` and `domain` but not `core_services` from `client_context`. For vocational/training businesses (IMA), this means Haiku doesn't know which keywords map to specific course offerings. "NREMT Test Prep" is classified as Article (informational concept) when it's actually a specific IMA product (should be Course).
-- **Why it matters:** ~10-30 keywords per training-vertical audit get Article instead of Course. Downstream impact: Pam generates article-framed content instead of course-landing-page content for these clusters. Entity Map in cluster strategy uses wrong entity type.
-- **Prerequisites:** Classification validation complete (report: `docs/classification-validation-report-2026-04-21.md`). Enhancement is non-blocking — current rubric is 90% accurate on entity_type.
-- **Scope estimate:** S — inject `opts.coreServices` into the Haiku prompt as "This business offers: [list]". Add `coreServices?: string` to `ClassifyOptions`. Load from `client_context.core_services` in `pipeline-generate.ts`.
+- **Resolved:** Session 2026-04-22. `coreServices?: string[]` added to `ClassifyOptions` in `classify-keywords.ts`. Haiku prompt conditionally injects service-preference guidance + business service list when `core_services` is populated. `pipeline-generate.ts` extracts from `audits.client_context` JSONB (comma-separated string → array). No prompt change when `core_services` is absent.
 - **Captured:** Classification validation investigation, 2026-04-21
 
 ---

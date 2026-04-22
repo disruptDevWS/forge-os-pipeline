@@ -2491,10 +2491,11 @@ export async function runCanonicalize(sb: SupabaseClient, auditId: string, domai
     const { _setClassifyCallClaude, classifyKeywords } = await import('../src/agents/canonicalize/classify-keywords.js');
     _setClassifyCallClaude(callClaude);
 
-    // Load client context for brand detection
+    // Load client context for brand detection + core_services
     let clientBusinessName: string | undefined;
     let competitorNames: string[] | undefined;
     let verticalDefault = 'Service';
+    let coreServices: string[] | undefined;
     try {
       const { data: auditCtx } = await (sb as any).from('audits').select('client_context').eq('id', auditId).maybeSingle();
       if (auditCtx?.client_context) {
@@ -2502,6 +2503,11 @@ export async function runCanonicalize(sb: SupabaseClient, auditId: string, domai
         clientBusinessName = ctx.business_name || ctx.company_name;
         competitorNames = ctx.competitors;
         if (ctx.vertical === 'education' || ctx.vertical === 'training') verticalDefault = 'Course';
+        if (ctx.core_services) {
+          coreServices = typeof ctx.core_services === 'string'
+            ? ctx.core_services.split(',').map((s: string) => s.trim()).filter(Boolean)
+            : Array.isArray(ctx.core_services) ? ctx.core_services : undefined;
+        }
       }
     } catch {
       // Non-fatal: classification will use domain-based brand detection
@@ -2515,6 +2521,7 @@ export async function runCanonicalize(sb: SupabaseClient, auditId: string, domai
       clientBusinessName,
       competitorNames,
       verticalDefault,
+      coreServices,
     });
 
     // Step 2: is_near_miss clear (depends on is_brand, intent_type now written)

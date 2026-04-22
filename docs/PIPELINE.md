@@ -564,6 +564,8 @@ In hybrid mode, classification fields are extracted by a dedicated lightweight p
 2. **Deterministic `is_brand` (partial):** String match against domain name, `clientBusinessName`, and `competitorNames` from client context
 3. **Haiku batch:** All keywords sent to Haiku in batches of 100 for `intent_type`, `primary_entity_type`, and unresolved `is_brand`
 
+**`core_services` prompt enrichment (2026-04-22):** When `audits.client_context.core_services` is populated (comma-separated string), the Haiku prompt receives two additional lines: (1) guidance to prefer Service/Course over Article for keywords matching listed services, (2) the actual service list. No prompt change when `core_services` is absent. Fixes entity_type misclassification for vocational verticals (e.g., "NREMT Test Prep" → Course instead of Article).
+
 **Writes per keyword:** `is_brand`, `intent_type`, `intent` (=intent_type for backward compat), `is_near_me`, `primary_entity_type`, `canonicalize_mode`
 
 **Cost:** ~$0.02-0.03 per 1,000 keywords (vs ~$0.30-0.50 for legacy Sonnet grouping).

@@ -41,7 +41,7 @@
 | `market_geos` | Dashboard | Pipeline | JSON array of {city, state} |
 | `status` | Both | Dashboard | TEXT: `draft`, `running`, `completed`, `failed`, `awaiting_review` |
 | `error_message` | Pipeline | Dashboard | |
-| `client_context` | Dashboard | Pipeline | JSONB: `{core_services, differentiators, service_area, notes}` |
+| `client_context` | Dashboard | Pipeline | JSONB: `{core_services, differentiators, service_area, notes}`. `core_services` read by Phase 3c classification extraction (Haiku prompt enrichment) + `loadClientContextAsync()` (Phase 1b, 2, 6). |
 | `canonicalize_mode` | Dashboard / Pipeline | Pipeline | TEXT: `legacy` (default), `hybrid`, `shadow_hybrid`. Controls Phase 3c clustering algorithm. Read by `handleTrigger` and `handleRecanonicalize` to pass `--canonicalize-mode` flag to downstream scripts. |
 | `review_gate_enabled` | Dashboard | Pipeline | Boolean, default false |
 | `performance_tracking_enabled` | Dashboard | Pipeline (cron) | Boolean, default false. Opt-in for monthly cron ranking tracking. |

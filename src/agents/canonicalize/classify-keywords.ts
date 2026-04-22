@@ -34,6 +34,7 @@ interface ClassifyOptions {
   clientBusinessName?: string;
   competitorNames?: string[];
   verticalDefault?: string;
+  coreServices?: string[];
 }
 
 // Injected callClaude — same pattern as hybrid/arbitrator.ts
@@ -130,8 +131,8 @@ primary_entity_type definitions:
 - "Article": purely informational content not tied to a specific service or course
 
 When uncertain between Service and Course: if the offering grants a credential or certification, use Course. If it's a job performed for a customer, use Service.
-
-Business context: ${opts.serviceKey || 'local service'} business, domain: ${opts.domain}
+${opts.coreServices && opts.coreServices.length > 0 ? `\nWhen a keyword matches or closely relates to one of the business's listed services/programs, prefer Service (or Course for educational/training programs) over Article.\n` : ''}
+Business context: ${opts.serviceKey || 'local service'} business, domain: ${opts.domain}${opts.coreServices && opts.coreServices.length > 0 ? `\nThis business specifically offers: ${opts.coreServices.join(', ')}` : ''}
 
 KEYWORDS:
 ${kwList}

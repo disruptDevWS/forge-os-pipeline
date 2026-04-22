@@ -4,6 +4,18 @@ Non-obvious choices that would look wrong without context. Check here before "fi
 
 ---
 
+**2026-04-22: `core_services` injection into Haiku classification prompt — conditional, not universal**
+
+The Haiku classification prompt in `classify-keywords.ts` now conditionally injects `core_services` from `audits.client_context` when populated. Two additions: (1) a guidance line ("prefer Service/Course over Article when keyword matches a listed service/program") and (2) the actual service list ("This business specifically offers: X, Y, Z").
+
+Design decisions:
+- **Conditional injection, not always-on:** When `core_services` is absent or empty, the prompt is identical to pre-injection behavior. No regression risk for audits without client context.
+- **Extracted from existing Supabase query:** `pipeline-generate.ts` already fetches `client_context` for brand detection. `core_services` extraction added to the same query — no additional DB call.
+- **Comma-separated string → array split:** Mirrors the pattern in `client-context.ts:mapDashboardContext()` (`.split(',').map(s => s.trim()).filter(Boolean)`). Handles both string and array formats defensively.
+- **Guidance line says "prefer", not "always":** Haiku retains discretion. A keyword like "how to study for NREMT" about a course topic may still correctly get Article if the keyword is purely informational. The guidance biases toward Course/Service for ambiguous cases only.
+
+---
+
 **2026-04-21: Session B — Legacy Sonnet eliminated in hybrid mode; classification extracted to Haiku + rules**
 
 In hybrid mode, legacy Sonnet grouping is skipped entirely. The new path: classification extraction (Haiku + deterministic rules) → hybrid pre-cluster + arbitrate + persist → rebuild. Legacy mode retains the full legacy Sonnet path unchanged. Shadow mode runs legacy Sonnet + hybrid (unchanged).
