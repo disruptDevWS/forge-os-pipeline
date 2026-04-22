@@ -4,6 +4,17 @@ Non-obvious choices that would look wrong without context. Check here before "fi
 
 ---
 
+**2026-04-22: Embed-at-ingestion — cache pre-warming at Phase 2 and Phase 3b**
+
+Embedding generation moved from Phase 3c (on-demand during canonicalize) to Phase 2 and Phase 3b (at keyword ingestion time). `scripts/embed-keywords.ts` calls `embedBatch()` after keywords are inserted into `audit_keywords`. Phase 3c `preCluster()` then gets near-100% cache hits.
+
+- **Why not add a `VECTOR(1536)` column to `audit_keywords`?** The `embeddings` table already handles dedup via `content_hash` and cross-audit sharing. Adding ~6KB/row to `audit_keywords` would bloat every query and all downstream consumers already use `getEmbeddingsBatch()` against the `embeddings` table.
+- **Why both Phase 2 AND Phase 3b?** Phase 3b is the authoritative pass (covers the complete keyword set including DataForSEO-enriched `ranked` keywords). Phase 2 is best-effort warm-up so `--start-from 2` then stop scenarios still benefit. Phase 2 keywords cached at Phase 2 become cache hits at Phase 3b — zero duplicate OpenAI cost.
+- **Why non-fatal?** Embedding failures should never halt the pipeline. Phase 3c still works without cache (it calls `embedBatch()` itself), just more slowly. The `try/catch` in `embedAuditKeywords()` logs warnings but always returns cleanly.
+- **Why env propagation in `sync-to-dashboard.ts`?** `embedBatch()` calls `getSupabaseAdmin()` which reads `process.env.SUPABASE_URL` / `process.env.SUPABASE_SERVICE_ROLE_KEY`. `sync-to-dashboard.ts`'s `loadEnv()` only returns a local `Record<string, string>` — it doesn't set `process.env`. Without explicit propagation, `getSupabaseAdmin()` throws.
+
+---
+
 **2026-04-22: Michael prompt revision — 8 architectural decisions**
 
 The Michael prompt was revised to fix material regressions in the forgegrowth.ai April 22 architecture blueprint: split GEO/AEO into distinct commercial pages, created near-me slug pages, inflated page count, and included geographic pages on a national client. Eight changes were made:

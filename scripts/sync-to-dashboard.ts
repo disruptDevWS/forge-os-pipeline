@@ -16,6 +16,7 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { parse as csvParse } from 'csv-parse/sync';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { embedAuditKeywords } from './embed-keywords.js';
 import { isCommitted, phaseIndex, type RerunScenario } from './rerun-utils.js';
 
 // ============================================================
@@ -1119,6 +1120,9 @@ async function syncJim(
       console.log(`  [jim] Inserted ${totalInserted} keywords (${nearMiss.length} near-miss)`);
     }
   }
+
+  // Pre-warm embedding cache for Phase 3c canonicalize (non-fatal, all keywords)
+  await embedAuditKeywords(sb, auditId, null, 'phase-3b');
 
   // Build clusters + rollups from keyword data
   await rebuildClustersAndRollups(sb, auditId, 'jim');
@@ -2672,6 +2676,11 @@ async function main() {
     console.error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in .env');
     process.exit(1);
   }
+
+  // Propagate to process.env for modules that read it directly (embeddings service)
+  process.env.SUPABASE_URL = process.env.SUPABASE_URL || supabaseUrl;
+  process.env.SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || serviceRoleKey;
+  process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || env.OPENAI_API_KEY || '';
 
   const sb = createClient(supabaseUrl, serviceRoleKey);
 

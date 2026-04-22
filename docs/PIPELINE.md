@@ -460,7 +460,9 @@ Client Brief (auto after Phase 6d, non-fatal)
 - `research/{date}/keyword_research_raw.json`
 - `research/{date}/keyword_research_summary.md`
 
-**Supabase writes:** `audit_keywords` (INSERT, source='keyword_research'), `agent_runs`
+**Supabase writes:** `audit_keywords` (INSERT, source='keyword_research'), `agent_runs`, `embeddings` (UPSERT, cache pre-warm)
+
+**Embed-at-ingestion:** After keyword seeding, calls `embedAuditKeywords()` from `scripts/embed-keywords.ts` to pre-warm the `embeddings` table cache. Non-fatal — failures are logged as warnings. Pre-warms Phase 3c canonicalize (cache hits instead of fresh OpenAI calls).
 
 **Near-me detection:** Deterministic `keyword.toLowerCase().includes(' near me')` — not LLM-based.
 
@@ -535,6 +537,8 @@ Client Brief (auto after Phase 6d, non-fatal)
 | `audits` | UPDATE | status='completed', completed_at |
 
 Each `audit_keywords` row includes revenue estimates: `delta_revenue_low/mid/high` computed from `delta_traffic × CR × ACV` at three tiers. Near-miss filter: `is_brand=false AND intent≠navigational AND pos in [min,max] AND vol≥min_volume`.
+
+**Embed-at-ingestion:** After keyword INSERT, calls `embedAuditKeywords()` from `scripts/embed-keywords.ts` with `source=null` (all keywords — both `ranked` and `keyword_research`). This is the authoritative embedding pass; Phase 2's earlier pass pre-warmed `keyword_research` rows, and any cache hits from Phase 2 are reused here (zero duplicate OpenAI cost). Non-fatal — failures are logged as warnings.
 
 **Important:** Clusters built here use raw `extractTopic()` (5-word truncation) because `canonical_key` doesn't exist yet. Phase 3d rebuilds clusters after canonicalize provides clean keys.
 
@@ -1395,6 +1399,7 @@ All paths relative to `audits/{domain}/`. Cross-phase reads use `resolveArtifact
 | `src/agents/canonicalize/hybrid/persist.ts` | Write hybrid results to audit_keywords (hybrid or shadow columns) |
 | `src/agents/canonicalize/hybrid/types.ts` | TypeScript types: ClassificationMethod, VariantInput, PreClusterDecision, etc. |
 | `src/agents/canonicalize/build-legacy-payload.ts` | Phase 2.3c fix: excludes canonical fields in hybrid mode |
+| `scripts/embed-keywords.ts` | Embed-at-ingestion: pre-warm embedding cache for audit keywords (Phase 2 + 3b) |
 | `src/embeddings/service.ts` | Embedding service: OpenAI embed + Supabase cache + pgvector similarity |
 | `src/embeddings/config.ts` | Embedding constants: model, dimensions, thresholds |
 | `src/embeddings/hash.ts` | Content hash (SHA-256) for embedding deduplication |

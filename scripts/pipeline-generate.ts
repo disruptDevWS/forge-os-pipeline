@@ -23,6 +23,7 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import * as child_process from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { embedAuditKeywords } from './embed-keywords.js';
 import {
   callClaude,
   callClaudeAsync,
@@ -4513,6 +4514,9 @@ REMINDER: Your response IS the JSON — start with { and end with }. No preamble
       }
     }
     console.log(`  Seeded ${inserted} keywords into audit_keywords (source: keyword_research)`);
+
+    // Pre-warm embedding cache for Phase 3c canonicalize (non-fatal)
+    await embedAuditKeywords(sb, auditId, 'keyword_research', 'phase-2');
   }
 
   console.log(`  KeywordResearch complete — ${validated.length} validated keywords, ${opportunities.length} opportunities`);
