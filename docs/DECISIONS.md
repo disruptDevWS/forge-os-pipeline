@@ -4,6 +4,16 @@ Non-obvious choices that would look wrong without context. Check here before "fi
 
 ---
 
+**2026-04-22: Review gate is a full process exit, not a pause — programmatic re-runs must account for it**
+
+During forgegrowth.ai hybrid promotion, a full pipeline trigger (`/trigger-pipeline` without `start_from`) silently stopped after Phase 1b because `review_gate_enabled = true`. The pipeline child process exited cleanly with code 0 (`exit 0` in `run-pipeline.sh:240`), the in-flight tracker cleared, and the audit sat in `awaiting_review`. The operator had to make a second API call with `start_from: '2'` to complete the remaining phases.
+
+This is by design — the gate is opt-in and the exit-not-pause behavior is intentional (Railway's ephemeral filesystem means a sleeping process would lose state on deploy). But any automated or scripted full re-run on a review-gate-enabled audit must check for this condition or it will appear to "complete" Phase 1 and stop.
+
+Recommendation: Before programmatic full re-runs, check `audits.review_gate_enabled`. If true, either (a) temporarily disable it, (b) use `start_from: '2'` to skip directly past the gate, or (c) expect to make a second resume call.
+
+---
+
 **2026-04-22: `core_services` injection into Haiku classification prompt — conditional, not universal**
 
 The Haiku classification prompt in `classify-keywords.ts` now conditionally injects `core_services` from `audits.client_context` when populated. Two additions: (1) a guidance line ("prefer Service/Course over Article when keyword matches a listed service/program") and (2) the actual service list ("This business specifically offers: X, Y, Z").

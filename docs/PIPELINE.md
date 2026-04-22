@@ -404,7 +404,34 @@ Client Brief (auto after Phase 6d, non-fatal)
 
 **Supabase writes:** `agent_runs` (agent_name='strategy_brief')
 
-**Review Gate (opt-in):** If `audits.review_gate_enabled = true` and mode is `full`, the pipeline pauses after Phase 1b with `audits.status = 'awaiting_review'`. The user can review `strategy_brief.md`, add annotations (appended to `client_context.out_of_scope`), then resume via the `pipeline-controls` edge function (`action: 'resume_pipeline'`). Resume triggers with `start_from: '2'` (Phase 2 onward, skipping already-completed Phase 1b). The review gate is opt-in and defaults to false — most audits run unattended.
+#### Review Gate (opt-in)
+
+**Trigger condition:** `audits.review_gate_enabled = true` AND `mode = full`. Checked by `run-pipeline.sh` after Phase 1b via `update-pipeline-status.ts check-review-gate`.
+
+**What happens when it fires:**
+1. Pipeline sets `audits.status = 'awaiting_review'` and **exits** (`exit 0` in `run-pipeline.sh:240`). The shell process terminates — this is not a pause/sleep, it is a full stop. Phases 2–6d do not run.
+2. The pipeline server's in-flight tracker clears the domain (the child process exited cleanly).
+3. The audit sits in `awaiting_review` status indefinitely until manually resumed.
+
+**How to resume:**
+- **Dashboard UI:** The Settings page shows a "Review & Resume" panel when `status = 'awaiting_review'`. User can read `strategy_brief.md`, add annotations, and click Resume.
+- **Edge function:** `pipeline-controls` with `action: 'resume_pipeline'`, `domain`, `email`, and optional `annotations`. The edge function appends annotations to `client_context.out_of_scope`, then POSTs to `/trigger-pipeline` with `start_from: '2'`.
+- **Direct API:** POST `/trigger-pipeline` with `{"domain": "...", "email": "...", "start_from": "2"}`. Must use `start_from: '2'` (not `'1b'`) — resuming from `'1b'` causes an infinite loop because Phase 1b re-runs, hits the gate again, and exits.
+
+**Operational implications for programmatic re-runs:**
+- A full pipeline trigger (`/trigger-pipeline` without `start_from`) on a review-gate-enabled audit will **always pause** after Phase 1b. Phases 2–6d will not execute until a separate resume call is made.
+- `/recanonicalize` is unaffected (runs only Phase 3c+3d, never touches Phase 1b).
+- A re-run with `start_from: '2'` bypasses the gate entirely (Phase 1b is skipped).
+- The gate only fires in `full` mode. Sales mode (`--mode sales`) skips the gate check.
+
+**Currently enabled audits (2026-04-22):**
+
+| Domain | Audit ID | Intentional? |
+|--------|----------|-------------|
+| forgegrowth.ai | `d1a9b155-...` | Yes — operator's own site, wants strategy review before full run |
+| ecohvacboise.com | `b905e208-...` | Yes — demo client, manual review preferred |
+
+**To disable:** `UPDATE audits SET review_gate_enabled = false WHERE id = '<audit_id>'` or toggle via Settings page.
 
 ---
 
