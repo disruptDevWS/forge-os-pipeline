@@ -5,12 +5,9 @@ Each entry is self-contained: picking it up 3 months later should not require re
 
 ---
 
-### [Dashboard] Clusters page `cluster_strategy` status filter
+### ~~[Dashboard] Clusters page `cluster_strategy` status filter~~ RESOLVED
 
-- **Issue:** The Lovable repo's Clusters page may display deprecated `cluster_strategy` rows alongside active ones. After re-canonicalization orphans a strategy (sets `status='deprecated'`, `deprecated_at` timestamp), the dashboard should stop showing it.
-- **Why it matters:** Users see stale strategies for clusters that have been re-canonicalized. Confusing when active and deprecated strategies coexist for similar topics.
-- **Prerequisites:** Verify current Clusters page query in `lovable-repo/src/hooks/useClusterFocus.ts` (or equivalent). Check if it already filters on `status`. The `status` and `deprecated_at` columns were added in migration 014.
-- **Scope estimate:** S — likely one `.eq('status', 'active')` filter on the dashboard query. May need UI treatment for "no active strategy" state.
+- **Resolved:** Session 2026-04-22 (Session C). Added `.eq('status', 'active')` to both `useClusterStrategy` and `useClusterStrategyPoll` queries in `lovable-repo/src/hooks/useClusterFocus.ts`. Deprecated strategies no longer shown.
 - **Captured:** Session A, 2026-04-20
 
 ---
@@ -96,3 +93,13 @@ Each entry is self-contained: picking it up 3 months later should not require re
 - **Prerequisites:** The `checkBlueprint()` function in `runMichael()` uses `parseBlueprintMarkdown()` which has its own silo table regex. The regex should be tightened to only match actual silo page tables, not coverage assessment tables.
 - **Scope estimate:** S — tighten the silo table regex in `parseBlueprintMarkdown()` to exclude `### Silo N Coverage Assessment` sections.
 - **Captured:** Michael prompt revision validation, 2026-04-22
+
+---
+
+### [Pipeline] VALIDATION.md — Pipeline output validation framework
+
+- **Issue:** No formal validation framework exists to verify pipeline outputs against expected contracts (schema shapes, field completeness, artifact presence). Validation is ad-hoc: manual spot checks after runs. Session C Part 2 was planned to create `docs/VALIDATION.md` documenting per-phase expected outputs, validation queries, and a runbook for post-pipeline verification.
+- **Why it matters:** As the pipeline grows (13+ phases), regressions in one phase silently propagate downstream. A VALIDATION.md would codify what "correct output" looks like for each phase, enabling systematic verification after changes.
+- **Prerequisites:** Review each phase's expected outputs (disk artifacts, Supabase writes, status transitions). Document validation queries that can be run against a live audit to confirm correctness.
+- **Scope estimate:** M — documentation + optional validation script.
+- **Captured:** Session C planning, 2026-04-22

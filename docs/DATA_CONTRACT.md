@@ -591,7 +591,7 @@ Written by `generate-cluster-strategy.ts` (on-demand, per-cluster via `/activate
 | `deprecated_at` | TIMESTAMPTZ, set when status → `deprecated`. NULL for active strategies. |
 | `model_used` | |
 
-**Dashboard reads**: `useClusterStrategy()`, `useClusterStrategyPoll()` → StrategyPage. Dashboard should filter `status='active'` (Session B work — currently unfiltered).
+**Dashboard reads**: `useClusterStrategy()`, `useClusterStrategyPoll()` → StrategyPage. Both filter `.eq('status', 'active')` — deprecated strategies are invisible to the dashboard.
 
 ---
 
