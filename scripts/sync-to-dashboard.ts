@@ -723,14 +723,20 @@ export async function rebuildClustersAndRollups(sb: SupabaseClient, auditId: str
     (assumptions as any).cr_used_mid = observedCr;
   }
 
-  // Preserve cluster activation + hidden status before delete
+  // Preserve cluster activation + hidden status + computed scores before delete
   const { data: existingStatuses } = await sb
     .from('audit_clusters')
-    .select('canonical_key, status, activated_at, activated_by, target_publish_date, notes, hidden_reason, primary_entity_type')
+    .select('canonical_key, status, activated_at, activated_by, target_publish_date, notes, hidden_reason, primary_entity_type, authority_score, authority_score_updated_at, coverage_score, coverage_competitor_count, coverage_score_updated_at')
     .eq('audit_id', auditId);
   const statusMap = new Map(
     (existingStatuses ?? [])
       .filter((r: any) => r.canonical_key && r.status !== 'inactive')
+      .map((r: any) => [r.canonical_key, r]),
+  );
+  // Also preserve computed scores for inactive clusters (scores exist independently of activation)
+  const scoreMap = new Map(
+    (existingStatuses ?? [])
+      .filter((r: any) => r.canonical_key && (r.authority_score != null || r.coverage_score != null))
       .map((r: any) => [r.canonical_key, r]),
   );
 
@@ -843,6 +849,33 @@ export async function rebuildClustersAndRollups(sb: SupabaseClient, auditId: str
       }
       if (restored > 0) {
         console.log(`  [${label}] Restored activation status for ${restored} clusters`);
+      }
+    }
+
+    // Restore computed scores (authority_score, coverage_score) that survive independently of activation
+    if (scoreMap.size > 0) {
+      let scoresRestored = 0;
+      for (const [canonicalKey, prev] of scoreMap) {
+        const exists = clusterRecords.some((r) => r.canonical_key === canonicalKey);
+        if (!exists) continue;
+        const updates: Record<string, any> = {};
+        if ((prev as any).authority_score != null) {
+          updates.authority_score = (prev as any).authority_score;
+          updates.authority_score_updated_at = (prev as any).authority_score_updated_at;
+        }
+        if ((prev as any).coverage_score != null) {
+          updates.coverage_score = (prev as any).coverage_score;
+          updates.coverage_competitor_count = (prev as any).coverage_competitor_count;
+          updates.coverage_score_updated_at = (prev as any).coverage_score_updated_at;
+        }
+        if (Object.keys(updates).length > 0) {
+          await (sb as any).from('audit_clusters').update(updates)
+            .eq('audit_id', auditId).eq('canonical_key', canonicalKey);
+          scoresRestored++;
+        }
+      }
+      if (scoresRestored > 0) {
+        console.log(`  [${label}] Restored computed scores for ${scoresRestored} clusters`);
       }
     }
 
