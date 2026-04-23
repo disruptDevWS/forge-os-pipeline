@@ -111,7 +111,7 @@ for i in "$@"; do
 done
 
 # Phase ordering for --start-from / --stop-after
-PHASE_ORDER=(1 1a 1c 1b 2 3 3b 3c 3d 4 5 6 6.5 6b 6c 6d)
+PHASE_ORDER=(1 1a 1c 1b 2 3 3b 3c 3d 4 4b 5 6 6.5 6b 6c 6d)
 should_run_phase() {
   local phase="$1"
   [[ -z "$START_FROM" && -z "$STOP_AFTER" ]] && return 0
@@ -303,6 +303,13 @@ if [[ "$MODE" != "sales" ]]; then
   echo "--- Phase 4: Competitor SERP Analysis ---"
   npx tsx scripts/pipeline-generate.ts competitors --domain "$DOMAIN" --user-email "$EMAIL"
   else echo "  [SKIP] Phase 4: Competitors"; fi
+
+  # ─── Phase 4b: Competitor Section Extraction ────────────────
+  if should_run_phase 4b; then
+  echo ""
+  echo "--- Phase 4b: Competitor Section Extraction ---"
+  npx tsx scripts/fetch-competitor-sections.ts --domain "$DOMAIN" --user-email "$EMAIL"
+  else echo "  [SKIP] Phase 4b: Section Extraction"; fi
 
   # ─── Phase 5: Content Gap Analysis ──────────────────────────
   if should_run_phase 5; then

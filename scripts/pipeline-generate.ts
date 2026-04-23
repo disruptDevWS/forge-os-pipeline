@@ -3079,6 +3079,7 @@ async function runCompetitors(sb: SupabaseClient, auditId: string, domain: strin
       .slice(0, KW_PER_TOPIC);
 
     const domainCounts: Record<string, number> = {};
+    const domainUrls: Record<string, string> = {}; // first URL seen per domain (for Phase 4b)
     let anySucceeded = false;
 
     for (const kr of repKeywords) {
@@ -3091,6 +3092,7 @@ async function runCompetitors(sb: SupabaseClient, auditId: string, domain: strin
           if (!d) continue;
           if (exclusions.some((ex) => d === ex || d.endsWith('.' + ex))) continue;
           domainCounts[d] = (domainCounts[d] || 0) + 1;
+          if (!domainUrls[d]) domainUrls[d] = u; // keep first (highest-ranked) URL
         }
         anySucceeded = true;
       } catch (err: any) {
@@ -3103,7 +3105,7 @@ async function runCompetitors(sb: SupabaseClient, auditId: string, domain: strin
     const totalAppearances = Object.values(domainCounts).reduce((s, v) => s + v, 0);
     if (totalAppearances === 0) continue;
 
-    // Insert competitors
+    // Insert competitors (with representative_url for Phase 4b section extraction)
     const competitorRecords = Object.entries(domainCounts).map(([dom, count]) => ({
       audit_id: auditId,
       canonical_key: topicKey,
@@ -3111,6 +3113,7 @@ async function runCompetitors(sb: SupabaseClient, auditId: string, domain: strin
       appearance_count: count,
       share: count / totalAppearances,
       is_client: dom === clientDomain,
+      representative_url: domainUrls[dom] ?? null,
     }));
 
     await sb.from('audit_topic_competitors').insert(competitorRecords);
@@ -3398,6 +3401,37 @@ rather than treating mention count differentials as precise topic-level gaps.
     console.log(`  Note: Could not load llm_mentions.json (non-fatal): ${err.message}`);
   }
 
+  // Load section coverage data from Phase 4b (if available)
+  let sectionCoverageBlock = '';
+  try {
+    const { data: coverageData } = await sb
+      .from('cluster_section_coverage')
+      .select('canonical_key, canonical_topic, coverage_score, coverage_status, competitor_count, core_gaps')
+      .eq('audit_id', auditId);
+
+    const scored = (coverageData ?? []).filter((r: any) => r.coverage_status === 'scored' || r.coverage_status === 'no_client_pages');
+    if (scored.length > 0) {
+      const lines = scored.map((r: any) => {
+        if (r.coverage_status === 'no_client_pages') {
+          return `${r.canonical_topic || r.canonical_key}: NO CLIENT PAGES (${r.competitor_count} competitors sampled)`;
+        }
+        const gaps = (r.core_gaps ?? []).slice(0, 5).map((g: any) => g.heading).join(', ');
+        return `${r.canonical_topic || r.canonical_key}: ${r.coverage_score}% coverage (${r.competitor_count} competitors sampled)${gaps ? ` | Core gaps: ${gaps}` : ''}`;
+      }).join('\n');
+
+      sectionCoverageBlock = `\n## Section Coverage Matrix (from competitor page analysis)
+${lines}
+
+NOTE: Coverage scores measure what percentage of competitor subtopics the client covers
+on a content-section level. Use this to generate specific format_gaps with exact missing sections.
+A topic with NO CLIENT PAGES means the client has no URL mapped to that topic — this is the strongest gap signal.
+`;
+      console.log(`  Loaded ${scored.length} section coverage scores for gap prompt`);
+    }
+  } catch (err: any) {
+    console.log(`  Note: Could not load section coverage data (non-fatal): ${err.message}`);
+  }
+
   const prompt = `You are a Content Gap Analyst. Given the competitive landscape data for ${domain}, produce a JSON analysis identifying where competitors rank but the client is absent or weak.
 
 YOUR ENTIRE RESPONSE IS RAW JSON. Output ONLY the JSON object starting with {. No markdown, no code fences, no narration, no explanation before or after.
@@ -3419,7 +3453,7 @@ ${plannedSummary}
 
 ## Client's Existing Page Inventory (from Dwight's crawl, top 100)
 ${crawledInventory}
-${aiVisibilitySection}
+${aiVisibilitySection}${sectionCoverageBlock}
 ## Output — JSON with these keys:
 
 1. "authority_gaps": Array of objects with { topic, client_status, client_position, top_competitor, competitor_position, estimated_volume, revenue_opportunity, data_source }. Topics where competitors dominate and client is absent or ranking 50+. Max 15.
@@ -3434,7 +3468,7 @@ Field rules:
 - revenue_opportunity: MUST be one of two formats only — (a) dollar range: "$X–$Y/mo est." using revenue table data if available, or (b) if no revenue data exists: "No revenue estimate — [competitor domain] holds [X]% share". Do NOT mix formats. Do NOT put competitive share narratives in a dollar range field or vice versa.
 - data_source: "SERP dominance" | "keyword overlap" | "keyword matrix". Use "SERP dominance" for gaps from Dominance Scores or Absent/Weak Topics; "keyword overlap" for gaps from Client Clusters; "keyword matrix" for gaps from the keyword research phase.
 
-2. "format_gaps": Array of objects with { format, description, examples, competitor_using }. Content types competitors have that client lacks (e.g., FAQs, comparison pages, location pages, service+city pages, guides, cost calculators). Max 8.
+2. "format_gaps": Array of objects with { format, description, examples, competitor_using, missing_sections }. Content types competitors have that client lacks (e.g., FAQs, comparison pages, location pages, service+city pages, guides, cost calculators). If Section Coverage Matrix is available, use the Core gaps data to populate missing_sections (array of strings, e.g., ["Refrigerant Types", "Efficiency Ratings"]). If no section data, set missing_sections to []. Max 8.
 
 3. "unaddressed_gaps": Array of objects with { topic, gap_type, reason }. Gaps from authority_gaps NOT covered by Michael's planned architecture pages. Max 10.
 
@@ -3446,7 +3480,9 @@ Ranking criterion: order by estimated revenue opportunity — use CPC × volume 
 
 5. "summary": 2-3 sentence executive summary written for Michael (the architecture agent) and the Validator. Must include: (1) the dominant competitor domain by name and what makes them the primary threat, (2) the single highest-revenue gap topic by name, and (3) if unaddressed_gaps is empty due to missing architecture, note that here. Do not restate array contents — synthesize the competitive situation in terms that directly inform architecture decisions.
 
-6. "ai_citation_gaps": Array of objects with { topic, client_mention_count, top_competitor_mention_count, gap_severity, recommended_action }. Topics where competitors are mentioned more frequently in AI platform responses than the client.
+6. "section_coverage": Object with per-topic coverage summary. Keys are canonical_key strings, values are { score, status, competitor_count, top_gaps }. If Section Coverage Matrix data was provided above, copy the scores directly. If no section data was provided, set to empty object {}.
+
+7. "ai_citation_gaps": Array of objects with { topic, client_mention_count, top_competitor_mention_count, gap_severity, recommended_action }. Topics where competitors are mentioned more frequently in AI platform responses than the client.
    - gap_severity: "high" (competitor 3x+ client mentions), "medium" (competitor 1.5-3x), "low" (competitor slightly ahead)
    - recommended_action: specific action to improve AI citation (e.g., "Add structured FAQ schema", "Create authoritative guide on topic")
    - Max 5 entries. Only include topics where competitor meaningfully outpaces client.
