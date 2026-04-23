@@ -24,6 +24,8 @@ import * as child_process from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { embedAuditKeywords } from './embed-keywords.js';
+import { embedBatch, cosineSimilarity } from '../src/embeddings/index.js';
+import type { EmbeddingResult } from '../src/embeddings/index.js';
 import {
   callClaude,
   callClaudeAsync,
@@ -919,6 +921,107 @@ function deduplicateVolumeResults(
     }
   }
   return [...map.values()];
+}
+
+// ── Embedding-based semantic dedup (Scout Phase 0) ──
+
+const SCOUT_EMBEDDING_DEDUP_THRESHOLD = 0.93;
+
+/**
+ * Deduplicate keywords by embedding similarity. Catches semantic duplicates
+ * that string dedup misses (e.g., "water heater repair" vs "hot water heater service").
+ *
+ * Non-fatal: returns input unchanged on any embedding failure.
+ *
+ * @param items      Keywords with optional position + volume
+ * @param domain     Domain for cache key namespacing
+ * @param threshold  Cosine similarity threshold (default 0.93)
+ */
+async function deduplicateByEmbedding<T extends { keyword: string; position?: number; volume: number }>(
+  items: T[],
+  domain: string,
+  threshold: number = SCOUT_EMBEDDING_DEDUP_THRESHOLD,
+): Promise<T[]> {
+  if (items.length < 2) return items;
+
+  try {
+    // Embed all keywords
+    const embedItems = items.map((item) => ({
+      text: item.keyword,
+      contentType: 'keyword' as const,
+      contentId: `scout:${domain}:${item.keyword.toLowerCase().trim().replace(/\s+/g, '_')}`,
+    }));
+    const embeddings = await embedBatch(embedItems);
+
+    // Filter to items with successful embeddings
+    const indexed: Array<{ idx: number; vec: number[] }> = [];
+    for (let i = 0; i < embeddings.length; i++) {
+      if (embeddings[i]?.embedding) {
+        indexed.push({ idx: i, vec: embeddings[i]!.embedding });
+      }
+    }
+
+    if (indexed.length < 2) return items;
+
+    // O(n^2) pairwise — acceptable at Scout scale (50-500 keywords)
+    const adjacency = new Map<number, Set<number>>();
+    for (let i = 0; i < indexed.length; i++) {
+      for (let j = i + 1; j < indexed.length; j++) {
+        const sim = cosineSimilarity(indexed[i].vec, indexed[j].vec);
+        if (sim >= threshold) {
+          if (!adjacency.has(indexed[i].idx)) adjacency.set(indexed[i].idx, new Set());
+          if (!adjacency.has(indexed[j].idx)) adjacency.set(indexed[j].idx, new Set());
+          adjacency.get(indexed[i].idx)!.add(indexed[j].idx);
+          adjacency.get(indexed[j].idx)!.add(indexed[i].idx);
+        }
+      }
+    }
+
+    if (adjacency.size === 0) return items; // No duplicates found
+
+    // BFS to find connected components
+    const visited = new Set<number>();
+    const components: number[][] = [];
+    for (const startIdx of adjacency.keys()) {
+      if (visited.has(startIdx)) continue;
+      const component: number[] = [];
+      const queue = [startIdx];
+      while (queue.length > 0) {
+        const curr = queue.shift()!;
+        if (visited.has(curr)) continue;
+        visited.add(curr);
+        component.push(curr);
+        for (const neighbor of adjacency.get(curr) ?? []) {
+          if (!visited.has(neighbor)) queue.push(neighbor);
+        }
+      }
+      components.push(component);
+    }
+
+    // Pick representative per component: best position (lowest, primary), highest volume (tiebreaker)
+    const removed = new Set<number>();
+    for (const comp of components) {
+      comp.sort((a, b) => {
+        const posA = (items[a] as any).position ?? 999;
+        const posB = (items[b] as any).position ?? 999;
+        if (posA !== posB) return posA - posB;
+        return items[b].volume - items[a].volume;
+      });
+      // Keep first (best), remove rest
+      for (let i = 1; i < comp.length; i++) {
+        removed.add(comp[i]);
+      }
+    }
+
+    const result = items.filter((_, i) => !removed.has(i));
+    if (removed.size > 0) {
+      console.log(`  Semantic dedup: removed ${removed.size} embedding-similar keywords (threshold ${threshold})`);
+    }
+    return result;
+  } catch (err: any) {
+    console.log(`  Warning: Embedding dedup failed (${err.message}) — using string dedup only`);
+    return items;
+  }
 }
 
 // ============================================================
@@ -5023,6 +5126,9 @@ async function runScout(sb: SupabaseClient, domain: string, prospectConfigPath: 
     console.log(`  Filtered ${nearMeFiltered} "near me" keywords (GBP-driven, not on-page SEO)`);
   }
 
+  // Embedding-based semantic dedup (catches "water heater repair" vs "hot water heater service")
+  rankedKeywords = await deduplicateByEmbedding(rankedKeywords, domain);
+
   // Word-level topic matching (replaces full-phrase substring matching)
   // Generic suffixes are stripped so "locksmith services" matches on root "locksmith",
   // "safe services" matches on "safe", etc. Plurals normalized by dropping trailing 's'.
@@ -5178,6 +5284,9 @@ Group related keywords into single topics. YOUR ENTIRE RESPONSE IS RAW JSON — 
     if (opportunityMap.length < preOppDedup) {
       console.log(`  Deduped opportunity map: ${preOppDedup} → ${opportunityMap.length} (removed ${preOppDedup - opportunityMap.length} near-duplicates)`);
     }
+
+    // Embedding-based semantic dedup for opportunity keywords
+    opportunityMap = await deduplicateByEmbedding(opportunityMap, domain);
   }
 
   // ── Step 4: Gap matrix assembly ──
