@@ -338,9 +338,18 @@ Output as JSON:
       }
     ],
     "schema_notes": "Specific schema implementation notes for this entity type in this vertical"
-  }
+  },
+  "search_intent": "commercial|informational|transactional|navigational|mixed",
+  "intent_rationale": "1-sentence explanation of why this cluster has this dominant intent"
 }
 \`\`\`
+
+Classify the cluster's dominant search intent based on the keyword mix:
+- commercial: >70% of volume targets service/product pages (e.g., "ac repair boise", "hvac installation")
+- informational: >70% of volume targets educational/how-to queries (e.g., "how does a heat pump work")
+- transactional: >70% of volume targets purchase/booking actions (e.g., "book hvac service", "emergency plumber near me")
+- navigational: >70% of volume targets brand/location queries
+- mixed: No single intent exceeds 70% of volume
 
 Rules for key_attributes:
 - List only attributes meaningful for this entity type that the client actually has or should have
@@ -470,6 +479,10 @@ REMINDER: Your response IS the cluster strategy document — start with "### 0. 
   };
 
   const entityMap = extractJsonBySection(result, /### 0\.\s*Entity Map/i);
+  const searchIntent: string | null = entityMap?.search_intent ?? null;
+  if (searchIntent) {
+    console.log(`  [cluster-strategy] Search intent: ${searchIntent}`);
+  }
   const buyerStages = extractJsonBySection(result, /### 1\.\s*Buyer Journey Map/i);
   const recommendedPages = extractJsonBySection(result, /### 3\.\s*Recommended New Pages/i);
   const formatGaps = extractJsonBySection(result, /### 4\.\s*Format Gaps/i);
@@ -500,6 +513,7 @@ REMINDER: Your response IS the cluster strategy document — start with "### 0. 
     ai_optimization_notes: aiOptimizationNotes,
     ai_optimization_targets: aiOptimizationTargets.length > 0 ? aiOptimizationTargets : null,
     entity_map: entityMap,
+    search_intent: searchIntent,
     generated_at: new Date().toISOString(),
     model_used: 'claude-opus-4-6',
   }, { onConflict: 'audit_id,canonical_key' });

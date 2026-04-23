@@ -4041,24 +4041,41 @@ ${semanticReport ? `\n---\n\n## Section 12: Content Similarity & Cannibalization
 
 ## Prioritized Fix List
 
-TIER DEFINITIONS — enforce these strictly:
-- Priority 1 — Critical: Issues that directly prevent Google or LLM crawlers from discovering, crawling, or correctly indexing pages that should rank. Examples: noindex on commercial pages, canonical pointing to wrong URL, 4xx on indexed pages with inbound links, critical duplicate page with no canonical resolution, sitemap missing on a site with weak internal links.
-- Priority 2 — High: Issues that materially reduce ranking potential or conversion path functionality on pages that exist and are indexed. Examples: missing structured data on pages where rich results are achievable, broken internal links on ranking pages, duplicate H1s causing topical signal conflict on target pages, page speed issues with evidence of CWV failure.
-- Priority 3 — Medium: Genuine issues that have real-world consequences but low direct SEO impact. Examples: title truncation, missing alt text, meta description length, external broken links, missing secondary schema types. These should be addressed after Priority 1 and 2 are resolved.
+TIER DEFINITIONS — enforce these strictly using the POP (Priority of Priority) framework.
+For each issue, assign it to a POP Group first, then map to the corresponding Priority tier.
+The "Severity Rationale" column MUST state the POP Group and the specific reasoning.
+
+GROUP A — Crawlability & Indexation (→ Priority 1):
+  Issues preventing discovery/indexing of pages that should rank.
+  Examples: noindex on commercial pages, canonical errors, orphaned indexable pages, sitemap missing on a site with weak internal links.
+
+GROUP B — On-Page SEO Signals (→ Priority 2):
+  Issues reducing ranking potential on indexed pages.
+  Examples: missing/conflicting H1, structured data absent on rich-result-eligible pages, broken internal links on ranking pages.
+  CONDITIONAL: CWV failures (LCP >2.5s, CLS >0.1) on pages targeting competitive commercial keywords where the page ranks 4-30 belong here — Google deprioritizes slow pages in crawl budget and CWV is a direct ranking signal. State the keyword and position evidence in the rationale.
+
+GROUP C — Content & UX Quality (→ Priority 2-3):
+  Issues affecting user experience without direct ranking evidence.
+  Examples: image optimization, internal link architecture, content thinness.
+  CWV issues on pages without competitive keyword targets or ranking evidence stay here.
+
+GROUP D — Informational / Cosmetic (→ Priority 3):
+  Real issues with minimal direct ranking impact.
+  Examples: title truncation, meta description length, external broken links, security headers.
 
 Do NOT include the following in Priority 1 or 2: title tag character counts, meta description character counts, missing alt text on non-LCP images, broken external links, response time without CWV evidence, missing secondary schema types (BreadcrumbList, WebSite/SearchAction) when primary schema is also absent.
 
-### Priority 1 — Critical
-| # | Issue | Affected Pages | Fix |
-|---|-------|---------------|-----|
+### Priority 1 — Critical (Group A)
+| # | Issue | Affected Pages | Fix | Severity Rationale |
+|---|-------|---------------|-----|--------------------|
 
-### Priority 2 — High
-| # | Issue | Affected Pages | Fix |
-|---|-------|---------------|-----|
+### Priority 2 — High (Group B / C)
+| # | Issue | Affected Pages | Fix | Severity Rationale |
+|---|-------|---------------|-----|--------------------|
 
-### Priority 3 — Medium
-| # | Issue | Affected Pages | Fix |
-|---|-------|---------------|-----|
+### Priority 3 — Medium (Group C / D)
+| # | Issue | Affected Pages | Fix | Severity Rationale |
+|---|-------|---------------|-----|--------------------|
 \`\`\`
 
 IMPORTANT:

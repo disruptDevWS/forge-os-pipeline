@@ -14,6 +14,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { callClaude as callClaudeAsync, initAnthropicClient } from './anthropic-client.js';
+import { scanForSlop, buildRewritePrompt, applySlopFixes } from './slop-scanner.js';
 
 // ============================================================
 // .env loader
@@ -394,12 +395,51 @@ async function processOscarRequest(sb: SupabaseClient, req: OscarRequest) {
       console.log('  Warning: Output does not contain <article> tag');
     }
 
+    // 10b. Slop scan QA gate — detect and fix banned phrases
+    let finalHtml = cleanHtml;
+    const violations = scanForSlop(cleanHtml);
+    if (violations.length > 0) {
+      console.log(`  Slop scan: ${violations.length} violation(s) found — running targeted rewrite`);
+      for (const v of violations) {
+        console.log(`    - "${v.label}" at line ${v.lineNumber}`);
+      }
+
+      try {
+        const rewritePrompt = buildRewritePrompt(violations);
+        const rewriteResult = await callClaudeAsync(rewritePrompt, { model: 'sonnet', phase: 'content-qa' });
+
+        // Parse JSON replacements from response
+        const jsonMatch = rewriteResult.match(/\[[\s\S]*\]/);
+        if (jsonMatch) {
+          const replacements = JSON.parse(jsonMatch[0]);
+          finalHtml = applySlopFixes(cleanHtml, violations, replacements);
+
+          // Verify
+          const postViolations = scanForSlop(finalHtml);
+          if (postViolations.length > 0) {
+            console.warn(`  Slop scan: ${postViolations.length} violation(s) remain after rewrite — flagging`);
+            for (const v of postViolations) {
+              console.warn(`    - "${v.label}" at line ${v.lineNumber}`);
+            }
+          } else {
+            console.log(`  Slop scan: rewrite clean — all violations resolved`);
+          }
+        } else {
+          console.warn('  Slop scan: could not parse rewrite response — using original HTML');
+        }
+      } catch (err) {
+        console.warn(`  Slop scan: rewrite failed — using original HTML: ${(err as Error).message}`);
+      }
+    } else {
+      console.log('  Slop scan: 0 violations — clean');
+    }
+
     // 11. Write HTML file
     const date = todayStr();
     const outDir = path.join(AUDITS_BASE, req.domain, 'content', date, slug);
     fs.mkdirSync(outDir, { recursive: true });
     const htmlPath = path.join(outDir, 'page.html');
-    fs.writeFileSync(htmlPath, cleanHtml, 'utf-8');
+    fs.writeFileSync(htmlPath, finalHtml, 'utf-8');
     console.log(`  Written ${path.relative(process.cwd(), htmlPath)}`);
 
     // 12. Update execution_pages status
@@ -412,7 +452,7 @@ async function processOscarRequest(sb: SupabaseClient, req: OscarRequest) {
       .maybeSingle();
 
     if (existing) {
-      await sb.from('execution_pages').update({ status: 'in_progress', content_html: cleanHtml }).eq('id', (existing as any).id);
+      await sb.from('execution_pages').update({ status: 'in_progress', content_html: finalHtml }).eq('id', (existing as any).id);
       console.log(`  Updated execution_page → in_progress (displays as draft_ready)`);
     }
 

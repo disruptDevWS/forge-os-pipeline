@@ -98,6 +98,9 @@ Prospect Brief (auto after Scout, non-fatal)
 Phase 1 (Dwight)
   PRODUCES:  internal_all.csv, AUDIT_REPORT.md, ~20 CSVs
              Copies internal_all.csv → architecture/
+  NOTE:      Priority tables use POP framework (Group A/B/C/D → P1-3) with 5-column format
+             including Severity Rationale. CWV is conditionally Group B (with ranking evidence)
+             or Group C (without). Parser has backward-compat fallback for 4-column format.
       │
       ▼
 Phase 1a (Verify Dwight)
@@ -995,6 +998,8 @@ Oscar (generate-content.ts) — polls oscar_requests
 
 **HTML extraction:** `extractHtmlContent()` strips Claude preamble/postamble — looks for first `<!--` through last `-->`, falls back to code fence stripping.
 
+**Slop scan QA gate:** After HTML extraction, `scanForSlop()` from `scripts/slop-scanner.ts` checks for banned phrases (consolidated from `system-prompt.md` + `seo-playbook.md`). If violations found: builds sentence-level rewrite prompt (JSON format, ~500 tokens), calls Sonnet via `content-qa` phase (4096 max tokens), applies replacements via string substitution. Cap at one retry — if violations remain after rewrite, uses rewritten version and logs warnings. Non-fatal: rewrite failure falls through to original HTML.
+
 ---
 
 ### sync-pam — Batch Re-sync (Disk → Supabase)
@@ -1242,8 +1247,8 @@ Cluster activation is an on-demand step that generates a strategy document for a
 1. Resolve audit from Supabase (domain + email)
 2. Load cluster (with `primary_entity_type`), keywords, execution_pages, gap analysis, competitors, client context
 3. Build prompt → `callClaude()` with Opus (strategic judgment tier). Prompt includes entity type context and Section 0 (Entity Map) requirement.
-4. Parse via `extractJsonBySection()` (header-based, not positional): entity_map (Section 0), buyer_stages (Section 1), recommended_pages (Section 3), format_gaps (Section 4), AI optimization notes (Section 5)
-5. Upsert `cluster_strategy` table (includes `entity_map` JSONB)
+4. Parse via `extractJsonBySection()` (header-based, not positional): entity_map (Section 0, includes `search_intent` + `intent_rationale`), buyer_stages (Section 1), recommended_pages (Section 3), format_gaps (Section 4), AI optimization notes (Section 5)
+5. Upsert `cluster_strategy` table (includes `entity_map` JSONB, `search_intent` TEXT)
 6. SET `audit_clusters.status = 'active'`, `activated_at = now()`
 7. SET `execution_pages.cluster_active = true` WHERE `canonical_key = key`
 8. **Insert recommended_pages into `execution_pages`** with `source: 'cluster_strategy'`, `buyer_stage`, `strategy_rationale` (slug dedup check prevents duplicates on re-activation)

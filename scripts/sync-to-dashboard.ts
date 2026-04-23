@@ -1425,22 +1425,46 @@ function parseAuditReport(filePath: string): ParsedAuditReport {
     const label = section[2].trim().replace(/\(.+\)/, '').trim();
     const body = section[3];
 
-    const tableRows = body.matchAll(
-      /\|\s*(\d+)\s*\|\s*(.+?)\s*\|\s*(.+?)\s*\|\s*(.+?)\s*\|/g
+    // Try 5-column format first (POP hierarchy with Severity Rationale)
+    const tableRows5 = body.matchAll(
+      /\|\s*(\d+)\s*\|\s*(.+?)\s*\|\s*(.+?)\s*\|\s*(.+?)\s*\|\s*(.+?)\s*\|/g
     );
-    for (const row of tableRows) {
+    let found5Col = false;
+    for (const row of tableRows5) {
       const num = parseInt(row[1], 10);
       if (isNaN(num)) continue;
+      found5Col = true;
       result.prioritizedFixes.push({
         number: num,
         issue: row[2].trim(),
         affected_pages: row[3].trim(),
         fix: row[4].trim(),
+        severity_rationale: row[5].trim(),
         priority_tier: tier,
         priority_label: label,
         status: 'flagged',
         original_severity: label,
       });
+    }
+    // Fallback to 4-column format (backward compat with old reports)
+    if (!found5Col) {
+      const tableRows4 = body.matchAll(
+        /\|\s*(\d+)\s*\|\s*(.+?)\s*\|\s*(.+?)\s*\|\s*(.+?)\s*\|/g
+      );
+      for (const row of tableRows4) {
+        const num = parseInt(row[1], 10);
+        if (isNaN(num)) continue;
+        result.prioritizedFixes.push({
+          number: num,
+          issue: row[2].trim(),
+          affected_pages: row[3].trim(),
+          fix: row[4].trim(),
+          priority_tier: tier,
+          priority_label: label,
+          status: 'flagged',
+          original_severity: label,
+        });
+      }
     }
   }
 

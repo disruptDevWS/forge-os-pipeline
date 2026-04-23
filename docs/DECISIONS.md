@@ -4,6 +4,30 @@ Non-obvious choices that would look wrong without context. Check here before "fi
 
 ---
 
+**2026-04-23: WS-A — POP hierarchy with CWV conditional grouping**
+
+Dwight's priority tiers now use a POP (Priority of Priority) framework: Group A (Crawlability/Indexation → P1), Group B (On-Page SEO → P2), Group C (Content/UX → P2-3), Group D (Informational/Cosmetic → P3). CWV is conditional: failures on pages targeting competitive commercial keywords (pos 4-30) are Group B, otherwise Group C. This prevents slow pages on competitive queries from being undertriaged as "UX" issues when they have direct ranking impact via crawl budget deprioritization and CWV ranking signal. Each finding now has a `Severity Rationale` column explaining the POP group assignment.
+
+---
+
+**2026-04-23: WS-C — search_intent on cluster_strategy, not audit_clusters**
+
+Cluster intent classification (`commercial/informational/transactional/navigational/mixed`) lives on `cluster_strategy`, not `audit_clusters`. Rationale: intent is a strategy-level judgment produced by Opus from the keyword mix (>70% volume threshold), not a computed cluster-level metric. Pam reads it directly from `cluster_strategy` via a typed `StrategyQueryResult` interface (no `as any` at consumption site). The Supabase client cast remains `(sb as any)` because `cluster_strategy` isn't in generated types — consistent with existing pattern.
+
+---
+
+**2026-04-23: WS-B — Sentence-level slop rewrite, not full HTML re-prompt**
+
+Oscar's anti-slop QA gate sends only the violating sentences to Claude for rewrite (as JSON), then applies replacements via string substitution in code. This is ~500 tokens vs ~12K for a full HTML re-prompt, eliminates risk of collateral changes to surrounding content, and is faster (~1s vs ~10s). The rewrite prompt receives each banned phrase with its containing sentence and returns a JSON array of `{id, replacement_sentence}`. `applySlopFixes()` does positional string substitution — the LLM never touches the full HTML. Cap at one retry; if violations remain after rewrite, use the rewritten version and log warnings.
+
+---
+
+**2026-04-23: WS-B — Consolidated banned phrases in slop-scanner.ts**
+
+Banned phrases from `configs/oscar/system-prompt.md` (line 50) and `configs/oscar/seo-playbook.md` (lines 190-191) are consolidated in `scripts/slop-scanner.ts` as the enforcement source of truth. The prompt files still list them for LLM awareness during generation, but code-level scanning is the enforcement mechanism. This prevents drift between what the prompt asks and what gets validated.
+
+---
+
 **2026-04-23: Phase 3 — Scout embedding dedup threshold 0.93**
 
 Scout keyword dedup uses cosine similarity at 0.93 (tighter than canonicalize's 0.82). Rationale: false negatives (missed dedup) are harmless — a duplicate keyword in Scout just means slightly redundant research. False positives (merging distinct topics) lose qualification signal — "water heater repair" and "water heater installation" should remain separate in Scout even though they canonicalize to the same topic later. The 0.93 threshold catches true semantic duplicates like "water heater repair" vs "hot water heater service" while preserving distinct service variants.

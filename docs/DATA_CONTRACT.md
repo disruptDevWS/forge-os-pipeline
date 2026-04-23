@@ -587,6 +587,7 @@ Written by `generate-cluster-strategy.ts` (on-demand, per-cluster via `/activate
 | `entity_map` | JSONB — entity type mapping from Section 0 |
 | `ai_optimization_notes` | Section 5 prose fallback |
 | `ai_optimization_targets` | JSONB — structured AI/search targets from Section 5: `[{query, target_type, structural_pattern, applies_to_page, condition, rationale}]` |
+| `search_intent` | TEXT — cluster dominant intent: `commercial`, `informational`, `transactional`, `navigational`, `mixed`. From entity map Section 0. Consumed by Pam for content-type guidance. Migration 022. |
 | `status` | TEXT: `active` (default), `deprecated`. Deprecated by `rebuildClustersAndRollups()` when canonical_key no longer exists in rebuilt clusters. Migration 014. |
 | `deprecated_at` | TIMESTAMPTZ, set when status → `deprecated`. NULL for active strategies. |
 | `model_used` | |

@@ -38,6 +38,7 @@ export const PHASE_MAX_TOKENS: Record<string, number> = {
   scout_report: 16384,
   brief: 16384,
   content: 65536,
+  'content-qa': 4096,
   qa: 4096,
   prospect_narrative: 2048,
   default: 8192,
