@@ -635,7 +635,7 @@ async function gatherContext(sb: SupabaseClient, req: PamRequest) {
     }
   }
 
-  return { auditMeta, brief, keywords, siblings, blueprintExcerpt, siloName, serpEnrichment, clientProfile, authorityGaps, formatGaps, aiCitationGaps, marketContext, strategyContext, primaryEntityType, entityMap, buyerStage, strategyRationale, canonicalKey, technicalBaselineSection, gbpEntitySection, siblingCoverageSection, performanceContextSection, clusterAiTargets };
+  return { auditMeta, brief, keywords, siblings, blueprintExcerpt, siloName, serpEnrichment, clientProfile, authorityGaps, formatGaps, aiCitationGaps, marketContext, strategyContext, primaryEntityType, entityMap, searchIntent, buyerStage, strategyRationale, canonicalKey, technicalBaselineSection, gbpEntitySection, siblingCoverageSection, performanceContextSection, clusterAiTargets };
 }
 
 function escapeRegex(s: string): string {
@@ -889,7 +889,7 @@ function buildPrompt(
   req: PamRequest,
   ctx: Awaited<ReturnType<typeof gatherContext>>
 ): string {
-  const { auditMeta, brief, keywords, siblings, blueprintExcerpt, siloName, clientProfile, authorityGaps, formatGaps, aiCitationGaps, marketContext, strategyContext, primaryEntityType, entityMap, buyerStage, strategyRationale, technicalBaselineSection, gbpEntitySection, siblingCoverageSection, performanceContextSection, clusterAiTargets } = ctx;
+  const { auditMeta, brief, keywords, siblings, blueprintExcerpt, siloName, clientProfile, authorityGaps, formatGaps, aiCitationGaps, marketContext, strategyContext, primaryEntityType, entityMap, searchIntent, buyerStage, strategyRationale, technicalBaselineSection, gbpEntitySection, siblingCoverageSection, performanceContextSection, clusterAiTargets } = ctx;
   const slug = req.page_url.replace(/^\/+/, '');
   const actionType = req.action_type || 'create';
   const pageRole = req.page_role ?? brief?.role ?? 'service page';
