@@ -736,8 +736,31 @@ Server-side view computing position changes from `ranking_snapshots`.
 
 ### `audit_topic_competitors`
 
-**Key columns**: `canonical_key`, `competitor_domain`, `appearance_count`, `share`, `is_client`
+**Key columns**: `canonical_key`, `competitor_domain`, `appearance_count`, `share`, `is_client`, `representative_url`
 **Dashboard reads**: `useTopicCompetitors()` → ResearchPage
+**Note**: `representative_url` added by Phase 4 (migration 020) — first SERP URL per competitor domain per topic. Consumed by Phase 4b.
+
+### `competitor_sections`
+
+**Writer**: Phase 4b (`fetch-competitor-sections.ts`)
+**Key columns**: `audit_id`, `domain`, `canonical_key`, `url`, `heading_level` (h2/h3), `heading_text`, `heading_position`, `is_client`
+**Dashboard reads**: None (consumed by Phase 4b coverage computation)
+**Re-run**: DELETE all rows for audit_id before insert
+
+### `cluster_section_coverage`
+
+**Writer**: Phase 4b (`fetch-competitor-sections.ts`)
+**Key columns**: `audit_id`, `canonical_key`, `coverage_score`, `coverage_status` (scored/no_client_pages/insufficient_competitors), `competitor_count`, `core_gaps` (JSONB), `borderline_matches` (JSONB), `snapshot_date`
+**Dashboard reads**: `useClusterCoverageTrend()` → PerformancePage
+**Consumer**: `runGap()` reads this table to inject Section Coverage Matrix into prompt
+**Unique constraint**: `(audit_id, canonical_key, snapshot_date)` — historical snapshots by date
+
+### `audit_clusters` (coverage columns, migration 021)
+
+**Additional columns**: `coverage_score`, `coverage_competitor_count`, `coverage_score_updated_at`
+**Writer**: Phase 4b (denormalized copy from cluster_section_coverage)
+**Dashboard reads**: `useAuditClusters()` → ClustersPage (Coverage column + badge)
+**Preservation**: `rebuildClustersAndRollups()` preserves coverage_score through DELETE+INSERT cycle
 
 ---
 

@@ -4,6 +4,42 @@ Non-obvious choices that would look wrong without context. Check here before "fi
 
 ---
 
+**2026-04-23: Phase 3 — Scout embedding dedup threshold 0.93**
+
+Scout keyword dedup uses cosine similarity at 0.93 (tighter than canonicalize's 0.82). Rationale: false negatives (missed dedup) are harmless — a duplicate keyword in Scout just means slightly redundant research. False positives (merging distinct topics) lose qualification signal — "water heater repair" and "water heater installation" should remain separate in Scout even though they canonicalize to the same topic later. The 0.93 threshold catches true semantic duplicates like "water heater repair" vs "hot water heater service" while preserving distinct service variants.
+
+---
+
+**2026-04-23: Phase 4b — instant_pages over content_parsing/live**
+
+Phase 4b fetches competitor pages via DataForSEO `/on_page/instant_pages` (not `/content_parsing/live`). Rationale: `instant_pages` is the same endpoint Dwight uses, with a proven response shape (`meta.htags: Record<string, string[]>`). `content_parsing/live` has an unverified response format and may not return structured headings. Cost is slightly higher (~$0.005 vs ~$0.002/URL) but eliminates an unknown.
+
+---
+
+**2026-04-23: Phase 4b — frequency-weighted coverage scoring**
+
+Coverage formula: `Σ(competitor_frequency × covered) / Σ(competitor_frequency)`. Each competitor subtopic (H2/H3 heading) is weighted by how many competitors cover it. A subtopic all 5 competitors address is table-stakes; a subtopic only 1 competitor mentions is fringe. This prevents fringe content from distorting the denominator and inflating coverage scores. `core_gaps` only includes uncovered subtopics with `competitor_frequency ≥ 2`.
+
+---
+
+**2026-04-23: Phase 4b — borderline logging for threshold tuning**
+
+Borderline matches (cosine similarity 0.78-0.88) stored in `cluster_section_coverage.borderline_matches` JSONB. Coverage threshold starts at 0.85 but this allows empirical tuning without code changes — query `borderline_matches` across audits to see what's being missed or falsely matched, then adjust.
+
+---
+
+**2026-04-23: Phase 4b — coverage_status field (scored/no_client_pages/insufficient_competitors)**
+
+Coverage result includes a `status` field to distinguish measured zeros from unmeasurable clusters. `no_client_pages` means the client has no URL mapped to this topic — coverage is structurally unmeasurable, not zero. `insufficient_competitors` means fewer than 2 competitor pages were found — the score has low confidence. Dashboard renders these differently from a genuine `scored` 0%.
+
+---
+
+**2026-04-23: Phase 5 — authority_score preservation in rebuildClustersAndRollups**
+
+Prior to this change, `rebuildClustersAndRollups()` silently lost `authority_score` during the DELETE+INSERT cycle. This was a latent bug — authority scores written by `track-rankings.ts` would vanish on re-canonicalize. Fixed by adding authority_score + coverage_score to the preservation carry-over alongside activation status. Both scores are now preserved through cluster rebuilds.
+
+---
+
 **2026-04-22: Embed-at-ingestion — cache pre-warming at Phase 2 and Phase 3b**
 
 Embedding generation moved from Phase 3c (on-demand during canonicalize) to Phase 2 and Phase 3b (at keyword ingestion time). `scripts/embed-keywords.ts` calls `embedBatch()` after keywords are inserted into `audit_keywords`. Phase 3c `preCluster()` then gets near-100% cache hits.

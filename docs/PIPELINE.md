@@ -174,12 +174,21 @@ Phase 3d (Rebuild Clusters)
       ▼
 Phase 4 (Competitors)                    ← skipped in sales mode
   READS:     Supabase ← audit_keywords (canonical_key, intent_type, is_brand)
-  PRODUCES:  Supabase → audit_topic_competitors, audit_topic_dominance
+  PRODUCES:  Supabase → audit_topic_competitors (+ representative_url), audit_topic_dominance
+      │
+      ▼
+Phase 4b (Section Extraction)            ← skipped in sales mode
+  READS:     Supabase ← audit_topic_competitors (representative_url),
+             agent_technical_pages, execution_pages, audit_keywords (ranking_url)
+  EXTERNAL:  DataForSEO /on_page/instant_pages (~$0.005/URL)
+  PRODUCES:  Supabase → competitor_sections, cluster_section_coverage,
+             audit_clusters (coverage_score, coverage_competitor_count)
       │
       ▼
 Phase 5 (Gap)                            ← skipped in sales mode
   READS:     Supabase ← audit_topic_competitors, audit_topic_dominance,
-             audit_keywords, audit_clusters, agent_architecture_pages
+             audit_keywords, audit_clusters, agent_architecture_pages,
+             cluster_section_coverage (from Phase 4b)
   PRODUCES:  content_gap_analysis.md + Supabase → audit_snapshots
       │
       ▼
@@ -702,8 +711,46 @@ The `audits.canonicalize_mode` DB column stores each client's intended mode. Bot
 **Logic:** Selects top ~20 canonical topics by volume, fetches SERP for top 5 keywords per topic (up to 100 SERP calls). Aggregates which competitor domains appear most frequently per topic.
 
 **Supabase writes:**
-- `audit_topic_competitors` — per-topic competitor records with appearance_count and share
+- `audit_topic_competitors` — per-topic competitor records with appearance_count, share, representative_url
 - `audit_topic_dominance` — per-topic leader/client comparison
+
+---
+
+### Phase 4b: Section Extraction — Competitor Content Coverage
+
+**Script:** `scripts/fetch-competitor-sections.ts` | **No LLM** (DataForSEO + embeddings)
+
+Fetches competitor and client page HTML via DataForSEO `/on_page/instant_pages`, extracts H2/H3 headings, computes frequency-weighted semantic coverage scores per canonical topic.
+
+**External APIs:**
+
+| API | Endpoint | Purpose |
+|-----|----------|---------|
+| DataForSEO OnPage | `/v3/on_page/instant_pages` | Structured page data with `meta.htags` (~$0.005/URL) |
+| OpenAI Embeddings | `text-embedding-3-small` | Heading embedding for semantic matching |
+
+**Logic:**
+1. Load competitor URLs from `audit_topic_competitors.representative_url` (set by Phase 4)
+2. Load client URLs from `execution_pages`, `audit_keywords.ranking_url`, or `agent_technical_pages`
+3. Fetch each URL via instant_pages, extract H2/H3 headings
+4. Embed all headings via `embedBatch()` (content_type: `page_section`)
+5. Compute frequency-weighted coverage: `Σ(freq × covered) / Σ(freq)` where freq = competitor count per subtopic
+6. Core gaps: uncovered subtopics with `competitor_frequency ≥ 2` (table stakes, not fringe)
+7. Borderline matches (0.78-0.88 similarity) logged for threshold tuning
+
+**Coverage status:**
+- `scored` — both competitor and client sections available
+- `no_client_pages` — no client URL found for topic (unmeasurable, not zero)
+- `insufficient_competitors` — fewer than 2 competitor pages found
+
+**Re-run safety:** `DELETE FROM competitor_sections WHERE audit_id = $1` at the top of Phase 4b.
+
+**Supabase writes:**
+- `competitor_sections` — H2/H3 headings per competitor/client page
+- `cluster_section_coverage` — coverage score, status, core_gaps, borderline_matches per topic
+- `audit_clusters` — denormalized coverage_score, coverage_competitor_count
+
+**Budget:** 3-5 competitors × 5-10 topics = 15-50 URLs + client URLs. ~$0.13-0.40/audit.
 
 ---
 
