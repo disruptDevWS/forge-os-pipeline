@@ -357,6 +357,7 @@ Client Brief (auto after Phase 6d, non-fatal)
 - **Check A — Sitemap existence:** HEAD requests to `/sitemap.xml` and `/sitemap_index.xml` (both `www` and non-`www`). If sitemap found but Dwight flagged as missing → correction.
 - **Check B — Schema presence:** GET homepage, parse for `<script type="application/ld+json">` and Yoast schema graph. Extracts `@type` values from JSON-LD blocks. If schema found but Dwight flagged as absent → correction.
 - **Check C — Redirect chain integrity:** Reads `internal_all.csv` for 3xx entries with empty `Redirect URL` column. Follows each redirect chain (manual redirect mode, max 10 hops, max 50 URLs) and records terminal URL, status, and chain health.
+- **Check D — Robots.txt verification:** GET `/robots.txt` (both `www` and non-`www`). Parses `User-agent` / `Disallow` directives. Checks for broad blocking (`Disallow: /`) against `*`, `Googlebot`, `GPTBot`, `ClaudeBot`, `Bytespider`, `ChatGPT-User`, `Google-Extended`, `CCBot`, `Anthropic-AI`. If Dwight flagged robots.txt blocking but no broad Disallow rules confirmed → false_positive with fetched content as evidence. If confirmed, keeps the issue and reports which user-agents are affected.
 
 **Outputs:**
 - `verification_results.json` — structured corrections map (keyed by issue pattern match). Consumed by `syncDwight()` at Phase 6c for merging into `prioritized_fixes[]` objects.

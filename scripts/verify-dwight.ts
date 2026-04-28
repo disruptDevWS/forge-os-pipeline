@@ -8,6 +8,7 @@
  *   Check A — Sitemap existence (HEAD /sitemap.xml, /sitemap_index.xml)
  *   Check B — Schema/structured data presence (GET homepage, parse ld+json)
  *   Check C — Redirect chain integrity (follow 3xx URLs with missing destinations)
+ *   Check D — Robots.txt verification (GET /robots.txt, parse Disallow rules)
  *
  * Writes:
  *   - verification_results.json — structured corrections map for syncDwight
@@ -253,6 +254,152 @@ function extractTypes(obj: any, types: Set<string>): void {
   if (obj['@graph'] && Array.isArray(obj['@graph'])) {
     for (const node of obj['@graph']) extractTypes(node, types);
   }
+}
+
+// ============================================================
+// Check D — Robots.txt Verification
+// ============================================================
+
+/** User-agents we care about for crawl/AI blocking */
+const ROBOTS_AGENTS_OF_INTEREST = [
+  '*',
+  'googlebot',
+  'gptbot',
+  'claudebot',
+  'bytespider',
+  'chatgpt-user',
+  'google-extended',
+  'ccbot',
+  'anthropic-ai',
+];
+
+interface RobotsDirective {
+  user_agent: string;
+  disallow: string[];
+  allow: string[];
+}
+
+function parseRobotsTxt(raw: string): RobotsDirective[] {
+  const directives: RobotsDirective[] = [];
+  let current: RobotsDirective | null = null;
+
+  for (const rawLine of raw.split('\n')) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) continue;
+
+    const colonIdx = line.indexOf(':');
+    if (colonIdx < 0) continue;
+
+    const field = line.slice(0, colonIdx).trim().toLowerCase();
+    const value = line.slice(colonIdx + 1).trim();
+
+    if (field === 'user-agent') {
+      current = { user_agent: value, disallow: [], allow: [] };
+      directives.push(current);
+    } else if (field === 'disallow' && current) {
+      if (value) current.disallow.push(value);
+    } else if (field === 'allow' && current) {
+      if (value) current.allow.push(value);
+    }
+  }
+
+  return directives;
+}
+
+/** Check if a directive has broad blocking (Disallow: / without counteracting Allow) */
+function hasBroadBlock(d: RobotsDirective): boolean {
+  return d.disallow.some((rule) => rule === '/');
+}
+
+async function checkRobotsTxt(domain: string): Promise<VerificationCheck & { robotsContent?: string; parsedDirectives?: RobotsDirective[] }> {
+  const now = new Date().toISOString();
+  const candidates = [
+    `https://${domain}/robots.txt`,
+    `https://www.${domain}/robots.txt`,
+  ];
+
+  let robotsTxt = '';
+  let fetchedUrl = '';
+
+  for (const url of candidates) {
+    try {
+      const resp = await fetch(url, {
+        redirect: 'follow',
+        signal: AbortSignal.timeout(10_000),
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (compatible; ForgeOS/1.0; +https://forgegrowth.ai)',
+        },
+      });
+      if (resp.ok) {
+        const contentType = resp.headers.get('content-type') || '';
+        // Only accept text responses (some sites return HTML 404 pages with 200 status)
+        if (contentType.includes('text/plain') || contentType.includes('text/html')) {
+          const body = await resp.text();
+          // Validate it looks like a robots.txt (not an HTML error page)
+          if (body.toLowerCase().includes('user-agent') || body.toLowerCase().includes('disallow')) {
+            robotsTxt = body;
+            fetchedUrl = url;
+            break;
+          }
+        }
+      }
+    } catch {
+      // timeout or network error — try next
+    }
+  }
+
+  if (!robotsTxt) {
+    return {
+      check_id: 'robots_txt',
+      check_name: 'Robots.txt Verification',
+      passed: true,
+      details: `No valid robots.txt found at ${candidates.join(' or ')} — no crawl restrictions in place`,
+      verified_at: now,
+      verification_source: 'direct_http',
+    };
+  }
+
+  const directives = parseRobotsTxt(robotsTxt);
+
+  // Find directives for user-agents we care about
+  const relevant = directives.filter((d) =>
+    ROBOTS_AGENTS_OF_INTEREST.includes(d.user_agent.toLowerCase()),
+  );
+
+  const blockedAgents: string[] = [];
+  const restrictedAgents: { agent: string; rules: string[] }[] = [];
+
+  for (const d of relevant) {
+    if (hasBroadBlock(d)) {
+      blockedAgents.push(d.user_agent);
+    } else if (d.disallow.length > 0) {
+      restrictedAgents.push({ agent: d.user_agent, rules: d.disallow });
+    }
+  }
+
+  const hasBlocking = blockedAgents.length > 0 || restrictedAgents.length > 0;
+
+  let details = `Fetched ${fetchedUrl}. ${directives.length} user-agent directive(s) found. `;
+  if (blockedAgents.length > 0) {
+    details += `Broad blocking (Disallow: /) for: ${blockedAgents.join(', ')}. `;
+  }
+  if (restrictedAgents.length > 0) {
+    details += `Partial restrictions for: ${restrictedAgents.map((r) => `${r.agent} (${r.rules.join(', ')})`).join('; ')}. `;
+  }
+  if (!hasBlocking) {
+    details += 'No broad Disallow rules found for search engines or AI crawlers.';
+  }
+
+  return {
+    check_id: 'robots_txt',
+    check_name: 'Robots.txt Verification',
+    passed: !hasBlocking,
+    details,
+    verified_at: now,
+    verification_source: 'direct_http',
+    robotsContent: robotsTxt,
+    parsedDirectives: directives,
+  };
 }
 
 // ============================================================
@@ -520,6 +667,7 @@ function buildCorrections(
 
   const sitemapCheck = checks.find((c) => c.check_id === 'sitemap_existence');
   const schemaCheck = checks.find((c) => c.check_id === 'schema_presence');
+  const robotsCheck = checks.find((c) => c.check_id === 'robots_txt');
 
   // If sitemap exists but report flagged it as missing
   if (sitemapCheck?.passed) {
@@ -552,6 +700,32 @@ function buildCorrections(
       corrections.push({
         issue_pattern: 'schema|structured.data',
         finding: schemaCheck.details,
+        status: 'false_positive',
+        verified_at: now,
+        verification_source: 'direct_http',
+      });
+    }
+  }
+
+  // Robots.txt: report flagged blocking but verification found no broad rules → false_positive
+  // If verification confirmed blocking → keep the issue (no correction emitted)
+  if (robotsCheck) {
+    const robotsFlagged =
+      /robots\.txt.*block/i.test(reportContent) ||
+      /robots\.txt.*restrict/i.test(reportContent) ||
+      /robots\.txt.*disallow/i.test(reportContent) ||
+      /blocked\s+by\s+robots/i.test(reportContent) ||
+      /crawl.*blocked/i.test(reportContent) ||
+      /robots\.txt.*prevent/i.test(reportContent) ||
+      /ai\s+crawl(er)?s?\s+blocked/i.test(reportContent) ||
+      /gptbot.*blocked/i.test(reportContent) ||
+      /claudebot.*blocked/i.test(reportContent);
+
+    if (robotsFlagged && robotsCheck.passed) {
+      // Report flagged robots.txt issues, but direct fetch found no broad blocking
+      corrections.push({
+        issue_pattern: 'robots\\.txt|crawl.*block|ai.*crawl',
+        finding: robotsCheck.details,
         status: 'false_positive',
         verified_at: now,
         verification_source: 'direct_http',
@@ -658,14 +832,15 @@ async function main() {
   }
 
   // Run all checks in parallel
-  console.log('  [verify] Running Check A (sitemap), Check B (schema), Check C (redirects)...');
-  const [sitemapCheck, schemaCheck, redirectCheck] = await Promise.all([
+  console.log('  [verify] Running Check A (sitemap), Check B (schema), Check C (redirects), Check D (robots.txt)...');
+  const [sitemapCheck, schemaCheck, redirectCheck, robotsCheck] = await Promise.all([
     checkSitemap(domain),
     checkSchema(domain),
     checkRedirects(auditorDir),
+    checkRobotsTxt(domain),
   ]);
 
-  const checks = [sitemapCheck, schemaCheck, redirectCheck.check];
+  const checks = [sitemapCheck, schemaCheck, redirectCheck.check, robotsCheck];
 
   for (const check of checks) {
     const icon = check.passed ? 'PASS' : 'FAIL';
