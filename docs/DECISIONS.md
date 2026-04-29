@@ -4,6 +4,24 @@ Non-obvious choices that would look wrong without context. Check here before "fi
 
 ---
 
+**2026-04-29: Authority/Coverage charts — bar chart below 3 snapshots, filtered line chart above**
+
+Dashboard Performance page uses two visualization modes for cluster authority and coverage trends. With <3 weekly snapshots, a horizontal bar chart shows clusters sorted descending by score with tier-colored bars (red ≤25, amber ≤50, green ≤75, bright green >75). This replaces the previous line chart which plotted a single data point on a time-series axis — visually empty and unreadable with 15 clusters stacked at the same x-position. With 3+ snapshots, a line chart appears but filtered to top 5 clusters by score + any with significant movement (|delta| ≥3 for authority, ≥5 for coverage). This prevents 15 overlapping lines sharing one color. The 3-snapshot threshold is intentional: weekly cron means 3 points = 3 weeks of data, minimum for a meaningful trend.
+
+---
+
+**2026-04-29: Performance near-miss table reads audit_keywords, not baseline_snapshots**
+
+The near-miss keyword table on the Performance page now reads from `audit_keywords` (via `useReportNearMiss`, same as the Client Report page) instead of `baseline_snapshots`. The `baseline_snapshots` table is a frozen snapshot from audit time and doesn't reflect keyword cleanup done through re-canonicalization or pipeline re-runs. Using `audit_keywords` ensures consistency across all dashboard views. The `baseline_snapshots` table still exists for historical baseline tracking in ranking deltas.
+
+---
+
+**2026-04-29: Agentic Readiness panel removed from AI Visibility page**
+
+The Agentic Readiness panel was removed from the AI Visibility page. It read `audit_snapshots.agentic_readiness` (Dwight output) which contained structured data schema signals (e.g., `@graph entity graph: FAIL`, `BreadcrumbList schema: FAIL`) — these are technical crawl findings, not AI visibility assessments. They belong on the Technical page alongside other Dwight findings. The panel had no actionable recommendations, no baseline/trend capability, and no connection to actual LLM mention data.
+
+---
+
 **2026-04-23: WS-A — POP hierarchy with CWV conditional grouping**
 
 Dwight's priority tiers now use a POP (Priority of Priority) framework: Group A (Crawlability/Indexation → P1), Group B (On-Page SEO → P2), Group C (Content/UX → P2-3), Group D (Informational/Cosmetic → P3). CWV is conditional: failures on pages targeting competitive commercial keywords (pos 4-30) are Group B, otherwise Group C. This prevents slow pages on competitive queries from being undertriaged as "UX" issues when they have direct ranking impact via crawl budget deprioritization and CWV ranking signal. Each finding now has a `Severity Rationale` column explaining the POP group assignment.
