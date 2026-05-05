@@ -1464,3 +1464,18 @@ All paths relative to `audits/{domain}/`. Cross-phase reads use `resolveArtifact
 | `scripts/migrations/016-findsimilar-hash-exclusion.sql` | Add `exclude_content_hash` param to `find_similar_embeddings()` RPC |
 | `scripts/migrations/017-canonicalize-classification-metadata.sql` | Add `classification_method`, `similarity_score`, `arbitration_reason`, `canonicalize_mode` to `audit_keywords` |
 | `scripts/migrations/018-shadow-canonicalize-columns.sql` | Add `shadow_canonical_key`, `shadow_canonical_topic`, `shadow_classification_method`, `shadow_similarity_score`, `shadow_arbitration_reason` to `audit_keywords` |
+
+---
+
+## Adding a New Pipeline Phase
+
+1. Add a `runNewPhase()` function in `scripts/pipeline-generate.ts` following the existing pattern:
+   - Gather context (disk files via `resolveArtifactPath()`, Supabase queries)
+   - Build prompt string with "YOUR ENTIRE RESPONSE IS THE [X]" framing
+   - Call `callClaude()` or `callClaudeAsync()` with appropriate model/max_tokens
+   - Validate output with `validateArtifact()`
+   - Write to disk in `audits/{domain}/{subdir}/{date}/`
+2. Add the phase to `scripts/run-pipeline.sh` in the correct position
+3. If the phase writes to Supabase, add a sync function in `scripts/sync-to-dashboard.ts`
+4. If QA-gated, add a rubric in the `QA_RUBRICS` object and a `runQA()` call after the phase
+5. Update this file (PIPELINE.md) in the same commit — this is a contract, not optional documentation
