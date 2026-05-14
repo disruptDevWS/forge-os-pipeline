@@ -364,6 +364,7 @@ async function trackRankings(cliArgs: CliArgs) {
 
   // 9. GA4 behavioral data (non-fatal)
   let ga4PageCount = 0;
+  let ga4EventCount = 0;
   try {
     // Get published slugs
     const { data: publishedPages } = await sb
@@ -457,6 +458,33 @@ async function trackRankings(cliArgs: CliArgs) {
         }
       }
     }
+
+    // 9b. GA4 event-level conversion data (site-wide)
+    const { runGa4EventFetch } = await import('./fetch-ga4-data.js');
+    const ga4Events = await runGa4EventFetch(audit.id, sb);
+
+    if (ga4Events.length > 0) {
+      const eventRecords = ga4Events.map((e) => ({
+        audit_id: audit.id,
+        snapshot_date: snapshotDate,
+        event_name: e.event_name,
+        channel_group: e.channel_group,
+        event_count: e.event_count,
+        event_revenue: e.event_revenue,
+      }));
+
+      for (let i = 0; i < eventRecords.length; i += 500) {
+        const batch = eventRecords.slice(i, i + 500);
+        const { error: evErr } = await (sb as any)
+          .from('ga4_event_snapshots')
+          .upsert(batch, { onConflict: 'audit_id,snapshot_date,event_name,channel_group' });
+        if (evErr) {
+          console.warn(`  [ga4-events] ga4_event_snapshots upsert failed: ${evErr.message}`);
+        }
+      }
+      console.log(`  [ga4-events] Upserted ${eventRecords.length} event snapshots`);
+      ga4EventCount = eventRecords.length;
+    }
   } catch (ga4Err: any) {
     console.warn(`  [ga4] GA4 fetch failed (non-fatal): ${ga4Err.message}`);
   }
@@ -472,6 +500,7 @@ async function trackRankings(cliArgs: CliArgs) {
       dataforseo_total: totalCount,
       ranked_count: currentRankings.length,
       ga4_page_count: ga4PageCount,
+      ga4_event_count: ga4EventCount,
       snapshot_date: snapshotDate,
     },
   });

@@ -2,10 +2,12 @@
  * fetch-ga4-data.ts — Google Analytics 4 Data API fetcher.
  *
  * Library module only (no CLI entry point).
- * Called from track-rankings.ts step 9 for published page behavioral data.
+ * Called from track-rankings.ts step 9 for published page behavioral data,
+ * and step 9b for event-level conversion data.
  *
  * Exports:
  *   runGa4Fetch(auditId, publishedSlugs, sb) → Ga4PageData[]
+ *   runGa4EventFetch(auditId, sb) → Ga4EventData[]
  */
 
 import { SupabaseClient } from '@supabase/supabase-js';
@@ -251,4 +253,109 @@ export async function runGa4Fetch(
     .eq('audit_id', auditId);
 
   return pages;
+}
+
+// ============================================================
+// Event-level conversion data (site-wide)
+// ============================================================
+
+export interface Ga4EventData {
+  event_name: string;
+  channel_group: string;
+  event_count: number;
+  event_revenue: number;
+}
+
+const CONVERSION_EVENT_NAMES = [
+  'registration_complete',
+  'contact_form_submit',
+  'click_phone',
+  'purchase',
+];
+
+async function fetchGa4EventReport(
+  propertyId: string,
+  token: string,
+): Promise<Ga4Row[]> {
+  const apiUrl = `https://analyticsdata.googleapis.com/v1beta/properties/${propertyId}:runReport`;
+
+  // 28-day lookback (same window as page-level fetch)
+  const endDate = new Date();
+  const startDate = new Date(endDate);
+  startDate.setDate(startDate.getDate() - 28);
+
+  const body = {
+    dateRanges: [{
+      startDate: startDate.toISOString().slice(0, 10),
+      endDate: endDate.toISOString().slice(0, 10),
+    }],
+    dimensions: [
+      { name: 'eventName' },
+      { name: 'sessionDefaultChannelGroup' },
+    ],
+    metrics: [
+      { name: 'eventCount' },
+      { name: 'totalRevenue' },
+    ],
+    dimensionFilter: {
+      filter: {
+        fieldName: 'eventName',
+        inListFilter: {
+          values: CONVERSION_EVENT_NAMES,
+        },
+      },
+    },
+    limit: 10000,
+  };
+
+  const resp = await fetch(apiUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!resp.ok) {
+    const errText = await resp.text();
+    throw new Error(`GA4 event runReport failed (${resp.status}): ${errText}`);
+  }
+
+  const data = await resp.json();
+  return data.rows ?? [];
+}
+
+/**
+ * Fetch GA4 event-level conversion data (site-wide, not per-page).
+ * Returns empty array if no GA4 connection exists.
+ */
+export async function runGa4EventFetch(
+  auditId: string,
+  sb: SupabaseClient,
+): Promise<Ga4EventData[]> {
+  const connection = await getAnalyticsConnection(sb, auditId);
+  if (!connection || !connection.ga4_property_id) {
+    console.log('  [ga4-events] No active GA4 connection — skipping event fetch');
+    return [];
+  }
+
+  const propertyId = connection.ga4_property_id;
+  console.log(`  [ga4-events] Fetching conversion events for property ${propertyId}`);
+
+  const token = await getServiceAccountAccessToken([GA4_SCOPE]);
+  const rows = await fetchGa4EventReport(propertyId, token);
+
+  console.log(`  [ga4-events] Received ${rows.length} event rows`);
+
+  if (rows.length === 0) return [];
+
+  const results: Ga4EventData[] = rows.map((row) => ({
+    event_name: row.dimensionValues[0].value,
+    channel_group: row.dimensionValues[1].value,
+    event_count: parseInt(row.metricValues[0].value) || 0,
+    event_revenue: parseFloat(row.metricValues[1].value) || 0,
+  }));
+
+  return results;
 }

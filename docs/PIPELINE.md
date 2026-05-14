@@ -1050,7 +1050,9 @@ Ranking performance tracking runs independently of the audit pipeline — weekly
 6. Aggregate `cluster_performance_snapshots` — groups by `canonical_key`, computes `avg_position` (mean of ranked keywords only; unranked `rank_position=null` excluded), position bucket counts (`keywords_p1_3/p4_10/p11_30/p31_100` — ranked only), `keyword_count` (all keywords including unranked), `authority_score` (position-weighted 0-100, see DECISIONS.md), `authority_score_delta` (vs previous snapshot)
 7. Update `audit_clusters.authority_score` with the latest score from step 6
 8. Track published pages in `page_performance` — matches ranking URLs against published `execution_pages`, computes `current_avg_position` (ranked keywords only, same exclusion as clusters)
-9. Log to `agent_runs` (agent_name='performance_tracker')
+9. GA4 behavioral data (non-fatal) — fetches page-level GA4 data for published slugs, upserts to `ga4_page_snapshots`, updates `page_performance` behavioral columns, computes `observed_cr` in `audit_assumptions`
+9b. GA4 event-level conversions (non-fatal) — fetches site-wide event data from GA4 (dimensions: `eventName` + `sessionDefaultChannelGroup`, metrics: `eventCount` + `eventRevenue`, filtered to 4 conversion events), upserts to `ga4_event_snapshots`
+10. Log to `agent_runs` (agent_name='performance_tracker', metadata includes `ga4_page_count` + `ga4_event_count`)
 
 **External APIs:**
 

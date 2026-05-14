@@ -1095,3 +1095,16 @@ ALTER TABLE public.<table> ENABLE ROW LEVEL SECURITY;
 ```
 
 Existing tables (migrations 001–022) are unaffected — their grants are grandfathered. Only new `CREATE TABLE` statements need this. Adjust `GRANT` scope per role as appropriate (e.g., `anon` may only need `SELECT`).
+
+---
+
+**2026-05-14: GA4 event-level conversions as separate API call and table**
+
+The existing GA4 integration (`ga4_page_snapshots`) fetches page-level behavioral metrics — sessions, engagement, aggregate keyEvents per landing page. Adding event-level conversion breakdowns (by event name + channel) requires a different GA4 API call with different dimensions and no slug filter (site-wide). Rather than complicating the existing page-level fetch, we added a separate `fetchGa4EventReport()` function and a new `ga4_event_snapshots` table.
+
+Key choices:
+- **Separate table** (`ga4_event_snapshots`): different grain (event+channel vs page), different lifecycle, avoids schema bloat on `ga4_page_snapshots`
+- **Site-wide, not per-page**: conversion events like `click_phone` or `purchase` don't map cleanly to landing pages; the GA4 API attributes them to sessions, not page paths
+- **Hardcoded event names**: filtered to 4 known conversion events (`registration_complete`, `contact_form_submit`, `click_phone`, `purchase`) rather than fetching all events — keeps data focused and avoids noise from standard GA4 events like `page_view`
+- **Same 28-day window**: consistent with page-level fetch for comparable date ranges
+- **Non-fatal**: wrapped in the same try/catch as step 9 — GA4 failures don't block ranking tracking

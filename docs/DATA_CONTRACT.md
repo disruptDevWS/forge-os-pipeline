@@ -419,7 +419,25 @@ Written by `track-rankings.ts` step 9 (GA4 fetch).
 | `organic_engagement_rate`, `organic_cr` | Derived rates |
 | `organic_conversions`, `organic_avg_session_dur` | Organic behavioral |
 
-**Dashboard reads**: Deferred (Phase 4 dashboard UI)
+**Dashboard reads**: `useReportGa4` hook in `useReportData.ts`
+
+---
+
+### `ga4_event_snapshots`
+
+Written by `track-rankings.ts` step 9b (GA4 event-level conversion fetch). Site-wide, not per-page.
+
+| Column | Notes |
+|--------|-------|
+| `event_name` | One of: `registration_complete`, `contact_form_submit`, `click_phone`, `purchase` |
+| `channel_group` | `sessionDefaultChannelGroup` from GA4 (Organic Search, Direct, Paid Search, etc.) |
+| `snapshot_date` | Date of the tracking run |
+| `event_count` | Number of events for this event+channel combination |
+| `event_revenue` | Revenue attributed to this event+channel combination |
+
+**Unique constraint**: `(audit_id, snapshot_date, event_name, channel_group)`
+
+**Dashboard reads**: `useReportGa4Events` hook → `ConversionSummarySection` component
 
 ---
 
