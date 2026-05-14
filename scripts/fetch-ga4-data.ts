@@ -49,9 +49,6 @@ async function fetchGa4Report(
 ): Promise<{ rows: Ga4Row[]; metricName: string }> {
   const apiUrl = `https://analyticsdata.googleapis.com/v1beta/properties/${propertyId}:runReport`;
 
-  // Build slug filter values (GA4 landingPage dimension includes leading /)
-  const filterValues = slugs.map((s) => `/${s.replace(/^\/+/, '')}`);
-
   const conversionMetric = useKeyEvents ? 'keyEvents' : 'conversions';
   const metricLabel = useKeyEvents ? 'keyEvents' : 'conversions';
 
@@ -60,7 +57,7 @@ async function fetchGa4Report(
   const startDate = new Date(endDate);
   startDate.setDate(startDate.getDate() - 28);
 
-  const body = {
+  const body: Record<string, unknown> = {
     dateRanges: [{
       startDate: startDate.toISOString().slice(0, 10),
       endDate: endDate.toISOString().slice(0, 10),
@@ -76,16 +73,21 @@ async function fetchGa4Report(
       { name: 'totalRevenue' },
       { name: 'averageSessionDuration' },
     ],
-    dimensionFilter: {
+    limit: 10000,
+  };
+
+  // If slugs provided, filter to those pages; otherwise fetch site-wide
+  if (slugs.length > 0) {
+    const filterValues = slugs.map((s) => `/${s.replace(/^\/+/, '')}`);
+    body.dimensionFilter = {
       filter: {
         fieldName: 'landingPage',
         inListFilter: {
           values: filterValues,
         },
       },
-    },
-    limit: 10000,
-  };
+    };
+  }
 
   const resp = await fetch(apiUrl, {
     method: 'POST',
@@ -199,19 +201,15 @@ function aggregateGa4Data(rows: Ga4Row[]): Ga4PageData[] {
 // ============================================================
 
 /**
- * Fetch GA4 behavioral data for published pages.
+ * Fetch GA4 behavioral data for landing pages.
+ * If slugs provided, filters to those pages. If empty, fetches site-wide.
  * Returns empty array if no GA4 connection exists.
  */
 export async function runGa4Fetch(
   auditId: string,
-  publishedSlugs: string[],
+  slugs: string[],
   sb: SupabaseClient,
 ): Promise<Ga4PageData[]> {
-  if (publishedSlugs.length === 0) {
-    console.log('  [ga4] No published slugs to fetch');
-    return [];
-  }
-
   // Get analytics connection
   const connection = await getAnalyticsConnection(sb, auditId);
   if (!connection || !connection.ga4_property_id) {
@@ -220,17 +218,18 @@ export async function runGa4Fetch(
   }
 
   const propertyId = connection.ga4_property_id;
-  console.log(`  [ga4] GA4 property: ${propertyId} (${publishedSlugs.length} slugs)`);
+  const mode = slugs.length > 0 ? `${slugs.length} slugs` : 'site-wide';
+  console.log(`  [ga4] GA4 property: ${propertyId} (${mode})`);
 
   // Get access token
   const token = await getServiceAccountAccessToken([GA4_SCOPE]);
 
   // Try keyEvents first, fall back to conversions
-  let result = await fetchGa4Report(propertyId, publishedSlugs, token, true);
+  let result = await fetchGa4Report(propertyId, slugs, token, true);
 
   if (result.metricName === 'keyEvents_rejected') {
     console.log('  [ga4] Fallback: using deprecated "conversions" metric (keyEvents rejected)');
-    result = await fetchGa4Report(propertyId, publishedSlugs, token, false);
+    result = await fetchGa4Report(propertyId, slugs, token, false);
     console.log(`  [ga4] Using metric: conversions`);
   } else {
     console.log(`  [ga4] Using metric: keyEvents`);
