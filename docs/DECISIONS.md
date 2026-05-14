@@ -1080,3 +1080,18 @@ CPC (advertiser cost-per-click) answered "what would I pay Google?" — a busine
 **2026-04-06: Scout prospect queuing requires topic_patterns**
 
 `runScout()` validation gate (line ~4511) rejects `topic_patterns: []`. When programmatically creating prospects, `topic_patterns` must contain service keywords (e.g., `["locksmith", "lock", "key", "rekey", "lockout"]`). The dashboard's NewProspectPage collects these from the user; batch/CLI creation must provide them explicitly. This is intentional — Scout cannot generate a meaningful keyword matrix without knowing what the business does.
+
+---
+
+**2026-05-13: Explicit GRANTs required in all new migrations (Supabase Data API change)**
+
+Starting Oct 30, 2026, Supabase will stop auto-exposing new `public` tables via the Data API on existing projects (already enforced on new projects from May 30). Without explicit `GRANT` statements, supabase-js, edge functions, and PostgREST calls will return `42501` permission errors. All migrations that create new tables must now include:
+
+```sql
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.<table> TO anon;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.<table> TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.<table> TO service_role;
+ALTER TABLE public.<table> ENABLE ROW LEVEL SECURITY;
+```
+
+Existing tables (migrations 001–022) are unaffected — their grants are grandfathered. Only new `CREATE TABLE` statements need this. Adjust `GRANT` scope per role as appropriate (e.g., `anon` may only need `SELECT`).
